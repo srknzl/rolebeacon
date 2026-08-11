@@ -21,7 +21,7 @@
     <details><summary>Import complete CandidateProfileV1 JSON</summary>
       <p>Use this for experience, projects, education, language proficiency, and detailed contact links. Imported JSON overrides the basic fields above.</p>
       <textarea id="candidate-json" rows="14" placeholder="Paste CandidateProfileV1 JSON"></textarea>
-      <p><button id="copy-prompt" class="button" type="button">Copy CV conversion prompt</button> <a href="/api/schemas/candidate-profile" target="_blank">View JSON Schema</a></p>
+      <p><button id="import-candidate" class="button button-primary" type="button">Import and validate JSON</button> <button id="copy-prompt" class="button" type="button">Copy CV conversion prompt</button> <a href="/api/schemas/candidate-profile" target="_blank">View JSON Schema</a></p>
     </details>
   </section>
 
@@ -71,8 +71,10 @@
     <p class="safety-note">Starting Ollama or downloading a model happens only when you click the corresponding button. The recommended model is qwen3:8b; qwen3:14b offers higher quality on hardware with enough memory.</p>
   </section>
 
-  <label><input id="activate" type="checkbox" checked> Activate scheduled collection after setup</label>
-  <button class="button button-primary" type="submit">Save and finish setup</button>
+  <div class="setup-actions">
+    <label><input id="activate" type="checkbox" checked> Activate scheduled collection after setup</label>
+    <button class="button button-primary" type="submit">Save and finish setup</button>
+  </div>
 </form>
 <script>
   const lines = id => document.getElementById(id).value.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
@@ -94,6 +96,40 @@
     preferences: {schema_version: "1.0", target_roles: lines("target-roles"), preferred_skills: lines("preferred-skills"), preferred_domains: lines("preferred-domains"), preferred_seniority: lines("preferred-seniority"), priority_companies: lines("priority-companies"), company_watchlist: lines("company-watchlist"), company_blocklist: lines("company-blocklist"), exclude_phrases: lines("exclude-phrases"), salary: {minimum: null, currency: "", hard_filter: false}, daily_review_limit: 15},
     enabled_source_ids: [...document.querySelectorAll(".source-choice:checked")].map(item => item.value), llm: {mode: document.getElementById("llm-mode").value, base_url: document.getElementById("llm-base-url").value, model: document.getElementById("llm-model").value, api_key: document.getElementById("llm-api-key").value}, activate: document.getElementById("activate").checked});
   document.getElementById("copy-prompt").addEventListener("click", async () => { await navigator.clipboard.writeText({{ schemas.cv_conversion_prompt|tojson }} + "\nJSON SCHEMA:\n" + JSON.stringify({{ schemas.candidate|tojson }}, null, 2)); message("Conversion prompt copied.", true); });
+  const applyImportedCandidate = () => {
+      const imported = JSON.parse(document.getElementById("candidate-json").value.trim());
+      document.getElementById("name").value = imported.name || "";
+      document.getElementById("headline").value = imported.headline || "";
+      document.getElementById("email").value = imported.contact?.email || "";
+      document.getElementById("phone").value = imported.contact?.phone || "";
+      document.getElementById("country-code").value = imported.location?.country_code || "";
+      document.getElementById("country-name").value = imported.location?.country_name || "";
+      document.getElementById("city").value = imported.location?.city || "";
+      document.getElementById("website").value = imported.contact?.website || "";
+      document.getElementById("summary").value = imported.summary || "";
+      const skills = Object.values(imported.skills || {}).flat();
+      document.getElementById("skills").value = skills.join("\n");
+      return imported;
+  };
+  document.getElementById("candidate-json").addEventListener("input", event => {
+    if (!event.target.value.trim()) return;
+    try {
+      applyImportedCandidate();
+      message("Candidate JSON parsed and basic fields populated.", true);
+    } catch (_error) {
+      message("Candidate JSON is not valid yet.");
+    }
+  });
+  document.getElementById("import-candidate").addEventListener("click", async () => {
+    try {
+      const imported = applyImportedCandidate();
+      const result = await post("/api/setup/profile/validate", imported);
+      if (!result.valid) throw new Error(JSON.stringify(result.errors));
+      message("Candidate profile imported and validated. Complete mobility and search preferences, then save setup.", true);
+    } catch (error) {
+      message(`Candidate import failed: ${error.message}`);
+    }
+  });
   document.getElementById("discover-model").addEventListener("click", async () => { const value = await fetch("/api/setup/model/discover").then(r => r.json()); message(value.ollama_reachable ? `Ollama is running. Models: ${value.models.join(", ") || "none pulled"}` : value.ollama_installed ? "Ollama is installed but not reachable." : "Ollama was not found. Rules-only mode is ready to use.", value.ollama_reachable); });
   document.getElementById("start-model").addEventListener("click", async () => { try { const value = await post("/api/setup/model/start"); message(`Ollama started as process ${value.pid}.`, true); } catch (error) { message(error.message); } });
   document.getElementById("pull-model").addEventListener("click", async () => { try { message("Downloading the model. Keep this page open…"); const value = await post("/api/setup/model/pull", {model: document.getElementById("llm-model").value}); message(`Downloaded ${value.model}.`, true); } catch (error) { message(error.message); } });

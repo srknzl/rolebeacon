@@ -26,6 +26,19 @@ OpenAI-compatible model is an optional quality layer for evidence-rich scoring a
 - Selective, factual, on-demand cover letters.
 - Human-approved browser preparation that cannot submit an application.
 
+## Screenshots
+
+All screenshots use synthetic candidate, company, and job data.
+
+<p align="center">
+  <img src="docs/screenshots/dashboard.png" alt="RoleBeacon dashboard with recommended opportunities" width="49%">
+  <img src="docs/screenshots/jobs.png" alt="RoleBeacon job discovery and filters" width="49%">
+</p>
+<p align="center">
+  <img src="docs/screenshots/job-detail.png" alt="RoleBeacon evidence-based job detail and application controls" width="49%">
+  <img src="docs/screenshots/setup-import.png" alt="RoleBeacon candidate JSON import and setup wizard" width="49%">
+</p>
+
 ## Requirements
 
 - Python 3.13
