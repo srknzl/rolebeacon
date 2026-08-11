@@ -77,8 +77,10 @@ collection still completes and affected jobs remain queued for enhanced scoring.
 ### Guided Ollama
 
 The setup page can detect an installed Ollama service. Explicit buttons can start an installed
-service, pull a selected model, and test the endpoint. RoleBeacon never installs Ollama or
-downloads a model silently.
+service, pull a selected model, and test the endpoint. It also accepts a LAN Ollama address such
+as `http://desktop.local:11434/v1`. The refresh panel reports each collection and scoring step,
+whether the configured model is reachable, and when deterministic fallback is being used.
+RoleBeacon never installs Ollama or downloads a model silently.
 
 The default recommendation is `qwen3:8b`. `qwen3:14b` is the higher-quality option for machines
 with enough memory, including a 16 GB RTX-class desktop when using an appropriate quantization.
@@ -105,7 +107,8 @@ can implement the existing provider boundary without changing scoring or profile
 
 Setup supports basic form entry, a complete `CandidateProfileV1` JSON document, or a complete
 `SetupPayloadV1` document containing the profile, mobility, preferences, selected sources, and
-model settings. The wizard validates ISO country codes and `CODE:Country` relocation targets.
+model settings. The wizard uses searchable country pickers backed by the ISO 3166-1 catalog,
+then stores the corresponding country codes for matching.
 It can also generate a review-only preference draft with an explicitly configured LLM, or copy a
 structured planning prompt for any LLM the candidate chooses. Neither path activates collection.
 The public schema and CV-conversion prompt are available at:
@@ -228,11 +231,12 @@ Core endpoints:
 - `POST /api/setup/profile/validate`
 - `POST /api/setup/validate`
 - `POST /api/setup/plan`
-- `GET /api/setup/model/discover`
+- `POST /api/setup/model/discover`
 - `POST /api/setup/model/test`
 - `POST /api/setup/complete`
 - `POST /api/sync`
 - `GET /api/sync/status`
+- `GET /api/model/status`
 - `GET /api/jobs`
 - `POST /api/jobs/{id}/feedback`
 - `POST /api/jobs/{id}/resume`

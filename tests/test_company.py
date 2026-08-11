@@ -36,6 +36,26 @@ def test_deterministic_company_fit_uses_only_evidence(tmp_path) -> None:
     assert score["reasons"][0]["source_url"] == "https://example.com/careers"
 
 
+def test_company_summary_uses_complete_sentences_instead_of_character_truncation(tmp_path) -> None:
+    settings = Settings.load()
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    service = CompanyResearchService(settings, database, LlmClient(settings))
+    evidence = [{
+        "source_url": "https://example.com/about",
+        "source_type": "about",
+        "title": "About",
+        "excerpt": "First complete sentence. " + "Second sentence with useful detail. " * 50,
+    }]
+
+    profile, _ = service._deterministic_research(
+        "Example", evidence, [], {"preferred_domains": [], "priority_companies": [], "company_watchlist": []}
+    )
+
+    assert profile["summary"].endswith("detail.")
+    assert not profile["summary"].endswith("…")
+
+
 def test_country_scoped_remote_policy_is_not_worldwide(tmp_path) -> None:
     settings = Settings.load()
     database = Database(tmp_path / "jobs.sqlite3")

@@ -15,7 +15,7 @@ from .config import Settings
 from .database import Database
 from .domain import CollectedJob, JobStatus
 from .llm import LlmClient, LlmUnavailable
-from .profile import SearchPreferencesV1
+from .profile import SearchPreferencesV1, country_catalog
 from .services import ArtifactService, ProfileValidationError, cover_letter_recommendation
 from .setup import LocalModelService, SetupService
 from .sync import Scheduler, SyncService
@@ -229,6 +229,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 setup=setup_service.status(),
                 schemas=setup_service.schemas(),
                 sources=app_settings.load_sources(),
+                countries=country_catalog(),
             ),
         )
 
@@ -255,9 +256,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except (LlmUnavailable, ValueError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
 
-    @app.get("/api/setup/model/discover")
-    async def discover_local_model() -> dict[str, Any]:
-        return await local_models.discover()
+    @app.post("/api/setup/model/discover")
+    async def discover_local_model(request: Request) -> dict[str, Any]:
+        payload = await _payload(request)
+        return await local_models.discover(str(payload.get("base_url", "http://127.0.0.1:11434/v1")))
 
     @app.post("/api/setup/model/test")
     async def test_local_model(request: Request) -> dict[str, Any]:
@@ -285,14 +287,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/setup/complete")
     async def complete_setup(request: Request) -> dict[str, Any]:
-        nonlocal app_settings
+        nonlocal app_settings, llm
         try:
             app_settings = setup_service.complete(await _payload(request))
         except (ValueError, TypeError) as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         sync_service.settings = app_settings
+        llm = LlmClient(app_settings)
+        sync_service.llm = llm
         artifacts.settings = app_settings
+        artifacts.llm = llm
         company_research.settings = app_settings
+        company_research.llm = llm
         local_models.settings = app_settings
         app.state.settings = app_settings
         if app_settings.activated and app_settings.auto_sync:
@@ -311,6 +317,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/sync/status")
     async def sync_status() -> dict[str, Any]:
         return sync_service.status.to_dict()
+
+    @app.get("/api/model/status")
+    async def model_status() -> dict[str, Any]:
+        return await llm.health()
 
     @app.get("/api/jobs")
     async def list_jobs_api(

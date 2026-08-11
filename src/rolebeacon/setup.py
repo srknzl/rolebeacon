@@ -132,13 +132,16 @@ class LocalModelService:
     def __init__(self, settings: Settings):
         self.settings = settings
 
-    async def discover(self) -> dict[str, Any]:
+    async def discover(self, base_url: str = "http://127.0.0.1:11434/v1") -> dict[str, Any]:
         executable = shutil.which("ollama")
         models: list[str] = []
         reachable = False
+        ollama_base_url = base_url.rstrip("/")
+        if ollama_base_url.endswith("/v1"):
+            ollama_base_url = ollama_base_url[:-3]
         try:
             async with httpx.AsyncClient(timeout=3) as client:
-                response = await client.get("http://127.0.0.1:11434/api/tags")
+                response = await client.get(f"{ollama_base_url}/api/tags")
                 if response.is_success:
                     reachable = True
                     models = [str(item.get("name", "")) for item in response.json().get("models", [])]
@@ -148,6 +151,7 @@ class LocalModelService:
             "ollama_installed": executable is not None,
             "ollama_executable": executable or "",
             "ollama_reachable": reachable,
+            "endpoint": base_url,
             "models": models,
             "recommended_model": "qwen3:8b",
             "high_quality_model": "qwen3:14b",

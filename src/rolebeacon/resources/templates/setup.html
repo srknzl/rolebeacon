@@ -38,8 +38,8 @@
       <label>Preferred skills {{ tip("Skills that should increase a job's score. Put one skill or phrase on each line.") }}<textarea id="preferred-skills" rows="5"></textarea></label>
       <label>Preferred domains {{ tip("Problem domains you enjoy, such as distributed systems, developer tools, or fintech.") }}<textarea id="preferred-domains" rows="5"></textarea></label>
       <label>Preferred seniority {{ tip("Seniority terms you want to see, for example senior, staff, or lead.") }}<textarea id="preferred-seniority" rows="5" placeholder="senior&#10;staff"></textarea></label>
-      <label>Authorized country codes {{ tip("Countries where you can work now without employer sponsorship. Use ISO codes, one per line. For example, TR means you can work in Türkiye; do not add DE or US unless you already have that right.") }}<textarea id="authorizations" rows="4" placeholder="TR"></textarea></label>
-      <label>Relocation targets as CODE:Name {{ tip("Countries you are willing to move to if the employer supports the required visa or relocation. Example: DE:Germany.") }}<textarea id="relocation-targets" rows="4" placeholder="DE:Germany"></textarea></label>
+      <div class="country-field"><span class="field-label">Authorized countries {{ tip("Countries where you can work now without employer sponsorship. Do not add Germany or the United States unless you already have that work right.") }}</span><div class="country-picker" data-country-field="authorizations" data-country-kind="authorization"><input class="country-search" type="search" placeholder="Search countries or ISO codes" autocomplete="off" aria-label="Search authorized countries"><div class="country-chips" aria-live="polite"></div><div class="country-options" role="listbox" hidden>{% for country in countries %}<button type="button" role="option" class="country-option" data-country-code="{{ country.code }}" data-country-name="{{ country.name }}"><span>{{ country.name }}</span><code>{{ country.code }}</code></button>{% endfor %}</div><textarea id="authorizations" class="country-value" rows="1">TR</textarea></div></div>
+      <div class="country-field"><span class="field-label">Relocation targets {{ tip("Countries you are willing to move to if the employer supports the required visa or relocation. Selecting a country here never claims existing work authorization.") }}</span><div class="country-picker" data-country-field="relocation-targets" data-country-kind="relocation"><input class="country-search" type="search" placeholder="Search countries to relocate to" autocomplete="off" aria-label="Search relocation targets"><div class="country-chips" aria-live="polite"></div><div class="country-options" role="listbox" hidden>{% for country in countries %}<button type="button" role="option" class="country-option" data-country-code="{{ country.code }}" data-country-name="{{ country.name }}"><span>{{ country.name }}</span><code>{{ country.code }}</code></button>{% endfor %}</div><textarea id="relocation-targets" class="country-value" rows="1"></textarea></div></div>
       <label>Priority companies {{ tip("Companies that deserve a dedicated search strategy even when stack fit is imperfect.") }}<textarea id="priority-companies" rows="5"></textarea></label>
       <label>Company watchlist {{ tip("Companies to surface more prominently without creating a dedicated strategy.") }}<textarea id="company-watchlist" rows="5"></textarea></label>
       <label>Company blocklist {{ tip("Companies whose roles should be excluded from recommendations.") }}<textarea id="company-blocklist" rows="5"></textarea></label>
@@ -53,9 +53,10 @@
     </div>
     <details>
       <summary>Plan preferences with an LLM</summary>
-      <p>Describe your goals, then copy a structured prompt. Paste it into any local or external LLM you trust, and import its JSON response above. The prompt requires the model to preserve your profile facts and never invent work authorization.</p>
+      <p>Describe your goals, then ask the configured model for a review-only draft or copy a structured prompt for any local or external LLM you trust. Both paths require the model to preserve your profile facts and never invent work authorization.</p>
       <label>Planning notes {{ tip("Optional context for an LLM, such as target countries, companies, remote constraints, or compensation priorities. These notes are copied to the prompt but are not saved.") }}<textarea id="planning-notes" rows="5" placeholder="Example: I live in Türkiye, can work there without sponsorship, want remote roles that explicitly allow Türkiye, and will relocate to Germany or the United States with sponsorship."></textarea></label>
-      <p><button id="plan-with-llm" class="button button-primary" type="button">Generate setup draft with configured LLM</button> <button id="copy-setup-prompt" class="button" type="button">Copy setup-planning prompt</button></p>
+      <p><button id="plan-with-llm" class="button button-primary" type="button">Ask model and fill a setup draft</button> <button id="copy-setup-prompt" class="button" type="button">Copy setup-planning prompt</button></p>
+      <details id="setup-draft-details" hidden><summary>Latest generated setup draft</summary><pre id="setup-draft-preview" class="json-preview"></pre></details>
     </details>
   </section>
 
@@ -80,6 +81,7 @@
       <label>API key {{ tip("Optional for endpoints that require one. It stays in the local permission-restricted secrets file and is never sent to the browser again.") }}<input id="llm-api-key" type="password" autocomplete="off"></label>
     </div>
     <p><button id="discover-model" class="button" type="button">Detect Ollama</button> <button id="start-model" class="button" type="button">Start Ollama</button> <button id="pull-model" class="button" type="button">Pull selected model</button> <button id="test-model" class="button" type="button">Test endpoint</button></p>
+    <div id="model-connection" class="model-health model-health-rules">Rules-only scoring is selected until you choose and test an LLM endpoint.</div>
     <p class="safety-note">Starting Ollama or downloading a model happens only when you click the corresponding button. The recommended model is qwen3:8b; qwen3:14b offers higher quality on hardware with enough memory.</p>
   </section>
 
@@ -109,6 +111,63 @@
     const match = /^([A-Za-z]{2}):([^:]+)$/.exec(value);
     if (!match) throw new Error(`Relocation target "${value}" must use CODE:Country, for example DE:Germany.`);
     return {country_code: countryCode(match[1], "Relocation country code"), country_name: match[2].trim(), cities: []};
+  });
+  const countryPickers = [...document.querySelectorAll(".country-picker")];
+  const pickerEntries = picker => {
+    const value = document.getElementById(picker.dataset.countryField).value;
+    if (picker.dataset.countryKind === "authorization") return value.split(/\r?\n/).filter(Boolean).map(code => ({code: code.trim().toUpperCase(), name: ""}));
+    return value.split(/\r?\n/).filter(Boolean).map(value => {
+      const [code, ...name] = value.split(":");
+      return {code: code.trim().toUpperCase(), name: name.join(":").trim()};
+    });
+  };
+  const writePickerEntries = (picker, entries) => {
+    const value = picker.dataset.countryKind === "authorization"
+      ? entries.map(item => item.code).join("\n")
+      : entries.map(item => `${item.code}:${item.name}`).join("\n");
+    document.getElementById(picker.dataset.countryField).value = value;
+  };
+  const renderPicker = picker => {
+    const entries = pickerEntries(picker);
+    const chips = picker.querySelector(".country-chips");
+    chips.replaceChildren(...entries.map(item => {
+      const chip = document.createElement("span");
+      chip.className = "country-chip";
+      const name = item.name || picker.querySelector(`.country-option[data-country-code="${item.code}"]`)?.dataset.countryName || item.code;
+      chip.textContent = `${name} (${item.code})`;
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.textContent = "×";
+      remove.title = `Remove ${name}`;
+      remove.addEventListener("click", () => { writePickerEntries(picker, pickerEntries(picker).filter(entry => entry.code !== item.code)); renderPicker(picker); });
+      chip.append(remove);
+      return chip;
+    }));
+    const selected = new Set(entries.map(item => item.code));
+    picker.querySelectorAll(".country-option").forEach(option => { option.setAttribute("aria-selected", String(selected.has(option.dataset.countryCode))); });
+  };
+  const syncCountryPickers = () => countryPickers.forEach(renderPicker);
+  countryPickers.forEach(picker => {
+    const search = picker.querySelector(".country-search");
+    const options = picker.querySelector(".country-options");
+    const filter = () => {
+      const query = search.value.trim().toLowerCase();
+      options.hidden = false;
+      picker.querySelectorAll(".country-option").forEach(option => { option.hidden = Boolean(query) && !`${option.dataset.countryName} ${option.dataset.countryCode}`.toLowerCase().includes(query); });
+    };
+    search.addEventListener("focus", filter);
+    search.addEventListener("input", filter);
+    search.addEventListener("blur", () => setTimeout(() => { options.hidden = true; }, 150));
+    picker.querySelectorAll(".country-option").forEach(option => option.addEventListener("click", () => {
+      const entries = pickerEntries(picker);
+      if (!entries.some(item => item.code === option.dataset.countryCode)) {
+        entries.push({code: option.dataset.countryCode, name: option.dataset.countryName});
+        writePickerEntries(picker, entries);
+      }
+      search.value = "";
+      options.hidden = true;
+      renderPicker(picker);
+    }));
   });
   const candidate = () => {
     const imported = document.getElementById("candidate-json").value.trim();
@@ -165,7 +224,9 @@
     document.getElementById("llm-model").value = setup.llm?.model || "qwen3:8b";
     document.getElementById("llm-api-key").value = setup.llm?.api_key || "";
     document.getElementById("activate").checked = Boolean(setup.activate);
+    syncCountryPickers();
   };
+  syncCountryPickers();
   document.getElementById("candidate-json").addEventListener("input", event => {
     if (!event.target.value.trim()) return;
     try {
@@ -207,20 +268,25 @@
       message(`Could not create setup-planning prompt: ${error.message}`);
     }
   });
+  const modelConnection = document.getElementById("model-connection");
+  const showModelConnection = (text, kind = "rules") => { modelConnection.className = `model-health model-health-${kind}`; modelConnection.textContent = text; };
+  const modelConfig = () => payload().llm;
   document.getElementById("plan-with-llm").addEventListener("click", async () => {
     try {
       message("Asking the configured model for a setup draft. Your configuration is not saved yet.");
       const draft = await post("/api/setup/plan", {candidate: candidate(), notes: document.getElementById("planning-notes").value, llm: payload().llm});
       hydrateSetup(draft);
+      document.getElementById("setup-draft-preview").textContent = JSON.stringify(draft, null, 2);
+      document.getElementById("setup-draft-details").hidden = false;
       message("Setup draft generated. Review every field before saving; collection remains disabled.", true);
     } catch (error) {
       message(`Could not generate a setup draft: ${error.message}`);
     }
   });
-  document.getElementById("discover-model").addEventListener("click", async () => { const value = await fetch("/api/setup/model/discover").then(r => r.json()); message(value.ollama_reachable ? `Ollama is running. Models: ${value.models.join(", ") || "none pulled"}` : value.ollama_installed ? "Ollama is installed but not reachable." : "Ollama was not found. Rules-only mode is ready to use.", value.ollama_reachable); });
+  document.getElementById("discover-model").addEventListener("click", async () => { try { const value = await post("/api/setup/model/discover", modelConfig()); const text = value.ollama_reachable ? `Ollama reachable at ${value.endpoint}. Models: ${value.models.join(", ") || "none pulled"}` : `Ollama is not reachable at ${value.endpoint}.`; showModelConnection(text, value.ollama_reachable ? "success" : "warning"); message(text, value.ollama_reachable); } catch (error) { showModelConnection(error.message, "warning"); message(error.message); } });
   document.getElementById("start-model").addEventListener("click", async () => { try { const value = await post("/api/setup/model/start"); message(`Ollama started as process ${value.pid}.`, true); } catch (error) { message(error.message); } });
   document.getElementById("pull-model").addEventListener("click", async () => { try { message("Downloading the model. Keep this page open…"); const value = await post("/api/setup/model/pull", {model: document.getElementById("llm-model").value}); message(`Downloaded ${value.model}.`, true); } catch (error) { message(error.message); } });
-  document.getElementById("test-model").addEventListener("click", async () => { try { const data = payload().llm; const value = await post("/api/setup/model/test", data); message(value.ok ? `Endpoint connected${value.model_found ? " and model found" : "; selected model was not listed"}.` : value.error, value.ok); } catch (error) { message(error.message); } });
+  document.getElementById("test-model").addEventListener("click", async () => { try { const data = modelConfig(); const value = await post("/api/setup/model/test", data); const text = value.ok ? `Connected to ${data.base_url}. ${value.model_found ? `Model ${data.model} is ready.` : `The endpoint did not list ${data.model}.`}` : value.error; showModelConnection(text, value.ok && value.model_found ? "success" : "warning"); message(text, value.ok && value.model_found); } catch (error) { showModelConnection(error.message, "warning"); message(error.message); } });
   document.getElementById("setup-form").addEventListener("submit", async event => { event.preventDefault(); try { const value = await post("/api/setup/complete", payload()); window.location.assign(value.redirect); } catch (error) { message(error.message); } });
 </script>
 {% endblock %}

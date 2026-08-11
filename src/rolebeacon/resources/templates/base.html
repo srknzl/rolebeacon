@@ -31,6 +31,18 @@
         {% if sync.running %}Syncing {{ sync.current_source }} · {{ sync.sources_completed }}/{{ sync.sources_total }}{% else %}Ready{% endif %}
       </span>
     </div>
+    <section id="sync-panel" class="sync-panel" aria-live="polite" hidden>
+      <div class="sync-panel-heading"><div><p class="eyebrow">REFRESH STATUS</p><h2 id="sync-phase">Ready</h2></div><button id="sync-panel-close" class="button button-quiet" type="button">Hide</button></div>
+      <p id="sync-message" class="muted">No refresh is running.</p>
+      <div class="progress-track" role="progressbar" aria-label="Refresh progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="sync-progress" class="progress-value"></div></div>
+      <ol class="sync-steps">
+        <li data-sync-step="checking_model"><span></span>Check scoring engine</li>
+        <li data-sync-step="collecting"><span></span><span id="sync-sources">Collect job sources</span></li>
+        <li data-sync-step="scoring"><span></span><span id="sync-scoring">Rank eligible jobs</span></li>
+        <li data-sync-step="complete"><span></span>Finish refresh</li>
+      </ol>
+      <div id="sync-model-health" class="model-health"></div>
+    </section>
     <main class="container">
       {% block content %}{% endblock %}
     </main>
@@ -38,22 +50,80 @@
       const syncButton = document.getElementById("sync-button");
       const syncStrip = document.getElementById("sync-strip");
       const syncLabel = document.getElementById("sync-label");
+      const syncPanel = document.getElementById("sync-panel");
+      const syncPhase = document.getElementById("sync-phase");
+      const syncMessage = document.getElementById("sync-message");
+      const syncProgress = document.getElementById("sync-progress");
+      const syncSources = document.getElementById("sync-sources");
+      const syncScoring = document.getElementById("sync-scoring");
+      const syncModelHealth = document.getElementById("sync-model-health");
+      const syncClose = document.getElementById("sync-panel-close");
+      let syncPollingTimer;
+      const phaseOrder = ["preparing", "checking_model", "collecting", "scoring", "complete"];
+      function showSyncPanel() { syncPanel.hidden = false; }
+      function stepState(phase, step) {
+        if (phase === "failed") return step === "complete" ? "error" : "complete";
+        const current = phaseOrder.indexOf(phase);
+        const index = phaseOrder.indexOf(step);
+        return current > index ? "complete" : current === index ? "active" : "pending";
+      }
+      function renderSyncStatus(state) {
+        syncStrip.classList.toggle("is-running", state.running);
+        syncLabel.textContent = state.running
+          ? `Syncing ${state.current_source || state.phase_message || "jobs"} · ${state.sources_completed}/${state.sources_total}`
+          : state.error ? `Last sync error: ${state.error}` : "Ready";
+        if (syncButton) syncButton.disabled = state.running;
+        if (state.running) showSyncPanel();
+        syncPhase.textContent = state.phase_message || "Ready";
+        syncMessage.textContent = state.error || (state.running
+          ? state.llm_available
+            ? "The model is reachable; eligible jobs are receiving evidence-based scoring."
+            : "Collection continues while enhanced scoring waits for a reachable model."
+          : "Review the completed steps and scoring mode below.");
+        const progress = Math.max(0, Math.min(100, Number(state.progress_percent || 0)));
+        syncProgress.style.width = `${progress}%`;
+        syncProgress.parentElement.setAttribute("aria-valuenow", String(progress));
+        syncSources.textContent = `Collect job sources (${state.sources_completed || 0}/${state.sources_total || 0}; ${state.jobs_changed || 0} changed)`;
+        syncScoring.textContent = `Rank eligible jobs (${state.jobs_scored || 0}/${state.jobs_to_score || 0})`;
+        document.querySelectorAll("[data-sync-step]").forEach(item => { item.dataset.state = stepState(state.phase || "idle", item.dataset.syncStep); });
+        if (state.llm_status === "rules_only") {
+          syncModelHealth.className = "model-health model-health-rules";
+          syncModelHealth.textContent = "Rules-only scoring is active. Collection and deterministic ranking continue without an LLM.";
+        } else if (state.llm_available) {
+          syncModelHealth.className = "model-health model-health-success";
+          syncModelHealth.textContent = `LLM connected: ${state.llm_model} at ${state.llm_endpoint}. Evidence-based scoring is active.`;
+        } else {
+          syncModelHealth.className = "model-health model-health-warning";
+          syncModelHealth.textContent = `LLM unavailable (${state.llm_status || "unknown"}). Rules fallback scored ${state.rule_fallback_jobs || 0} job(s); enhanced scoring stays queued. ${state.llm_error || ""}`;
+        }
+      }
       async function refreshStatus() {
         const response = await fetch("/api/sync/status");
         const state = await response.json();
-        syncStrip.classList.toggle("is-running", state.running);
-        syncLabel.textContent = state.running
-          ? `Syncing ${state.current_source || "jobs"} · ${state.sources_completed}/${state.sources_total} · ${state.jobs_changed} changed`
-          : state.error ? `Last sync error: ${state.error}` : "Ready";
-        syncButton.disabled = state.running;
+        renderSyncStatus(state);
+        if (!state.running && syncPollingTimer) {
+          clearInterval(syncPollingTimer);
+          syncPollingTimer = undefined;
+        }
       }
+      function startSyncPolling() {
+        if (syncPollingTimer) return;
+        syncPollingTimer = setInterval(refreshStatus, 1000);
+        refreshStatus();
+      }
+      if (syncClose) syncClose.addEventListener("click", () => { syncPanel.hidden = true; });
       if (syncButton) {
         syncButton.addEventListener("click", async () => {
           syncButton.disabled = true;
-          await fetch("/api/sync", {method: "POST"});
-          await refreshStatus();
+          showSyncPanel();
+          const response = await fetch("/api/sync", {method: "POST"});
+          if (!response.ok) {
+            const result = await response.json();
+            renderSyncStatus({phase: "failed", phase_message: "Refresh could not start", error: result.detail || "Unknown error", progress_percent: 100, llm_status: "rules_only"});
+          }
+          startSyncPolling();
         });
-        setInterval(refreshStatus, 4000);
+        refreshStatus();
       }
     </script>
   </body>

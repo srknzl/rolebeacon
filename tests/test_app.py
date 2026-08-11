@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from rolebeacon.app import create_app
 from rolebeacon.config import Settings
 from rolebeacon.domain import CollectedJob
+from rolebeacon.llm import LlmClient
 from rolebeacon.setup import SetupService
 
 
@@ -76,6 +77,45 @@ def test_setup_schema_validation_and_completion(tmp_path) -> None:
     assert "api_key" not in setup_validation.json()["payload"]["llm"]
     assert completion.json()["completed"] is True
     assert app.state.settings.secrets_path.read_text(encoding="utf-8").find("candidate@example.com") == -1
+
+
+def test_setup_completion_refreshes_active_llm_settings(tmp_path) -> None:
+    app = create_app(Settings.load(tmp_path))
+    payload = setup_payload()
+    payload["llm"] = {
+        "mode": "ollama",
+        "base_url": "http://model.lan:11434/v1",
+        "model": "qwen3:14b",
+        "api_key": "",
+    }
+
+    with TestClient(app) as client:
+        completion = client.post("/api/setup/complete", json=payload)
+
+    assert completion.json()["activated"] is True
+    assert app.state.settings.llm_enabled is True
+    assert app.state.settings.llm_mode == "ollama"
+    assert app.state.settings.llm_model == "qwen3:14b"
+    assert app.state.sync_service.llm.settings.llm_model == "qwen3:14b"
+
+
+def test_llm_client_does_not_send_an_empty_bearer_token(tmp_path) -> None:
+    client = LlmClient(Settings.load(tmp_path))
+
+    assert client._headers() == {"Content-Type": "application/json"}
+
+
+def test_setup_shows_searchable_country_catalog_and_rules_model_status(tmp_path) -> None:
+    app = create_app(Settings.load(tmp_path))
+
+    with TestClient(app) as client:
+        setup = client.get("/setup")
+        model_status = client.get("/api/model/status")
+
+    assert setup.status_code == 200
+    assert 'data-country-code="TR" data-country-name="Türkiye"' in setup.text
+    assert 'data-country-code="DE" data-country-name="Germany"' in setup.text
+    assert model_status.json()["status"] == "rules_only"
 
 
 def test_setup_validation_rejects_unknown_iso_country_codes(tmp_path) -> None:

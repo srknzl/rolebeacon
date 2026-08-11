@@ -26,7 +26,18 @@ class SyncStatus:
     jobs_seen: int = 0
     jobs_changed: int = 0
     jobs_scored: int = 0
+    jobs_to_score: int = 0
     llm_available: bool = False
+    llm_status: str = "rules_only"
+    llm_mode: str = "rules"
+    llm_endpoint: str = ""
+    llm_model: str = ""
+    llm_error: str = ""
+    phase: str = "idle"
+    phase_message: str = "Ready"
+    progress_percent: int = 0
+    source_errors: int = 0
+    rule_fallback_jobs: int = 0
     error: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -53,12 +64,28 @@ class SyncService:
                 running=True,
                 started_at=datetime.now(UTC).isoformat(),
                 sources_total=len(sources),
+                llm_mode=self.settings.llm_mode,
+                llm_endpoint=self.settings.llm_base_url if self.settings.llm_enabled else "",
+                llm_model=self.settings.llm_model if self.settings.llm_enabled else "",
+                phase="preparing",
+                phase_message="Preparing sources and scoring configuration",
+                progress_percent=2,
             )
             changed_ids: set[int] = set()
             search_profile = self.settings.load_search_profile()
             mobility_profile = self.settings.load_mobility_profile()
             strategies = self.settings.load_strategies()
             try:
+                self.status.phase = "checking_model"
+                self.status.phase_message = "Checking LLM availability"
+                self.status.progress_percent = 8
+                health = await self.llm.health()
+                self.status.llm_available = bool(health["available"])
+                self.status.llm_status = str(health["status"])
+                self.status.llm_error = str(health["error"])
+                self.status.phase = "collecting"
+                self.status.phase_message = "Collecting job postings"
+                self.status.progress_percent = 10
                 async with default_http_client() as client:
                     for source in sources:
                         self.status.current_source = source.name
@@ -70,6 +97,7 @@ class SyncService:
                             self.database.skip_source(source.id, skip_reason, next_eligible)
                             self.database.finish_sync_run(run_id, status="skipped", started_at=run_started, skip_reason=skip_reason)
                             self.status.sources_completed += 1
+                            self.status.progress_percent = 10 + int(50 * self.status.sources_completed / max(1, self.status.sources_total))
                             continue
                         self.database.start_source(source.id)
                         since = self._since(state.get("last_successful_sync_at"))
@@ -110,8 +138,10 @@ class SyncService:
                             message = f"{type(error).__name__}: {error}"
                             self.database.fail_source(source.id, message)
                             self.database.finish_sync_run(run_id, status="error", started_at=run_started, error=message)
+                            self.status.source_errors += 1
                         finally:
                             self.status.sources_completed += 1
+                            self.status.progress_percent = 10 + int(50 * self.status.sources_completed / max(1, self.status.sources_total))
 
                 scoring_version = (
                     f"{SCORING_PROMPT_VERSION}:{self.settings.llm_model}"
@@ -119,7 +149,10 @@ class SyncService:
                     else f"{SCORING_PROMPT_VERSION}:rules"
                 )
                 pending = set(self.database.pending_job_ids(scoring_version)) | changed_ids
-                self.status.llm_available = await self.llm.available()
+                self.status.jobs_to_score = len(pending)
+                self.status.phase = "scoring"
+                self.status.phase_message = "Ranking eligible jobs"
+                self.status.progress_percent = 65
                 candidate_profile = self.settings.load_candidate_profile()
                 for job_id in pending:
                     job_record = self.database.get_job(job_id)
@@ -135,19 +168,28 @@ class SyncService:
                                 score = await self.llm.score(
                                     job_record, eligibility, search_profile, candidate_profile
                                 )
-                            except LlmUnavailable:
+                            except LlmUnavailable as error:
                                 score_status = "pending_llm"
+                                self.status.llm_available = False
+                                self.status.llm_status = "unavailable"
+                                self.status.llm_error = f"The model became unavailable while scoring: {error}"
+                                self.status.rule_fallback_jobs += 1
                         else:
                             score_status = "pending_llm"
+                            self.status.rule_fallback_jobs += 1
                     score.prompt_version = scoring_version
                     self.database.save_evaluation(job_id, eligibility, score, score_status)
                     self.status.jobs_scored += 1
+                    self.status.progress_percent = 65 + int(30 * self.status.jobs_scored / max(1, self.status.jobs_to_score))
             except Exception as error:
                 self.status.error = f"{type(error).__name__}: {error}"
             finally:
                 self.status.running = False
                 self.status.current_source = ""
                 self.status.finished_at = datetime.now(UTC).isoformat()
+                self.status.phase = "failed" if self.status.error else "complete"
+                self.status.phase_message = self.status.error or "Refresh complete"
+                self.status.progress_percent = 100
             return self.status
 
     def _skip_reason(self, source: Any, state: dict[str, Any], force: bool) -> tuple[str, datetime | None]:

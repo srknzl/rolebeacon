@@ -61,17 +61,47 @@ class LlmClient:
         self.settings = settings
 
     async def available(self) -> bool:
+        return bool((await self.health())["available"])
+
+    async def health(self) -> dict[str, Any]:
         if not self.settings.llm_enabled:
-            return False
+            return {
+                "mode": "rules",
+                "available": False,
+                "status": "rules_only",
+                "endpoint": "",
+                "model": "",
+                "models": [],
+                "error": "Rules-only mode is selected",
+            }
         try:
             async with httpx.AsyncClient(timeout=5) as client:
                 response = await client.get(
                     f"{self.settings.llm_base_url}/models",
                     headers=self._headers(),
                 )
-                return response.is_success
-        except httpx.HTTPError:
-            return False
+                response.raise_for_status()
+                models = [str(item.get("id", "")) for item in response.json().get("data", [])]
+                model_found = self.settings.llm_model in models
+                return {
+                    "mode": self.settings.llm_mode,
+                    "available": model_found,
+                    "status": "available" if model_found else "model_missing",
+                    "endpoint": self.settings.llm_base_url,
+                    "model": self.settings.llm_model,
+                    "models": models,
+                    "error": "" if model_found else f"Model {self.settings.llm_model} was not listed by the endpoint",
+                }
+        except (httpx.HTTPError, KeyError, TypeError, ValueError) as error:
+            return {
+                "mode": self.settings.llm_mode,
+                "available": False,
+                "status": "unavailable",
+                "endpoint": self.settings.llm_base_url,
+                "model": self.settings.llm_model,
+                "models": [],
+                "error": f"{type(error).__name__}: {error}",
+            }
 
     async def score(
         self,
@@ -105,6 +135,7 @@ class LlmClient:
                 {"role": "user", "content": prompt},
             ],
             "temperature": 0.1,
+            "max_tokens": 900,
             "stream": False,
             "response_format": {
                 "type": "json_schema",
@@ -146,6 +177,7 @@ class LlmClient:
             "model": self.settings.llm_model,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
             "temperature": 0.2,
+            "max_tokens": 3_000,
             "stream": False,
             "response_format": {"type": "json_schema", "json_schema": {"name": name, "strict": True, "schema": schema}},
         }
@@ -159,7 +191,10 @@ class LlmClient:
             return json.loads(response.json()["choices"][0]["message"]["content"])
 
     def _headers(self) -> dict[str, str]:
-        return {"Authorization": f"Bearer {self.settings.llm_api_key}", "Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json"}
+        if self.settings.llm_api_key:
+            headers["Authorization"] = f"Bearer {self.settings.llm_api_key}"
+        return headers
 
     @staticmethod
     def _validate_score(value: dict[str, Any]) -> None:

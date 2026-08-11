@@ -355,7 +355,7 @@ class CompanyResearchService:
             next((item for item in evidence if item["source_type"] == "careers"), evidence[0]),
         )
         profile = {
-            "summary": summary_source["excerpt"][:500],
+            "summary": self._summary_from_evidence(summary_source["excerpt"]),
             "industry": "",
             "headquarters": "",
             "size": "",
@@ -368,6 +368,14 @@ class CompanyResearchService:
         }
         score = {"total": sum(dimensions.values()), "dimensions": dimensions, "reasons": reasons, "risks": risks}
         return profile, score
+
+    @staticmethod
+    def _summary_from_evidence(value: str) -> str:
+        """Keep a readable, complete-sentence preview rather than cutting an assessment mid-word."""
+        normalized = " ".join(value.split())
+        sentences = re.split(r"(?<=[.!?])\s+", normalized)
+        complete = " ".join(sentences[:4]).strip()
+        return complete or normalized
 
     @staticmethod
     def _matching_evidence(evidence: list[dict[str, str]], *terms: str) -> list[dict[str, str]]:
