@@ -1,12 +1,13 @@
 {% extends "base.html" %}
+{% from "_help.html" import tip %}
 {% block title %}Jobs · RoleBeacon{% endblock %}
 {% block content %}
 <section class="page-heading"><div><p class="eyebrow">DISCOVERY</p><h1>Jobs</h1></div><span>{{ jobs|length }} results</span></section>
 <form class="filters" method="get">
-  <label>Search<input name="q" value="{{ filters.q }}" placeholder="Java distributed systems"></label>
-  <label>Strategy<select name="route"><option value="">All strategies</option>{% for route in routes %}<option value="{{ route.id }}" {% if filters.route == route.id %}selected{% endif %}>{{ route.label }}</option>{% endfor %}</select></label>
-  <label>Status<select name="job_status"><option value="">All statuses</option>{% for value in ['new','interested','maybe','rejected','applied','interview','offer'] %}<option {% if filters.status == value %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
-  <label>Minimum score<input type="number" min="0" max="100" name="min_score" value="{{ filters.min_score }}"></label>
+  <label>Search {{ tip("Matches job title, company, location, and description.") }}<input name="q" value="{{ filters.q }}" placeholder="Java distributed systems"></label>
+  <label>Strategy {{ tip("A search route generated from your role, work-authorisation, relocation, and remote preferences.") }}<select name="route"><option value="">All strategies</option>{% for route in routes %}<option value="{{ route.id }}" {% if filters.route == route.id %}selected{% endif %}>{{ route.label }}</option>{% endfor %}</select></label>
+  <label>Status {{ tip("Your personal pipeline decision. It never changes the original job posting.") }}<select name="job_status"><option value="">All statuses</option>{% for value in ['new','interested','maybe','rejected','applied','interview','offer'] %}<option {% if filters.status == value %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
+  <label>Minimum score {{ tip("The overall opportunity score from 0 to 100 after eligibility checks.") }}<input type="number" min="0" max="100" name="min_score" value="{{ filters.min_score }}"></label>
   <button class="button" type="submit">Apply filters</button>
 </form>
 {% if query_error %}<div class="alert">Search error: {{ query_error }}</div>{% endif %}

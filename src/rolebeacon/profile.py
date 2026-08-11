@@ -5,6 +5,23 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
+ISO_ALPHA2_CODES = frozenset(
+    """AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ
+    CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR
+    GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP
+    KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT
+    MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW
+    SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG
+    UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW""".split()
+)
+
+
+def normalize_iso_country_code(value: str) -> str:
+    code = value.upper()
+    if code not in ISO_ALPHA2_CODES:
+        raise ValueError("Use a valid ISO 3166-1 alpha-2 country code, such as TR or DE")
+    return code
+
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -26,7 +43,7 @@ class CandidateLocation(StrictModel):
     @field_validator("country_code")
     @classmethod
     def normalize_country_code(cls, value: str) -> str:
-        return value.upper()
+        return normalize_iso_country_code(value)
 
 
 class ExperienceEntry(StrictModel):
@@ -81,7 +98,7 @@ class CountryPreference(StrictModel):
     @field_validator("country_code")
     @classmethod
     def normalize_country_code(cls, value: str) -> str:
-        return value.upper()
+        return normalize_iso_country_code(value)
 
 
 class MobilityProfileV1(StrictModel):
@@ -99,12 +116,12 @@ class MobilityProfileV1(StrictModel):
     @field_validator("current_country_code")
     @classmethod
     def normalize_current_country(cls, value: str) -> str:
-        return value.upper()
+        return normalize_iso_country_code(value)
 
     @field_validator("work_authorizations")
     @classmethod
     def normalize_authorizations(cls, values: list[str]) -> list[str]:
-        return sorted({value.upper() for value in values})
+        return sorted({normalize_iso_country_code(value) for value in values})
 
     @model_validator(mode="after")
     def include_current_country(self) -> MobilityProfileV1:
@@ -248,3 +265,7 @@ Use only facts explicitly present in the CV. Do not infer dates, metrics, skills
 work authorization, or proficiency. Use empty strings or empty lists for missing optional information.
 Set schema_version to \"1.0\" and return JSON only.
 """
+
+SETUP_PLANNING_PROMPT = """Help a candidate plan a RoleBeacon setup. Return only one valid SetupPayloadV1 JSON object, with no Markdown or explanation.
+
+Preserve the supplied candidate profile exactly. Use only stated facts for work authorization, relocation, remote-work eligibility, compensation, and seniority. Do not infer a work right, visa sponsorship, salary, or location permission. For countries where the candidate requires a visa or sponsorship, add them only as relocation targets, not as work authorizations. Country codes must be ISO 3166-1 alpha-2 values. Include focused target roles, relevant preferred skills and domains, and a conservative company priority/watch list based on the candidate's stated goals. Keep `activate` false so the candidate reviews the configuration before any source is contacted."""

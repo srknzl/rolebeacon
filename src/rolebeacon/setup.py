@@ -5,6 +5,7 @@ import json
 import re
 import shutil
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +13,16 @@ import httpx
 from pydantic import ValidationError
 
 from .config import Settings
-from .profile import CV_CONVERSION_PROMPT, CandidateProfileV1, SetupPayloadV1, candidate_schema, generate_strategies
+from .llm import LlmClient, LlmUnavailable
+from .profile import (
+    CV_CONVERSION_PROMPT,
+    SETUP_PLANNING_PROMPT,
+    CandidateProfileV1,
+    LlmSetup,
+    SetupPayloadV1,
+    candidate_schema,
+    generate_strategies,
+)
 from .services import validate_candidate_profile
 
 MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
@@ -38,15 +48,61 @@ class SetupService:
             "candidate": candidate_schema(),
             "setup": SetupPayloadV1.model_json_schema(),
             "cv_conversion_prompt": CV_CONVERSION_PROMPT,
+            "setup_planning_prompt": SETUP_PLANNING_PROMPT,
         }
 
     def validate_profile(self, value: dict[str, Any]) -> dict[str, Any]:
         try:
             candidate = CandidateProfileV1.model_validate(value)
         except ValidationError as error:
-            return {"valid": False, "errors": error.errors(include_url=False)}
+            return {"valid": False, "errors": error.errors(include_url=False, include_context=False)}
         issues = validate_candidate_profile(candidate.model_dump(mode="json"))
         return {"valid": not issues, "errors": issues, "profile": candidate.model_dump(mode="json")}
+
+    def validate_setup_payload(self, value: dict[str, Any]) -> dict[str, Any]:
+        try:
+            payload = SetupPayloadV1.model_validate(value)
+        except ValidationError as error:
+            return {"valid": False, "errors": error.errors(include_url=False, include_context=False)}
+        issues = validate_candidate_profile(payload.candidate.model_dump(mode="json"))
+        return {
+            "valid": not issues,
+            "errors": issues,
+            "payload": payload.model_dump(mode="json", exclude={"llm": {"api_key"}}),
+        }
+
+    async def plan_with_llm(self, value: dict[str, Any]) -> dict[str, Any]:
+        candidate = CandidateProfileV1.model_validate(value.get("candidate", {}))
+        llm = LlmSetup.model_validate(value.get("llm", {}))
+        if llm.mode == "rules":
+            raise ValueError("Choose Ollama or a custom endpoint before asking a model to plan preferences")
+        temporary_settings = replace(
+            self.settings,
+            llm_mode=llm.mode,
+            llm_enabled=True,
+            llm_base_url=llm.base_url.rstrip("/"),
+            llm_model=llm.model,
+            llm_api_key=llm.api_key,
+        )
+        notes = str(value.get("notes", "")).strip() or "No additional notes."
+        try:
+            result = await LlmClient(temporary_settings).generate_text(
+                system="You configure a local-first job discovery tool. Return only JSON matching the supplied schema.",
+                prompt=(
+                    f"{SETUP_PLANNING_PROMPT}\n\n"
+                    f"CANDIDATE PROFILE:\n{json.dumps(candidate.model_dump(mode='json'), ensure_ascii=False)}\n\n"
+                    f"CANDIDATE NOTES:\n{notes}"
+                ),
+                schema=SetupPayloadV1.model_json_schema(),
+                name="rolebeacon_setup_plan",
+            )
+        except (httpx.HTTPError, KeyError, TypeError, json.JSONDecodeError) as error:
+            raise LlmUnavailable(str(error)) from error
+        result["candidate"] = candidate.model_dump(mode="json")
+        result["llm"] = llm.model_dump(mode="json")
+        result["activate"] = False
+        validated = SetupPayloadV1.model_validate(result)
+        return validated.model_dump(mode="json")
 
     def complete(self, value: dict[str, Any]) -> Settings:
         payload = SetupPayloadV1.model_validate(value)

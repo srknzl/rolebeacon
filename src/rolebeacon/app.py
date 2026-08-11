@@ -244,6 +244,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def validate_setup_profile(request: Request) -> dict[str, Any]:
         return setup_service.validate_profile(await _payload(request))
 
+    @app.post("/api/setup/validate")
+    async def validate_setup_payload(request: Request) -> dict[str, Any]:
+        return setup_service.validate_setup_payload(await _payload(request))
+
+    @app.post("/api/setup/plan")
+    async def plan_setup_with_llm(request: Request) -> dict[str, Any]:
+        try:
+            return await setup_service.plan_with_llm(await _payload(request))
+        except (LlmUnavailable, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
     @app.get("/api/setup/model/discover")
     async def discover_local_model() -> dict[str, Any]:
         return await local_models.discover()

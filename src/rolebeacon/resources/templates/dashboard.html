@@ -11,11 +11,11 @@
 </section>
 
 <section class="stats-grid">
-  <div class="stat"><strong>{{ stats.new_today }}</strong><span>new today</span></div>
-  <div class="stat"><strong>{{ stats.total }}</strong><span>active jobs</span></div>
-  <div class="stat"><strong>{{ stats.shortlisted }}</strong><span>shortlisted</span></div>
-  <div class="stat"><strong>{{ stats.pending_llm }}</strong><span>waiting for model</span></div>
-  <div class="stat {% if stats.source_errors %}stat-warning{% endif %}"><strong>{{ stats.source_errors }}</strong><span>source errors</span></div>
+  <div class="stat" title="Jobs first collected during the current local day."><strong>{{ stats.new_today }}</strong><span>new today</span></div>
+  <div class="stat" title="Collected jobs that are not rejected or closed."><strong>{{ stats.total }}</strong><span>active jobs</span></div>
+  <div class="stat" title="Jobs you marked Interested or Maybe."><strong>{{ stats.shortlisted }}</strong><span>shortlisted</span></div>
+  <div class="stat" title="Jobs collected successfully while LLM scoring is waiting or unavailable."><strong>{{ stats.pending_llm }}</strong><span>waiting for model</span></div>
+  <div class="stat {% if stats.source_errors %}stat-warning{% endif %}" title="Sources whose latest collection attempt failed. Other sources continue independently."><strong>{{ stats.source_errors }}</strong><span>source errors</span></div>
 </section>
 
 <section class="section-heading">

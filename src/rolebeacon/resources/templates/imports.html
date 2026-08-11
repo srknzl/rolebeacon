@@ -1,15 +1,16 @@
 {% extends "base.html" %}
+{% from "_help.html" import tip %}
 {% block title %}Import · RoleBeacon{% endblock %}
 {% block content %}
 <section class="page-heading"><div><p class="eyebrow">MANUAL FALLBACK</p><h1>Import a job</h1><p>This form stores only what you paste. RoleBeacon does not fetch the URL.</p></div></section>
 {% if imported %}<div class="notice">Imported successfully. <a href="/jobs/{{ imported }}">Open job</a></div>{% endif %}
 <form class="settings-form" method="post" action="/api/imports">
-  <label>Job title<input name="title" required></label>
-  <label>Company<input name="company" required></label>
-  <label>Job URL<input name="url" type="url" required></label>
-  <label>Location<input name="location"></label>
-  <label>Remote scope<input name="remote_scope"></label>
-  <label>Description<textarea name="description" rows="16"></textarea></label>
+  <label>Job title {{ tip("Copy the role title exactly as shown in the posting.") }}<input name="title" required></label>
+  <label>Company {{ tip("The employer or hiring company shown in the posting.") }}<input name="company" required></label>
+  <label>Job URL {{ tip("Kept as a reference and application link. RoleBeacon does not fetch it from this form.") }}<input name="url" type="url" required></label>
+  <label>Location {{ tip("City, country, or remote-region wording from the posting.") }}<input name="location"></label>
+  <label>Remote scope {{ tip("Copy any explicit remote-country or timezone restriction, such as Worldwide, EMEA, or Türkiye.") }}<input name="remote_scope"></label>
+  <label>Description {{ tip("Paste the full job description when possible for more accurate eligibility and fit scoring.") }}<textarea name="description" rows="16"></textarea></label>
   <button class="button button-primary" type="submit">Import without fetching</button>
 </form>
 {% endblock %}

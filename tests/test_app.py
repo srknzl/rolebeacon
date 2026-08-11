@@ -66,13 +66,41 @@ def test_setup_schema_validation_and_completion(tmp_path) -> None:
     with TestClient(app) as client:
         schema = client.get("/api/schemas/candidate-profile")
         validation = client.post("/api/setup/profile/validate", json=setup_payload()["candidate"])
+        setup_validation = client.post("/api/setup/validate", json=setup_payload())
         completion = client.post("/api/setup/complete", json=setup_payload())
 
     assert schema.status_code == 200
     assert schema.json()["candidate"]["title"] == "CandidateProfileV1"
     assert validation.json()["valid"] is True
+    assert setup_validation.json()["valid"] is True
+    assert "api_key" not in setup_validation.json()["payload"]["llm"]
     assert completion.json()["completed"] is True
     assert app.state.settings.secrets_path.read_text(encoding="utf-8").find("candidate@example.com") == -1
+
+
+def test_setup_validation_rejects_unknown_iso_country_codes(tmp_path) -> None:
+    app = create_app(Settings.load(tmp_path))
+    invalid = setup_payload()
+    invalid["mobility"]["relocation_targets"][0]["country_code"] = "ZZ"
+
+    with TestClient(app) as client:
+        response = client.post("/api/setup/validate", json=invalid)
+
+    assert response.json()["valid"] is False
+    assert "ISO 3166-1" in str(response.json()["errors"])
+
+
+def test_setup_planning_requires_an_enabled_model(tmp_path) -> None:
+    app = create_app(Settings.load(tmp_path))
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/setup/plan",
+            json={"candidate": setup_payload()["candidate"], "notes": "Remote from Türkiye", "llm": {"mode": "rules"}},
+        )
+
+    assert response.status_code == 409
+    assert "Choose Ollama" in response.json()["detail"]
 
 
 def test_dashboard_jobs_api_and_feedback(tmp_path) -> None:

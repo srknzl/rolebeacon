@@ -1,6 +1,6 @@
 <article class="job-card">
   {% set display_score = job.opportunity_score or job.score or 0 %}
-  <div class="score score-{{ 'high' if display_score >= 80 else 'mid' if display_score >= 65 else 'low' }}">
+  <div class="score score-{{ 'high' if display_score >= 80 else 'mid' if display_score >= 65 else 'low' }}" title="Overall opportunity score from 0 to 100 after eligibility checks.">
     {{ display_score or '—' }}
   </div>
   <div class="job-card-main">
@@ -9,7 +9,7 @@
         <a href="/jobs/{{ job.id }}" class="job-title">{{ job.title }}</a>
         <div class="company">{{ job.company }}</div>
       </div>
-      <span class="status status-{{ job.status }}">{{ job.status }}</span>
+      <span class="status status-{{ job.status }}" title="Your personal pipeline decision for this job.">{{ job.status }}</span>
     </div>
     <div class="meta-row">
       <span>{{ job.location or 'Location unknown' }}</span>

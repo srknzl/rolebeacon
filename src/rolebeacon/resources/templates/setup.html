@@ -1,50 +1,62 @@
 {% extends "base.html" %}
+{% from "_help.html" import tip %}
 {% block title %}Setup · RoleBeacon{% endblock %}
 {% block content %}
 <section class="page-heading"><div><p class="eyebrow">FIRST-RUN SETUP</p><h1>Make RoleBeacon yours</h1><p>Rules-only scoring works without a model. No job source is contacted until you activate setup.</p></div></section>
-<div id="setup-message" class="alert" hidden></div>
+<div id="setup-message" class="toast" role="status" aria-live="polite" hidden></div>
 <form id="setup-form" class="form-stack">
   <section class="panel">
     <h2>Candidate profile</h2>
     <div class="form-grid">
-      <label>Full name<input id="name" required></label>
-      <label>Headline<input id="headline" placeholder="Backend and distributed-systems engineer"></label>
-      <label>Email<input id="email" type="email"></label>
-      <label>Phone<input id="phone"></label>
-      <label>Country code<input id="country-code" value="TR" maxlength="2" required></label>
-      <label>Country name<input id="country-name" value="Türkiye" required></label>
-      <label>City<input id="city"></label>
-      <label>Website<input id="website" type="url"></label>
+      <label>Full name {{ tip("Used only in your locally stored candidate profile and application materials.") }}<input id="name" required></label>
+      <label>Headline {{ tip("A concise professional title used to describe your target profile.") }}<input id="headline" placeholder="Backend and distributed-systems engineer"></label>
+      <label>Email {{ tip("Used only when you prepare an application. It is never sent until you submit yourself.") }}<input id="email" type="email"></label>
+      <label>Phone {{ tip("Optional contact detail for application preparation.") }}<input id="phone"></label>
+      <label>Country code {{ tip("Your current country as a two-letter ISO 3166-1 code. Use TR for Türkiye.") }}<input id="country-code" value="TR" maxlength="2" required></label>
+      <label>Country name {{ tip("Human-readable name for your current country. It is displayed as Türkiye for TR.") }}<input id="country-name" value="Türkiye" required></label>
+      <label>City {{ tip("Optional current city. Leave blank when you prefer not to use a city in matching.") }}<input id="city"></label>
+      <label>Website {{ tip("Optional portfolio or personal website to include in application materials.") }}<input id="website" type="url"></label>
     </div>
-    <label>Summary<textarea id="summary" rows="4"></textarea></label>
-    <label>Skills, one per line<textarea id="skills" rows="5"></textarea></label>
-    <details><summary>Import complete CandidateProfileV1 JSON</summary>
+    <label>Summary {{ tip("A factual professional summary used only for matching and generated materials.") }}<textarea id="summary" rows="4"></textarea></label>
+    <label>Skills, one per line {{ tip("Each line becomes a matching signal. Prefer specific technologies and domains.") }}<textarea id="skills" rows="5"></textarea></label>
+    <details><summary>Import CandidateProfileV1 JSON</summary>
       <p>Use this for experience, projects, education, language proficiency, and detailed contact links. Imported JSON overrides the basic fields above.</p>
       <textarea id="candidate-json" rows="14" placeholder="Paste CandidateProfileV1 JSON"></textarea>
       <p><button id="import-candidate" class="button button-primary" type="button">Import and validate JSON</button> <button id="copy-prompt" class="button" type="button">Copy CV conversion prompt</button> <a href="/api/schemas/candidate-profile" target="_blank">View JSON Schema</a></p>
+    </details>
+    <details><summary>Import complete SetupPayloadV1 JSON</summary>
+      <p>Use this when your JSON includes the candidate profile, mobility, search preferences, selected sources, and model configuration. It fills the entire setup form for review; saving remains your decision.</p>
+      <textarea id="setup-json" rows="14" placeholder="Paste complete SetupPayloadV1 JSON"></textarea>
+      <p><button id="import-setup" class="button button-primary" type="button">Import and validate setup JSON</button> <a href="/api/schemas/candidate-profile" target="_blank">View SetupPayloadV1 Schema</a></p>
     </details>
   </section>
 
   <section class="panel">
     <h2>Mobility and search</h2>
     <div class="form-grid">
-      <label>Target roles, one per line<textarea id="target-roles" rows="5" required></textarea></label>
-      <label>Preferred skills<textarea id="preferred-skills" rows="5"></textarea></label>
-      <label>Preferred domains<textarea id="preferred-domains" rows="5"></textarea></label>
-      <label>Preferred seniority<textarea id="preferred-seniority" rows="5" placeholder="senior&#10;staff"></textarea></label>
-      <label>Authorized country codes<textarea id="authorizations" rows="4" placeholder="TR"></textarea></label>
-      <label>Relocation targets as CODE:Name<textarea id="relocation-targets" rows="4" placeholder="DE:Germany"></textarea></label>
-      <label>Priority companies<textarea id="priority-companies" rows="5"></textarea></label>
-      <label>Company watchlist<textarea id="company-watchlist" rows="5"></textarea></label>
-      <label>Company blocklist<textarea id="company-blocklist" rows="5"></textarea></label>
-      <label>Excluded phrases<textarea id="exclude-phrases" rows="5"></textarea></label>
+      <label>Target roles, one per line {{ tip("Job titles you actively want. These create search strategies and influence ranking.") }}<textarea id="target-roles" rows="5" required></textarea></label>
+      <label>Preferred skills {{ tip("Skills that should increase a job's score. Put one skill or phrase on each line.") }}<textarea id="preferred-skills" rows="5"></textarea></label>
+      <label>Preferred domains {{ tip("Problem domains you enjoy, such as distributed systems, developer tools, or fintech.") }}<textarea id="preferred-domains" rows="5"></textarea></label>
+      <label>Preferred seniority {{ tip("Seniority terms you want to see, for example senior, staff, or lead.") }}<textarea id="preferred-seniority" rows="5" placeholder="senior&#10;staff"></textarea></label>
+      <label>Authorized country codes {{ tip("Countries where you can work now without employer sponsorship. Use ISO codes, one per line. For example, TR means you can work in Türkiye; do not add DE or US unless you already have that right.") }}<textarea id="authorizations" rows="4" placeholder="TR"></textarea></label>
+      <label>Relocation targets as CODE:Name {{ tip("Countries you are willing to move to if the employer supports the required visa or relocation. Example: DE:Germany.") }}<textarea id="relocation-targets" rows="4" placeholder="DE:Germany"></textarea></label>
+      <label>Priority companies {{ tip("Companies that deserve a dedicated search strategy even when stack fit is imperfect.") }}<textarea id="priority-companies" rows="5"></textarea></label>
+      <label>Company watchlist {{ tip("Companies to surface more prominently without creating a dedicated strategy.") }}<textarea id="company-watchlist" rows="5"></textarea></label>
+      <label>Company blocklist {{ tip("Companies whose roles should be excluded from recommendations.") }}<textarea id="company-blocklist" rows="5"></textarea></label>
+      <label>Excluded phrases {{ tip("Phrases that should reject a job, such as a clearance requirement you cannot meet.") }}<textarea id="exclude-phrases" rows="5"></textarea></label>
     </div>
     <div class="checkbox-row">
-      <label><input id="remote-current" type="checkbox" checked> Remote work from my current country</label>
-      <label><input id="relocate" type="checkbox" checked> Willing to relocate</label>
-      <label><input id="contractor" type="checkbox" checked> Contractor arrangements accepted</label>
-      <label><input id="eor" type="checkbox" checked> Employer-of-record arrangements accepted</label>
+      <label title="Allows remote roles only when the posting explicitly permits work from your current country or worldwide."><input id="remote-current" type="checkbox" checked> Remote work from my current country</label>
+      <label title="Allows relocation strategies for the target countries above; visa support remains an eligibility requirement."><input id="relocate" type="checkbox" checked> Willing to relocate</label>
+      <label title="Allows roles offered through an independent-contractor agreement."><input id="contractor" type="checkbox" checked> Contractor arrangements accepted</label>
+      <label title="Allows roles where an employer-of-record hires you locally on the company's behalf."><input id="eor" type="checkbox" checked> Employer-of-record arrangements accepted</label>
     </div>
+    <details>
+      <summary>Plan preferences with an LLM</summary>
+      <p>Describe your goals, then copy a structured prompt. Paste it into any local or external LLM you trust, and import its JSON response above. The prompt requires the model to preserve your profile facts and never invent work authorization.</p>
+      <label>Planning notes {{ tip("Optional context for an LLM, such as target countries, companies, remote constraints, or compensation priorities. These notes are copied to the prompt but are not saved.") }}<textarea id="planning-notes" rows="5" placeholder="Example: I live in Türkiye, can work there without sponsorship, want remote roles that explicitly allow Türkiye, and will relocate to Germany or the United States with sponsorship."></textarea></label>
+      <p><button id="plan-with-llm" class="button button-primary" type="button">Generate setup draft with configured LLM</button> <button id="copy-setup-prompt" class="button" type="button">Copy setup-planning prompt</button></p>
+    </details>
   </section>
 
   <section class="panel">
@@ -53,7 +65,7 @@
     <div class="checkbox-row">
       {% for source in sources %}
         {% if source.kind not in ['adzuna', 'jooble', 'serpapi', 'gmail_linkedin'] %}
-        <label><input class="source-choice" type="checkbox" value="{{ source.id }}"> {{ source.name }}</label>
+        <label title="{% if source.id == 'arbeitnow' %}Public Europe-focused jobs feed, useful for Germany and relocation opportunities.{% elif source.id == 'jobicy' %}Public remote jobs API filtered to engineering roles.{% elif source.id == 'remotive' %}Public remote software-development feed.{% elif source.id == 'remoteok' %}Remote job board feed; country eligibility is checked after collection.{% elif source.id == 'himalayas' %}Remote job board API; country eligibility is checked after collection.{% elif source.id == 'wwr' %}We Work Remotely programming feed; country eligibility is checked after collection.{% else %}A public source that is contacted only after setup is activated.{% endif %}"><input class="source-choice" type="checkbox" value="{{ source.id }}"> {{ source.name }} {{ tip("Hover the source name for its coverage. You can start with all six public sources; RoleBeacon deduplicates overlaps.") }}</label>
         {% endif %}
       {% endfor %}
     </div>
@@ -61,11 +73,11 @@
 
   <section class="panel">
     <h2>Scoring engine</h2>
-    <label>Mode<select id="llm-mode"><option value="rules">Rules only — no model required</option><option value="ollama">Ollama on this computer or LAN</option><option value="custom">Custom OpenAI-compatible endpoint</option></select></label>
+    <label>Mode {{ tip("Rules-only works without a model. Ollama and custom endpoints add written evidence and richer fit analysis.") }}<select id="llm-mode"><option value="rules">Rules only — no model required</option><option value="ollama">Ollama on this computer or LAN</option><option value="custom">Custom OpenAI-compatible endpoint</option></select></label>
     <div class="form-grid">
-      <label>Endpoint<input id="llm-base-url" value="http://127.0.0.1:11434/v1"></label>
-      <label>Model<input id="llm-model" value="qwen3:8b"></label>
-      <label>API key<input id="llm-api-key" type="password" autocomplete="off"></label>
+      <label>Endpoint {{ tip("Local Ollama normally uses http://127.0.0.1:11434/v1. A LAN or compatible endpoint can be used instead.") }}<input id="llm-base-url" value="http://127.0.0.1:11434/v1"></label>
+      <label>Model {{ tip("The model identifier at the selected endpoint. qwen3:8b is a practical local default.") }}<input id="llm-model" value="qwen3:8b"></label>
+      <label>API key {{ tip("Optional for endpoints that require one. It stays in the local permission-restricted secrets file and is never sent to the browser again.") }}<input id="llm-api-key" type="password" autocomplete="off"></label>
     </div>
     <p><button id="discover-model" class="button" type="button">Detect Ollama</button> <button id="start-model" class="button" type="button">Start Ollama</button> <button id="pull-model" class="button" type="button">Pull selected model</button> <button id="test-model" class="button" type="button">Test endpoint</button></p>
     <p class="safety-note">Starting Ollama or downloading a model happens only when you click the corresponding button. The recommended model is qwen3:8b; qwen3:14b offers higher quality on hardware with enough memory.</p>
@@ -78,19 +90,37 @@
 </form>
 <script>
   const lines = id => document.getElementById(id).value.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
-  const message = (text, ok = false) => { const box = document.getElementById("setup-message"); box.hidden = false; box.className = `alert ${ok ? "alert-success" : ""}`; box.textContent = text; };
+  let messageTimer;
+  const message = (text, ok = false) => {
+    const box = document.getElementById("setup-message");
+    clearTimeout(messageTimer);
+    box.hidden = false;
+    box.className = `toast ${ok ? "alert-success" : ""}`;
+    box.textContent = text;
+    messageTimer = setTimeout(() => { box.hidden = true; }, ok ? 5000 : 8000);
+  };
   const post = async (url, body = {}) => { const response = await fetch(url, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)}); const value = await response.json(); if (!response.ok) throw new Error(typeof value.detail === "string" ? value.detail : JSON.stringify(value.detail)); return value; };
+  const countryCode = (value, label) => {
+    const code = value.trim().toUpperCase();
+    if (!/^[A-Z]{2}$/.test(code)) throw new Error(`${label} must use a two-letter ISO country code, such as TR or DE.`);
+    return code;
+  };
+  const relocationTargets = () => lines("relocation-targets").map(value => {
+    const match = /^([A-Za-z]{2}):([^:]+)$/.exec(value);
+    if (!match) throw new Error(`Relocation target "${value}" must use CODE:Country, for example DE:Germany.`);
+    return {country_code: countryCode(match[1], "Relocation country code"), country_name: match[2].trim(), cities: []};
+  });
   const candidate = () => {
     const imported = document.getElementById("candidate-json").value.trim();
     if (imported) return JSON.parse(imported);
     const optionalUrl = id => document.getElementById(id).value.trim() || null;
     return {schema_version: "1.0", name: document.getElementById("name").value, headline: document.getElementById("headline").value, summary: document.getElementById("summary").value,
       contact: {email: document.getElementById("email").value, phone: document.getElementById("phone").value, website: optionalUrl("website"), github: null, linkedin: null},
-      location: {country_code: document.getElementById("country-code").value, country_name: document.getElementById("country-name").value, city: document.getElementById("city").value},
+      location: {country_code: countryCode(document.getElementById("country-code").value, "Country code"), country_name: document.getElementById("country-name").value, city: document.getElementById("city").value},
       skills: {Skills: lines("skills")}, experience: [], projects: [], education: [], languages: []};
   };
-  const payload = () => ({candidate: candidate(), mobility: {schema_version: "1.0", current_country_code: document.getElementById("country-code").value,
-    work_authorizations: lines("authorizations"), relocation_targets: lines("relocation-targets").map(value => { const [country_code, ...name] = value.split(":"); return {country_code, country_name: name.join(":").trim(), cities: []}; }),
+  const payload = () => ({candidate: candidate(), mobility: {schema_version: "1.0", current_country_code: countryCode(document.getElementById("country-code").value, "Country code"),
+    work_authorizations: lines("authorizations").map(value => countryCode(value, "Authorized country code")), relocation_targets: relocationTargets(),
     remote_from_current_country: document.getElementById("remote-current").checked, willing_to_relocate: document.getElementById("relocate").checked,
     contractor_allowed: document.getElementById("contractor").checked, eor_allowed: document.getElementById("eor").checked, sponsorship_required_outside_authorized_countries: true, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone},
     preferences: {schema_version: "1.0", target_roles: lines("target-roles"), preferred_skills: lines("preferred-skills"), preferred_domains: lines("preferred-domains"), preferred_seniority: lines("preferred-seniority"), priority_companies: lines("priority-companies"), company_watchlist: lines("company-watchlist"), company_blocklist: lines("company-blocklist"), exclude_phrases: lines("exclude-phrases"), salary: {minimum: null, currency: "", hard_filter: false}, daily_review_limit: 15},
@@ -111,6 +141,31 @@
       document.getElementById("skills").value = skills.join("\n");
       return imported;
   };
+  const setLines = (id, values = []) => { document.getElementById(id).value = values.join("\n"); };
+  const hydrateSetup = setup => {
+    document.getElementById("candidate-json").value = JSON.stringify(setup.candidate, null, 2);
+    applyImportedCandidate();
+    setLines("authorizations", setup.mobility.work_authorizations);
+    setLines("relocation-targets", (setup.mobility.relocation_targets || []).map(item => `${item.country_code}:${item.country_name}`));
+    document.getElementById("remote-current").checked = setup.mobility.remote_from_current_country;
+    document.getElementById("relocate").checked = setup.mobility.willing_to_relocate;
+    document.getElementById("contractor").checked = setup.mobility.contractor_allowed;
+    document.getElementById("eor").checked = setup.mobility.eor_allowed;
+    setLines("target-roles", setup.preferences.target_roles);
+    setLines("preferred-skills", setup.preferences.preferred_skills);
+    setLines("preferred-domains", setup.preferences.preferred_domains);
+    setLines("preferred-seniority", setup.preferences.preferred_seniority);
+    setLines("priority-companies", setup.preferences.priority_companies);
+    setLines("company-watchlist", setup.preferences.company_watchlist);
+    setLines("company-blocklist", setup.preferences.company_blocklist);
+    setLines("exclude-phrases", setup.preferences.exclude_phrases);
+    document.querySelectorAll(".source-choice").forEach(item => { item.checked = (setup.enabled_source_ids || []).includes(item.value); });
+    document.getElementById("llm-mode").value = setup.llm?.mode || "rules";
+    document.getElementById("llm-base-url").value = setup.llm?.base_url || "http://127.0.0.1:11434/v1";
+    document.getElementById("llm-model").value = setup.llm?.model || "qwen3:8b";
+    document.getElementById("llm-api-key").value = setup.llm?.api_key || "";
+    document.getElementById("activate").checked = Boolean(setup.activate);
+  };
   document.getElementById("candidate-json").addEventListener("input", event => {
     if (!event.target.value.trim()) return;
     try {
@@ -128,6 +183,38 @@
       message("Candidate profile imported and validated. Complete mobility and search preferences, then save setup.", true);
     } catch (error) {
       message(`Candidate import failed: ${error.message}`);
+    }
+  });
+  document.getElementById("import-setup").addEventListener("click", async () => {
+    try {
+      const imported = JSON.parse(document.getElementById("setup-json").value.trim());
+      const result = await post("/api/setup/validate", imported);
+      if (!result.valid) throw new Error(JSON.stringify(result.errors));
+      hydrateSetup(imported);
+      message("Complete setup imported and validated. Review the values, then save when ready.", true);
+    } catch (error) {
+      message(`Setup import failed: ${error.message}`);
+    }
+  });
+  document.getElementById("copy-setup-prompt").addEventListener("click", async () => {
+    try {
+      const profile = document.getElementById("candidate-json").value.trim() || JSON.stringify(candidate(), null, 2);
+      const notes = document.getElementById("planning-notes").value.trim();
+      const prompt = {{ schemas.setup_planning_prompt|tojson }} + "\n\nCANDIDATE PROFILE:\n" + profile + "\n\nCANDIDATE NOTES:\n" + (notes || "No additional notes.") + "\n\nSETUP JSON SCHEMA:\n" + JSON.stringify({{ schemas.setup|tojson }}, null, 2);
+      await navigator.clipboard.writeText(prompt);
+      message("Setup-planning prompt copied. Ask an LLM for JSON only, then import the result above.", true);
+    } catch (error) {
+      message(`Could not create setup-planning prompt: ${error.message}`);
+    }
+  });
+  document.getElementById("plan-with-llm").addEventListener("click", async () => {
+    try {
+      message("Asking the configured model for a setup draft. Your configuration is not saved yet.");
+      const draft = await post("/api/setup/plan", {candidate: candidate(), notes: document.getElementById("planning-notes").value, llm: payload().llm});
+      hydrateSetup(draft);
+      message("Setup draft generated. Review every field before saving; collection remains disabled.", true);
+    } catch (error) {
+      message(`Could not generate a setup draft: ${error.message}`);
     }
   });
   document.getElementById("discover-model").addEventListener("click", async () => { const value = await fetch("/api/setup/model/discover").then(r => r.json()); message(value.ollama_reachable ? `Ollama is running. Models: ${value.models.join(", ") || "none pulled"}` : value.ollama_installed ? "Ollama is installed but not reachable." : "Ollama was not found. Rules-only mode is ready to use.", value.ollama_reachable); });

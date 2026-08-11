@@ -103,8 +103,12 @@ can implement the existing provider boundary without changing scoring or profile
 
 ## Candidate profile
 
-Setup supports basic form entry or a complete `CandidateProfileV1` JSON document. The public
-schema and a copyable CV-conversion prompt are available at:
+Setup supports basic form entry, a complete `CandidateProfileV1` JSON document, or a complete
+`SetupPayloadV1` document containing the profile, mobility, preferences, selected sources, and
+model settings. The wizard validates ISO country codes and `CODE:Country` relocation targets.
+It can also generate a review-only preference draft with an explicitly configured LLM, or copy a
+structured planning prompt for any LLM the candidate chooses. Neither path activates collection.
+The public schema and CV-conversion prompt are available at:
 
 ```text
 GET /api/schemas/candidate-profile
@@ -118,6 +122,7 @@ The three stable setup schemas are:
 - `CandidateProfileV1`
 - `MobilityProfileV1`
 - `SearchPreferencesV1`
+- `SetupPayloadV1`
 
 Country names are display values; eligibility uses ISO country codes. For example, the interface
 displays `Türkiye` while storing `TR`.
@@ -221,6 +226,8 @@ Core endpoints:
 - `GET /api/setup/status`
 - `GET /api/schemas/candidate-profile`
 - `POST /api/setup/profile/validate`
+- `POST /api/setup/validate`
+- `POST /api/setup/plan`
 - `GET /api/setup/model/discover`
 - `POST /api/setup/model/test`
 - `POST /api/setup/complete`

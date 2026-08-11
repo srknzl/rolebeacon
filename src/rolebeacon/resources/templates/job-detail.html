@@ -4,11 +4,11 @@
 <a class="back-link" href="/jobs">← All jobs</a>
 <section class="detail-header">
   <div>
-    <div class="badge-row"><span class="route-badge">{{ job.route or 'UNCLASSIFIED' }}</span><span class="status status-{{ job.status }}">{{ job.status }}</span><span class="status status-{{ job.eligibility_status or 'unknown' }}">{{ job.eligibility_status or 'eligibility unknown' }}</span></div>
+    <div class="badge-row"><span class="route-badge" title="The search strategy that surfaced this job.">{{ job.route or 'UNCLASSIFIED' }}</span><span class="status status-{{ job.status }}" title="Your personal pipeline decision for this job.">{{ job.status }}</span><span class="status status-{{ job.eligibility_status or 'unknown' }}" title="Eligibility is checked before fit and cannot be overridden by a high score.">{{ job.eligibility_status or 'eligibility unknown' }}</span></div>
     <h1>{{ job.title }}</h1>
     <p class="detail-company">{{ job.company }} · {{ job.location or 'Location unknown' }}</p>
   </div>
-  <div class="detail-score"><strong>{{ job.opportunity_score or job.score or '—' }}</strong><span>opportunity score</span><small>job {{ job.score or '—' }} · company {{ job.company_score or '—' }}</small></div>
+  <div class="detail-score" title="Overall score from 0 to 100. It combines eligibility, role fit, skills, seniority, and work-model constraints."><strong>{{ job.opportunity_score or job.score or '—' }}</strong><span>opportunity score</span><small>job {{ job.score or '—' }} · company {{ job.company_score or '—' }}</small></div>
 </section>
 
 <section class="detail-grid">
@@ -27,9 +27,9 @@
     <div class="panel sticky-panel">
       <h2>Decision</h2>
       <form action="/api/jobs/{{ job.id }}/feedback" method="post" class="decision-grid">
-        <button name="status" value="interested" class="button button-primary">Interested</button>
-        <button name="status" value="maybe" class="button">Maybe</button>
-        <button name="status" value="rejected" class="button button-quiet">Reject</button>
+        <button name="status" value="interested" class="button button-primary" title="Keep this job in your shortlist for follow-up.">Interested</button>
+        <button name="status" value="maybe" class="button" title="Keep this job visible without committing it to your shortlist.">Maybe</button>
+        <button name="status" value="rejected" class="button button-quiet" title="Hide this job from recommendations. The original posting is not changed.">Reject</button>
       </form>
       <hr>
       <h2>Company intelligence</h2>
@@ -38,14 +38,14 @@
       {% else %}
       <p class="muted">Company fit is kept separate from job fit and cannot override an authorization blocker.</p>
       {% endif %}
-      <form action="/api/jobs/{{ job.id }}/research-company" method="post"><button class="button wide">{{ 'Refresh' if job.company_id else 'Research' }} company</button></form>
+      <form action="/api/jobs/{{ job.id }}/research-company" method="post"><button class="button wide" title="Collect provenance-backed company evidence. It does not change job eligibility.">{{ 'Refresh' if job.company_id else 'Research' }} company</button></form>
       <hr>
       <h2>Application kit</h2>
-      {% if application and application.resume_path %}<a class="artifact-link" href="/artifacts/{{ job.id }}/resume.pdf">Open tailored resume</a>{% else %}<form action="/api/jobs/{{ job.id }}/resume" method="post"><button class="button wide">Generate tailored resume</button></form>{% endif %}
+      {% if application and application.resume_path %}<a class="artifact-link" href="/artifacts/{{ job.id }}/resume.pdf" title="Open the locally generated resume PDF for review.">Open tailored resume</a>{% else %}<form action="/api/jobs/{{ job.id }}/resume" method="post"><button class="button wide" title="Create a factual resume draft using only verified profile evidence.">Generate tailored resume</button></form>{% endif %}
       <div class="recommendation {% if cover_letter_recommended %}recommended{% endif %}"><strong>{{ 'Recommended' if cover_letter_recommended else 'Optional' }} cover letter</strong><p>{{ cover_letter_reason }}</p></div>
-      {% if application and application.cover_letter_path %}<a class="artifact-link" href="/artifacts/{{ job.id }}/cover-letter.txt">Open cover letter</a>{% else %}<form action="/api/jobs/{{ job.id }}/cover-letter" method="post"><button class="button wide">Generate cover letter</button></form>{% endif %}
-      <form action="/api/jobs/{{ job.id }}/prepare-application" method="post"><button class="button button-primary wide">Prepare application</button></form>
-      <a class="button button-quiet wide" href="{{ job.apply_url or job.canonical_url }}" target="_blank" rel="noopener">Open original posting ↗</a>
+      {% if application and application.cover_letter_path %}<a class="artifact-link" href="/artifacts/{{ job.id }}/cover-letter.txt" title="Open the locally generated cover letter for review.">Open cover letter</a>{% else %}<form action="/api/jobs/{{ job.id }}/cover-letter" method="post"><button class="button wide" title="Create an on-demand factual cover letter. You must review it before use.">Generate cover letter</button></form>{% endif %}
+      <form action="/api/jobs/{{ job.id }}/prepare-application" method="post"><button class="button button-primary wide" title="Prepare supported form fields in a browser. RoleBeacon never submits an application.">Prepare application</button></form>
+      <a class="button button-quiet wide" href="{{ job.apply_url or job.canonical_url }}" target="_blank" rel="noopener" title="Open the original posting in a new tab for your review and final submission.">Open original posting ↗</a>
       <p class="safety-note">RoleBeacon never submits the application. Review every answer and press Submit yourself.</p>
     </div>
   </aside>

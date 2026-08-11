@@ -15,16 +15,16 @@
         <span>RoleBeacon</span>
       </a>
       <nav>
-        {% if not setup_complete %}<a href="/setup">Setup</a>{% endif %}
-        <a href="/jobs">Jobs</a>
-        <a href="/applications">Applications</a>
-        <a href="/companies">Companies</a>
-        <a href="/sources">Sources</a>
-        <a href="/duplicates">Duplicates</a>
-        <a href="/imports">Import</a>
-        <a href="/settings">Settings</a>
+        {% if not setup_complete %}<a href="/setup" title="Configure your profile, search preferences, sources, and scoring engine">Setup</a>{% endif %}
+        <a href="/jobs" title="Browse collected jobs and refine the shortlist">Jobs</a>
+        <a href="/applications" title="Track application preparation and outcomes">Applications</a>
+        <a href="/companies" title="Review evidence-based company research separately from job fit">Companies</a>
+        <a href="/sources" title="Inspect collection source health and sync history">Sources</a>
+        <a href="/duplicates" title="Review potential cross-source duplicate jobs">Duplicates</a>
+        <a href="/imports" title="Add a job manually without RoleBeacon fetching the URL">Import</a>
+        <a href="/settings" title="Update saved search preferences">Settings</a>
       </nav>
-      {% if setup_complete %}<button id="sync-button" class="button button-primary" type="button">Refresh now</button>{% endif %}
+      {% if setup_complete %}<button id="sync-button" class="button button-primary" type="button" title="Collect new and updated jobs from activated sources">Refresh now</button>{% endif %}
     </header>
     <div class="sync-strip {% if sync.running %}is-running{% endif %}" id="sync-strip">
       <span id="sync-label">
