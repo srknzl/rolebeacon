@@ -1,0 +1,69 @@
+[
+  {
+    "id": "arbeitnow",
+    "kind": "arbeitnow",
+    "name": "Arbeitnow",
+    "enabled": false,
+    "min_sync_interval_seconds": 14400,
+    "trust_priority": 70,
+    "max_pages": 5,
+    "ingestion_filter": true
+  },
+  {
+    "id": "jobicy-engineering",
+    "kind": "jobicy",
+    "name": "Jobicy — Engineering",
+    "enabled": false,
+    "industry": "engineering",
+    "min_sync_interval_seconds": 14400,
+    "trust_priority": 55,
+    "ingestion_filter": true
+  },
+  {
+    "id": "remotive-software",
+    "kind": "remotive",
+    "name": "Remotive — Software Development",
+    "enabled": false,
+    "category": "software-dev",
+    "min_sync_interval_seconds": 21600,
+    "trust_priority": 55,
+    "ingestion_filter": true
+  },
+  {
+    "id": "remoteok",
+    "kind": "remoteok",
+    "name": "Remote OK",
+    "enabled": false,
+    "min_sync_interval_seconds": 14400,
+    "trust_priority": 50,
+    "ingestion_filter": true
+  },
+  {
+    "id": "himalayas",
+    "kind": "himalayas",
+    "name": "Himalayas",
+    "enabled": false,
+    "min_sync_interval_seconds": 14400,
+    "trust_priority": 55,
+    "ingestion_filter": true
+  },
+  {
+    "id": "wwr-programming",
+    "kind": "wwr",
+    "name": "We Work Remotely — Programming",
+    "url": "https://weworkremotely.com/categories/remote-programming-jobs.rss",
+    "enabled": false,
+    "min_sync_interval_seconds": 14400,
+    "trust_priority": 50,
+    "ingestion_filter": true
+  },
+  {
+    "id": "linkedin-alerts",
+    "kind": "gmail_linkedin",
+    "name": "LinkedIn Job Alerts via Gmail",
+    "enabled": false,
+    "min_sync_interval_seconds": 900,
+    "trust_priority": 45,
+    "ingestion_filter": true
+  }
+]

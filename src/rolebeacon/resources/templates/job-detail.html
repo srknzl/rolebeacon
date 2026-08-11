@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}{{ job.title }} · RoleBeacon{% endblock %}
+{% block content %}
+<a class="back-link" href="/jobs">← All jobs</a>
+<section class="detail-header">
+  <div>
+    <div class="badge-row"><span class="route-badge">{{ job.route or 'UNCLASSIFIED' }}</span><span class="status status-{{ job.status }}">{{ job.status }}</span><span class="status status-{{ job.eligibility_status or 'unknown' }}">{{ job.eligibility_status or 'eligibility unknown' }}</span></div>
+    <h1>{{ job.title }}</h1>
+    <p class="detail-company">{{ job.company }} · {{ job.location or 'Location unknown' }}</p>
+  </div>
+  <div class="detail-score"><strong>{{ job.opportunity_score or job.score or '—' }}</strong><span>opportunity score</span><small>job {{ job.score or '—' }} · company {{ job.company_score or '—' }}</small></div>
+</section>
+
+<section class="detail-grid">
+  <div class="detail-main">
+    <div class="panel">
+      <div class="panel-heading"><h2>Why it matches</h2><span>{{ job.provider or 'not scored' }} · {{ job.model or '' }}</span></div>
+      {% if job.evidence %}<ul class="evidence-list">{% for item in job.evidence %}<li><strong>{{ item.requirement }}</strong><span>{{ item.profile_evidence }}</span></li>{% endfor %}</ul>{% else %}<p class="muted">No evidence recorded yet.</p>{% endif %}
+    </div>
+    <div class="panel">
+      <h2>Gaps and risks</h2>
+      {% if job.gaps %}<ul class="gap-list">{% for item in job.gaps %}<li><span class="severity severity-{{ item.severity }}">{{ item.severity }}</span>{{ item.requirement }}</li>{% endfor %}</ul>{% else %}<p class="muted">No material gaps recorded.</p>{% endif %}
+    </div>
+    <div class="panel job-description"><h2>Job description</h2><p>{{ job.description }}</p></div>
+  </div>
+  <aside class="detail-sidebar">
+    <div class="panel sticky-panel">
+      <h2>Decision</h2>
+      <form action="/api/jobs/{{ job.id }}/feedback" method="post" class="decision-grid">
+        <button name="status" value="interested" class="button button-primary">Interested</button>
+        <button name="status" value="maybe" class="button">Maybe</button>
+        <button name="status" value="rejected" class="button button-quiet">Reject</button>
+      </form>
+      <hr>
+      <h2>Company intelligence</h2>
+      {% if job.company_id %}
+      <a class="artifact-link" href="/companies/{{ job.company_id }}">Open company profile · {{ job.company_score }}/100</a>
+      {% else %}
+      <p class="muted">Company fit is kept separate from job fit and cannot override an authorization blocker.</p>
+      {% endif %}
+      <form action="/api/jobs/{{ job.id }}/research-company" method="post"><button class="button wide">{{ 'Refresh' if job.company_id else 'Research' }} company</button></form>
+      <hr>
+      <h2>Application kit</h2>
+      {% if application and application.resume_path %}<a class="artifact-link" href="/artifacts/{{ job.id }}/resume.pdf">Open tailored resume</a>{% else %}<form action="/api/jobs/{{ job.id }}/resume" method="post"><button class="button wide">Generate tailored resume</button></form>{% endif %}
+      <div class="recommendation {% if cover_letter_recommended %}recommended{% endif %}"><strong>{{ 'Recommended' if cover_letter_recommended else 'Optional' }} cover letter</strong><p>{{ cover_letter_reason }}</p></div>
+      {% if application and application.cover_letter_path %}<a class="artifact-link" href="/artifacts/{{ job.id }}/cover-letter.txt">Open cover letter</a>{% else %}<form action="/api/jobs/{{ job.id }}/cover-letter" method="post"><button class="button wide">Generate cover letter</button></form>{% endif %}
+      <form action="/api/jobs/{{ job.id }}/prepare-application" method="post"><button class="button button-primary wide">Prepare application</button></form>
+      <a class="button button-quiet wide" href="{{ job.apply_url or job.canonical_url }}" target="_blank" rel="noopener">Open original posting ↗</a>
+      <p class="safety-note">RoleBeacon never submits the application. Review every answer and press Submit yourself.</p>
+    </div>
+  </aside>
+</section>
+{% endblock %}

@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Import · RoleBeacon{% endblock %}
+{% block content %}
+<section class="page-heading"><div><p class="eyebrow">MANUAL FALLBACK</p><h1>Import a job</h1><p>This form stores only what you paste. RoleBeacon does not fetch the URL.</p></div></section>
+{% if imported %}<div class="notice">Imported successfully. <a href="/jobs/{{ imported }}">Open job</a></div>{% endif %}
+<form class="settings-form" method="post" action="/api/imports">
+  <label>Job title<input name="title" required></label>
+  <label>Company<input name="company" required></label>
+  <label>Job URL<input name="url" type="url" required></label>
+  <label>Location<input name="location"></label>
+  <label>Remote scope<input name="remote_scope"></label>
+  <label>Description<textarea name="description" rows="16"></textarea></label>
+  <button class="button button-primary" type="submit">Import without fetching</button>
+</form>
+{% endblock %}

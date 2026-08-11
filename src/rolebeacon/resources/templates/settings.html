@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Settings · RoleBeacon{% endblock %}
+{% block content %}
+<section class="page-heading"><div><p class="eyebrow">CONFIGURATION</p><h1>Search preferences</h1></div><a class="button" href="/setup">Open setup</a></section>
+{% if saved %}<div class="alert alert-success">Search preferences were saved in the private application directory.</div>{% endif %}
+<div class="settings-grid">
+  <form class="panel form-stack" method="post">
+    <label>Target roles<textarea name="target_roles" rows="6">{{ profile.target_roles|join('\n') }}</textarea></label>
+    <label>Preferred skills<textarea name="preferred_skills" rows="5">{{ profile.preferred_skills|join('\n') }}</textarea></label>
+    <label>Preferred domains<textarea name="preferred_domains" rows="5">{{ profile.preferred_domains|join('\n') }}</textarea></label>
+    <label>Priority companies<textarea name="priority_companies" rows="6">{{ profile.priority_companies|join('\n') }}</textarea></label>
+    <label>Company watchlist<textarea name="company_watchlist" rows="6">{{ profile.company_watchlist|join('\n') }}</textarea></label>
+    <label>Company blocklist<textarea name="company_blocklist" rows="4">{{ profile.company_blocklist|join('\n') }}</textarea></label>
+    <button class="button button-primary" type="submit">Save preferences</button>
+  </form>
+  <aside class="panel settings-summary">
+    <h2>Runtime</h2>
+    <dl><dt>Database</dt><dd>{{ settings.database_path }}</dd><dt>Scoring mode</dt><dd>{{ settings.llm_mode }}</dd><dt>Model</dt><dd>{{ settings.llm_model }}</dd><dt>Model endpoint</dt><dd>{{ settings.llm_base_url }}</dd><dt>Activated</dt><dd>{{ settings.activated }}</dd><dt>Sync interval</dt><dd>{{ settings.sync_interval_seconds // 3600 }} hours</dd><dt>Overlap</dt><dd>{{ settings.overlap_hours }} hours</dd></dl>
+    <p class="safety-note">Secrets, profiles, generated files, OAuth tokens, and browser sessions stay in the private operating-system application directory.</p>
+  </aside>
+</div>
+{% endblock %}

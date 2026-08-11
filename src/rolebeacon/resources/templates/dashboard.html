@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · RoleBeacon{% endblock %}
+{% block content %}
+<section class="hero">
+  <div>
+    <p class="eyebrow">LOCAL JOB INTELLIGENCE</p>
+    <h1>Your strongest opportunities, without the job-board treadmill.</h1>
+    <p class="lede">New postings are collected incrementally, checked for authorization and relocation constraints, then ranked against your verified profile.</p>
+  </div>
+  <div class="hero-orbit" aria-hidden="true"><span></span></div>
+</section>
+
+<section class="stats-grid">
+  <div class="stat"><strong>{{ stats.new_today }}</strong><span>new today</span></div>
+  <div class="stat"><strong>{{ stats.total }}</strong><span>active jobs</span></div>
+  <div class="stat"><strong>{{ stats.shortlisted }}</strong><span>shortlisted</span></div>
+  <div class="stat"><strong>{{ stats.pending_llm }}</strong><span>waiting for model</span></div>
+  <div class="stat {% if stats.source_errors %}stat-warning{% endif %}"><strong>{{ stats.source_errors }}</strong><span>source errors</span></div>
+</section>
+
+<section class="section-heading">
+  <div><p class="eyebrow">SHORTLIST</p><h2>Recommended now</h2></div>
+  <a href="/jobs?min_score=65">View all →</a>
+</section>
+<div class="job-list">
+  {% for job in jobs %}{% include "_job-card.html" %}{% else %}
+  <div class="empty-state"><h3>No scored jobs yet</h3><p>Run the first sync. Collection continues even if the LAN model is offline.</p></div>
+  {% endfor %}
+</div>
+{% endblock %}

@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}{{ company.name }} · RoleBeacon{% endblock %}
+{% block content %}
+<a class="back-link" href="/companies">← Companies</a>
+<section class="detail-header"><div><p class="eyebrow">COMPANY FIT</p><h1>{{ company.name }}</h1><p class="detail-company">{{ company.industry or 'Industry unknown' }} · {{ company.headquarters or 'Headquarters unknown' }}</p></div><div class="detail-score"><strong>{{ company.score }}</strong><span>company fit</span><small>{{ (company.confidence * 100)|round|int }}% evidence confidence</small></div></section>
+<section class="detail-grid"><div class="detail-main">
+  <div class="panel"><h2>Assessment</h2><p>{{ company.summary }}</p><div class="policy-grid"><div><span>Remote</span><strong>{{ company.remote_policy }}</strong></div><div><span>Sponsorship</span><strong>{{ company.sponsorship }}</strong></div><div><span>Relocation</span><strong>{{ company.relocation }}</strong></div><div><span>Size</span><strong>{{ company.size or 'unknown' }}</strong></div></div></div>
+  <div class="panel"><h2>Fit dimensions</h2><div class="dimension-list">{% for name, value in company.dimensions.items() %}<div><span>{{ name|replace('_',' ') }}</span><strong>{{ value }}</strong></div>{% endfor %}</div></div>
+  <div class="panel"><h2>Reasons</h2><ul class="evidence-list">{% for item in company.score_reasons %}<li><strong>{{ item.claim if item is mapping else item }}</strong>{% if item is mapping %}<a href="{{ item.source_url }}" target="_blank" rel="noopener">Source ↗</a>{% endif %}</li>{% else %}<li>No strong reason recorded.</li>{% endfor %}</ul></div>
+  <div class="panel"><h2>Risks</h2><ul class="gap-list">{% for item in company.score_risks %}<li>{{ item.claim if item is mapping else item }}{% if item is mapping %} <a href="{{ item.source_url }}" target="_blank" rel="noopener">Source ↗</a>{% endif %}</li>{% else %}<li>No sourced risk recorded.</li>{% endfor %}</ul></div>
+  <div class="panel"><h2>Evidence</h2><div class="source-list">{% for item in company.evidence %}<a href="{{ item.source_url }}" target="_blank" rel="noopener"><strong>{{ item.title }}</strong><span>{{ item.source_type }} · {{ item.fetched_at }}</span></a>{% endfor %}</div></div>
+</div><aside class="detail-sidebar"><div class="panel sticky-panel"><h2>Current jobs</h2>{% for job in company.jobs %}<a class="mini-job" href="/jobs/{{ job.id }}"><strong>{{ job.title }}</strong><span>{{ job.location }}</span></a>{% else %}<p class="muted">No active jobs collected.</p>{% endfor %}<p class="safety-note">Company fit contributes 20% of opportunity score. An ineligible job remains ineligible.</p></div></aside></section>
+{% endblock %}

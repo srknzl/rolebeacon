@@ -1,0 +1,22 @@
+<article class="job-card">
+  {% set display_score = job.opportunity_score or job.score or 0 %}
+  <div class="score score-{{ 'high' if display_score >= 80 else 'mid' if display_score >= 65 else 'low' }}">
+    {{ display_score or '—' }}
+  </div>
+  <div class="job-card-main">
+    <div class="job-card-heading">
+      <div>
+        <a href="/jobs/{{ job.id }}" class="job-title">{{ job.title }}</a>
+        <div class="company">{{ job.company }}</div>
+      </div>
+      <span class="status status-{{ job.status }}">{{ job.status }}</span>
+    </div>
+    <div class="meta-row">
+      <span>{{ job.location or 'Location unknown' }}</span>
+      <span>{{ job.route or 'Unclassified' }}</span>
+      <span>{{ job.sponsorship or 'sponsorship unknown' }}</span>
+      {% if job.company_score %}<span>company {{ job.company_score }}</span>{% endif %}
+    </div>
+    {% if job.risks %}<div class="risk">{{ job.risks[0] }}</div>{% endif %}
+  </div>
+</article>

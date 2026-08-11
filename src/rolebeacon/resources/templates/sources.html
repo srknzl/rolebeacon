@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}Sources · RoleBeacon{% endblock %}
+{% block content %}
+<section class="page-heading"><div><p class="eyebrow">INGESTION</p><h1>Sources</h1></div></section>
+<div class="table-wrap"><table><thead><tr><th>Source</th><th>Kind</th><th>Enabled</th><th>Status</th><th>Last success</th><th>Seen / new / changed</th><th>Filtered / duplicates</th><th>Requests / duration</th><th>Note</th></tr></thead><tbody>
+{% for row in sources %}<tr><td><strong>{{ row.config.name }}</strong><small>{{ row.config.id }}</small></td><td>{{ row.config.kind }}</td><td>{{ 'yes' if row.config.enabled else 'no' }}</td><td><span class="status status-{{ row.state.status or 'idle' }}">{{ row.state.status or 'not run' }}</span></td><td>{{ row.state.last_successful_sync_at or '—' }}</td><td>{{ row.state.jobs_seen or 0 }} / {{ row.state.last_jobs_new or 0 }} / {{ row.state.jobs_changed or 0 }}</td><td>{{ row.state.last_jobs_filtered or 0 }} / {{ row.state.last_duplicates or 0 }}</td><td>{{ row.state.last_requests_made or 0 }} / {{ row.state.last_duration_ms or 0 }} ms</td><td class="error-cell">{{ row.state.last_error or row.state.last_skipped_reason or '' }}</td></tr>{% endfor %}
+</tbody></table></div>
+{% endblock %}

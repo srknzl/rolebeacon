@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Applications · RoleBeacon{% endblock %}
+{% block content %}
+<section class="page-heading"><div><p class="eyebrow">PIPELINE</p><h1>Applications</h1></div></section>
+<div class="kanban">
+  {% for status, items in columns.items() %}
+  <section class="kanban-column"><h2>{{ status }} <span>{{ items|length }}</span></h2>
+    {% for item in items %}<a class="application-card" href="/jobs/{{ item.job_id }}"><strong>{{ item.title }}</strong><span>{{ item.company }}</span><small>{{ item.score or '—' }} · {{ item.route or 'unclassified' }}</small></a>{% else %}<p class="column-empty">No applications</p>{% endfor %}
+  </section>
+  {% endfor %}
+</div>
+{% endblock %}

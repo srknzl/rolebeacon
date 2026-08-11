@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}Setup · RoleBeacon{% endblock %}
+{% block content %}
+<section class="page-heading"><div><p class="eyebrow">FIRST-RUN SETUP</p><h1>Make RoleBeacon yours</h1><p>Rules-only scoring works without a model. No job source is contacted until you activate setup.</p></div></section>
+<div id="setup-message" class="alert" hidden></div>
+<form id="setup-form" class="form-stack">
+  <section class="panel">
+    <h2>Candidate profile</h2>
+    <div class="form-grid">
+      <label>Full name<input id="name" required></label>
+      <label>Headline<input id="headline" placeholder="Backend and distributed-systems engineer"></label>
+      <label>Email<input id="email" type="email"></label>
+      <label>Phone<input id="phone"></label>
+      <label>Country code<input id="country-code" value="TR" maxlength="2" required></label>
+      <label>Country name<input id="country-name" value="Türkiye" required></label>
+      <label>City<input id="city"></label>
+      <label>Website<input id="website" type="url"></label>
+    </div>
+    <label>Summary<textarea id="summary" rows="4"></textarea></label>
+    <label>Skills, one per line<textarea id="skills" rows="5"></textarea></label>
+    <details><summary>Import complete CandidateProfileV1 JSON</summary>
+      <p>Use this for experience, projects, education, language proficiency, and detailed contact links. Imported JSON overrides the basic fields above.</p>
+      <textarea id="candidate-json" rows="14" placeholder="Paste CandidateProfileV1 JSON"></textarea>
+      <p><button id="copy-prompt" class="button" type="button">Copy CV conversion prompt</button> <a href="/api/schemas/candidate-profile" target="_blank">View JSON Schema</a></p>
+    </details>
+  </section>
+
+  <section class="panel">
+    <h2>Mobility and search</h2>
+    <div class="form-grid">
+      <label>Target roles, one per line<textarea id="target-roles" rows="5" required></textarea></label>
+      <label>Preferred skills<textarea id="preferred-skills" rows="5"></textarea></label>
+      <label>Preferred domains<textarea id="preferred-domains" rows="5"></textarea></label>
+      <label>Preferred seniority<textarea id="preferred-seniority" rows="5" placeholder="senior&#10;staff"></textarea></label>
+      <label>Authorized country codes<textarea id="authorizations" rows="4" placeholder="TR"></textarea></label>
+      <label>Relocation targets as CODE:Name<textarea id="relocation-targets" rows="4" placeholder="DE:Germany"></textarea></label>
+      <label>Priority companies<textarea id="priority-companies" rows="5"></textarea></label>
+      <label>Company watchlist<textarea id="company-watchlist" rows="5"></textarea></label>
+      <label>Company blocklist<textarea id="company-blocklist" rows="5"></textarea></label>
+      <label>Excluded phrases<textarea id="exclude-phrases" rows="5"></textarea></label>
+    </div>
+    <div class="checkbox-row">
+      <label><input id="remote-current" type="checkbox" checked> Remote work from my current country</label>
+      <label><input id="relocate" type="checkbox" checked> Willing to relocate</label>
+      <label><input id="contractor" type="checkbox" checked> Contractor arrangements accepted</label>
+      <label><input id="eor" type="checkbox" checked> Employer-of-record arrangements accepted</label>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Job sources</h2>
+    <p>Selected sources are saved now and contacted only after activation.</p>
+    <div class="checkbox-row">
+      {% for source in sources %}
+        {% if source.kind not in ['adzuna', 'jooble', 'serpapi', 'gmail_linkedin'] %}
+        <label><input class="source-choice" type="checkbox" value="{{ source.id }}"> {{ source.name }}</label>
+        {% endif %}
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Scoring engine</h2>
+    <label>Mode<select id="llm-mode"><option value="rules">Rules only — no model required</option><option value="ollama">Ollama on this computer or LAN</option><option value="custom">Custom OpenAI-compatible endpoint</option></select></label>
+    <div class="form-grid">
+      <label>Endpoint<input id="llm-base-url" value="http://127.0.0.1:11434/v1"></label>
+      <label>Model<input id="llm-model" value="qwen3:8b"></label>
+      <label>API key<input id="llm-api-key" type="password" autocomplete="off"></label>
+    </div>
+    <p><button id="discover-model" class="button" type="button">Detect Ollama</button> <button id="start-model" class="button" type="button">Start Ollama</button> <button id="pull-model" class="button" type="button">Pull selected model</button> <button id="test-model" class="button" type="button">Test endpoint</button></p>
+    <p class="safety-note">Starting Ollama or downloading a model happens only when you click the corresponding button. The recommended model is qwen3:8b; qwen3:14b offers higher quality on hardware with enough memory.</p>
+  </section>
+
+  <label><input id="activate" type="checkbox" checked> Activate scheduled collection after setup</label>
+  <button class="button button-primary" type="submit">Save and finish setup</button>
+</form>
+<script>
+  const lines = id => document.getElementById(id).value.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+  const message = (text, ok = false) => { const box = document.getElementById("setup-message"); box.hidden = false; box.className = `alert ${ok ? "alert-success" : ""}`; box.textContent = text; };
+  const post = async (url, body = {}) => { const response = await fetch(url, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)}); const value = await response.json(); if (!response.ok) throw new Error(typeof value.detail === "string" ? value.detail : JSON.stringify(value.detail)); return value; };
+  const candidate = () => {
+    const imported = document.getElementById("candidate-json").value.trim();
+    if (imported) return JSON.parse(imported);
+    const optionalUrl = id => document.getElementById(id).value.trim() || null;
+    return {schema_version: "1.0", name: document.getElementById("name").value, headline: document.getElementById("headline").value, summary: document.getElementById("summary").value,
+      contact: {email: document.getElementById("email").value, phone: document.getElementById("phone").value, website: optionalUrl("website"), github: null, linkedin: null},
+      location: {country_code: document.getElementById("country-code").value, country_name: document.getElementById("country-name").value, city: document.getElementById("city").value},
+      skills: {Skills: lines("skills")}, experience: [], projects: [], education: [], languages: []};
+  };
+  const payload = () => ({candidate: candidate(), mobility: {schema_version: "1.0", current_country_code: document.getElementById("country-code").value,
+    work_authorizations: lines("authorizations"), relocation_targets: lines("relocation-targets").map(value => { const [country_code, ...name] = value.split(":"); return {country_code, country_name: name.join(":").trim(), cities: []}; }),
+    remote_from_current_country: document.getElementById("remote-current").checked, willing_to_relocate: document.getElementById("relocate").checked,
+    contractor_allowed: document.getElementById("contractor").checked, eor_allowed: document.getElementById("eor").checked, sponsorship_required_outside_authorized_countries: true, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone},
+    preferences: {schema_version: "1.0", target_roles: lines("target-roles"), preferred_skills: lines("preferred-skills"), preferred_domains: lines("preferred-domains"), preferred_seniority: lines("preferred-seniority"), priority_companies: lines("priority-companies"), company_watchlist: lines("company-watchlist"), company_blocklist: lines("company-blocklist"), exclude_phrases: lines("exclude-phrases"), salary: {minimum: null, currency: "", hard_filter: false}, daily_review_limit: 15},
+    enabled_source_ids: [...document.querySelectorAll(".source-choice:checked")].map(item => item.value), llm: {mode: document.getElementById("llm-mode").value, base_url: document.getElementById("llm-base-url").value, model: document.getElementById("llm-model").value, api_key: document.getElementById("llm-api-key").value}, activate: document.getElementById("activate").checked});
+  document.getElementById("copy-prompt").addEventListener("click", async () => { await navigator.clipboard.writeText({{ schemas.cv_conversion_prompt|tojson }} + "\nJSON SCHEMA:\n" + JSON.stringify({{ schemas.candidate|tojson }}, null, 2)); message("Conversion prompt copied.", true); });
+  document.getElementById("discover-model").addEventListener("click", async () => { const value = await fetch("/api/setup/model/discover").then(r => r.json()); message(value.ollama_reachable ? `Ollama is running. Models: ${value.models.join(", ") || "none pulled"}` : value.ollama_installed ? "Ollama is installed but not reachable." : "Ollama was not found. Rules-only mode is ready to use.", value.ollama_reachable); });
+  document.getElementById("start-model").addEventListener("click", async () => { try { const value = await post("/api/setup/model/start"); message(`Ollama started as process ${value.pid}.`, true); } catch (error) { message(error.message); } });
+  document.getElementById("pull-model").addEventListener("click", async () => { try { message("Downloading the model. Keep this page open…"); const value = await post("/api/setup/model/pull", {model: document.getElementById("llm-model").value}); message(`Downloaded ${value.model}.`, true); } catch (error) { message(error.message); } });
+  document.getElementById("test-model").addEventListener("click", async () => { try { const data = payload().llm; const value = await post("/api/setup/model/test", data); message(value.ok ? `Endpoint connected${value.model_found ? " and model found" : "; selected model was not listed"}.` : value.error, value.ok); } catch (error) { message(error.message); } });
+  document.getElementById("setup-form").addEventListener("submit", async event => { event.preventDefault(); try { const value = await post("/api/setup/complete", payload()); window.location.assign(value.redirect); } catch (error) { message(error.message); } });
+</script>
+{% endblock %}

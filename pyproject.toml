@@ -1,0 +1,57 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "rolebeacon"
+version = "0.2.0"
+description = "Local-first job discovery, evidence-based ranking, and human-approved application assistant."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+  "fastapi>=0.116,<1",
+  "httpx>=0.28,<1",
+  "jinja2>=3.1,<4",
+  "platformdirs>=4.3,<5",
+  "playwright>=1.54,<2",
+  "python-multipart>=0.0.20,<1",
+  "uvicorn[standard]>=0.35,<1",
+]
+
+[project.optional-dependencies]
+gmail = [
+  "google-api-python-client>=2.176,<3",
+  "google-auth-oauthlib>=1.2,<2",
+]
+dev = [
+  "build>=1.2,<2",
+  "mypy>=1.17,<2",
+  "pytest>=8.4,<9",
+  "pytest-asyncio>=1.1,<2",
+  "ruff>=0.12,<1",
+]
+
+[project.scripts]
+rolebeacon = "rolebeacon.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rolebeacon"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["F", "I", "UP"]
+
+[tool.mypy]
+python_version = "3.13"
+packages = ["rolebeacon"]
+warn_unused_ignores = true
+check_untyped_defs = true
+ignore_missing_imports = true

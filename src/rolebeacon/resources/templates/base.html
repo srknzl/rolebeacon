@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}RoleBeacon{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+    <script src="https://unpkg.com/htmx.org@2.0.8" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/">
+        <span class="radar-mark">◉</span>
+        <span>RoleBeacon</span>
+      </a>
+      <nav>
+        {% if not setup_complete %}<a href="/setup">Setup</a>{% endif %}
+        <a href="/jobs">Jobs</a>
+        <a href="/applications">Applications</a>
+        <a href="/companies">Companies</a>
+        <a href="/sources">Sources</a>
+        <a href="/duplicates">Duplicates</a>
+        <a href="/imports">Import</a>
+        <a href="/settings">Settings</a>
+      </nav>
+      {% if setup_complete %}<button id="sync-button" class="button button-primary" type="button">Refresh now</button>{% endif %}
+    </header>
+    <div class="sync-strip {% if sync.running %}is-running{% endif %}" id="sync-strip">
+      <span id="sync-label">
+        {% if sync.running %}Syncing {{ sync.current_source }} · {{ sync.sources_completed }}/{{ sync.sources_total }}{% else %}Ready{% endif %}
+      </span>
+    </div>
+    <main class="container">
+      {% block content %}{% endblock %}
+    </main>
+    <script>
+      const syncButton = document.getElementById("sync-button");
+      const syncStrip = document.getElementById("sync-strip");
+      const syncLabel = document.getElementById("sync-label");
+      async function refreshStatus() {
+        const response = await fetch("/api/sync/status");
+        const state = await response.json();
+        syncStrip.classList.toggle("is-running", state.running);
+        syncLabel.textContent = state.running
+          ? `Syncing ${state.current_source || "jobs"} · ${state.sources_completed}/${state.sources_total} · ${state.jobs_changed} changed`
+          : state.error ? `Last sync error: ${state.error}` : "Ready";
+        syncButton.disabled = state.running;
+      }
+      if (syncButton) {
+        syncButton.addEventListener("click", async () => {
+          syncButton.disabled = true;
+          await fetch("/api/sync", {method: "POST"});
+          await refreshStatus();
+        });
+        setInterval(refreshStatus, 4000);
+      }
+    </script>
+  </body>
+</html>

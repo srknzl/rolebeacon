@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Companies · RoleBeacon{% endblock %}
+{% block content %}
+<section class="page-heading"><div><p class="eyebrow">EMPLOYER INTELLIGENCE</p><h1>Companies</h1></div><span>{{ companies|length }} researched</span></section>
+<div class="company-grid">
+  {% for company in companies %}
+  <a class="company-card" href="/companies/{{ company.id }}">
+    <div class="score score-{{ 'high' if (company.score or 0) >= 80 else 'mid' if (company.score or 0) >= 65 else 'low' }}">{{ company.score or '—' }}</div>
+    <div><h2>{{ company.name }}</h2><p>{{ company.summary[:180] }}{% if company.summary|length > 180 %}…{% endif %}</p><div class="meta-row"><span>{{ company.remote_policy }}</span><span>{{ company.job_count }} jobs</span><span>{{ (company.confidence * 100)|round|int }}% confidence</span></div></div>
+  </a>
+  {% else %}<div class="empty-state"><h3>No company profiles yet</h3><p>Open a job and choose Research company. Only configured official pages and collected postings are used.</p></div>{% endfor %}
+</div>
+{% endblock %}
