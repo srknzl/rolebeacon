@@ -79,7 +79,8 @@ collection still completes and affected jobs remain queued for enhanced scoring.
 The setup page can detect an installed Ollama service. Explicit buttons can start an installed
 service, pull a selected model, and test the endpoint. It also accepts a LAN Ollama address such
 as `http://desktop.local:11434/v1`. The refresh panel reports each collection and scoring step,
-whether the configured model is reachable, and when deterministic fallback is being used.
+whether the configured model is reachable. When an LLM is selected but unavailable, refresh stops before
+collection or scoring; fix the endpoint/model or explicitly switch to Rules only, then refresh again.
 RoleBeacon never installs Ollama or downloads a model silently.
 
 The default recommendation is `qwen3:8b`. `qwen3:14b` is the higher-quality option for machines

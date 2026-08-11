@@ -43,6 +43,18 @@
       </ol>
       <div id="sync-model-health" class="model-health"></div>
     </section>
+    <section id="company-research-panel" class="sync-panel company-research-panel" aria-live="polite" hidden>
+      <div class="sync-panel-heading"><div><p class="eyebrow">COMPANY RESEARCH</p><h2 id="company-research-phase">Preparing research</h2></div><button id="company-research-close" class="button button-quiet" type="button">Hide</button></div>
+      <p id="company-research-message" class="muted">Collecting company evidence.</p>
+      <div class="progress-track" role="progressbar" aria-label="Company research progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="company-research-progress" class="progress-value"></div></div>
+      <ol class="sync-steps">
+        <li data-company-research-step="collected_jobs"><span></span>Read collected job evidence</li>
+        <li data-company-research-step="official_sources"><span></span>Fetch official sources</li>
+        <li data-company-research-step="llm_analysis"><span></span>Analyze company fit</li>
+        <li data-company-research-step="saving"><span></span>Save sourced assessment</li>
+      </ol>
+      <div id="company-research-model" class="model-health model-health-rules">The configured model is checked before analysis.</div>
+    </section>
     <main class="container">
       {% block content %}{% endblock %}
     </main>
@@ -78,7 +90,7 @@
         syncMessage.textContent = state.error || (state.running
           ? state.llm_available
             ? "The model is reachable; eligible jobs are receiving evidence-based scoring."
-            : "Collection continues while enhanced scoring waits for a reachable model."
+            : "Checking the selected scoring engine before collection begins."
           : "Review the completed steps and scoring mode below.");
         const progress = Math.max(0, Math.min(100, Number(state.progress_percent || 0)));
         syncProgress.style.width = `${progress}%`;
@@ -94,7 +106,7 @@
           syncModelHealth.textContent = `LLM connected: ${state.llm_model} at ${state.llm_endpoint}. Evidence-based scoring is active.`;
         } else {
           syncModelHealth.className = "model-health model-health-warning";
-          syncModelHealth.textContent = `LLM unavailable (${state.llm_status || "unknown"}). Rules fallback scored ${state.rule_fallback_jobs || 0} job(s); enhanced scoring stays queued. ${state.llm_error || ""}`;
+          syncModelHealth.textContent = `LLM unavailable (${state.llm_status || "unknown"}). No automatic rules fallback was used. Fix the endpoint/model in Settings, or explicitly select Rules only and refresh again. ${state.llm_error || ""}`;
         }
       }
       async function refreshStatus() {
@@ -125,6 +137,64 @@
         });
         refreshStatus();
       }
+      const companyResearchPanel = document.getElementById("company-research-panel");
+      const companyResearchPhase = document.getElementById("company-research-phase");
+      const companyResearchMessage = document.getElementById("company-research-message");
+      const companyResearchProgress = document.getElementById("company-research-progress");
+      const companyResearchModel = document.getElementById("company-research-model");
+      const companyResearchClose = document.getElementById("company-research-close");
+      let companyResearchPollingTimer;
+      const companyResearchPhaseOrder = ["queued", "collected_jobs", "official_sources", "llm_analysis", "saving", "complete"];
+      function renderCompanyResearch(state) {
+        companyResearchPanel.hidden = false;
+        companyResearchPhase.textContent = state.message || "Company research";
+        companyResearchMessage.textContent = state.error || (state.running ? "RoleBeacon is gathering source-backed evidence. You can keep this tab open." : "Company research complete.");
+        const progress = Math.max(0, Math.min(100, Number(state.progress_percent || 0)));
+        companyResearchProgress.style.width = `${progress}%`;
+        companyResearchProgress.parentElement.setAttribute("aria-valuenow", String(progress));
+        const current = companyResearchPhaseOrder.indexOf(state.phase);
+        document.querySelectorAll("[data-company-research-step]").forEach(item => {
+          const index = companyResearchPhaseOrder.indexOf(item.dataset.companyResearchStep);
+          item.dataset.state = state.phase === "failed" ? "error" : current > index ? "complete" : current === index ? "active" : "pending";
+        });
+        if (state.error) {
+          companyResearchModel.className = "model-health model-health-warning";
+          companyResearchModel.textContent = `Research could not finish: ${state.error}`;
+        } else if (state.llm_used) {
+          companyResearchModel.className = "model-health model-health-success";
+          companyResearchModel.textContent = "LLM analysis is active and will be validated before the assessment is saved.";
+        } else {
+          companyResearchModel.className = "model-health model-health-rules";
+          companyResearchModel.textContent = "Rules-only evidence analysis is active because Rules only is selected in Settings.";
+        }
+      }
+      async function refreshCompanyResearchStatus() {
+        const response = await fetch("/api/company-research/status");
+        const state = await response.json();
+        renderCompanyResearch(state);
+        if (!state.running && companyResearchPollingTimer) {
+          clearInterval(companyResearchPollingTimer);
+          companyResearchPollingTimer = undefined;
+          if (state.phase === "complete" && state.company_id) window.location.assign(`/companies/${state.company_id}`);
+        }
+      }
+      if (companyResearchClose) companyResearchClose.addEventListener("click", () => { companyResearchPanel.hidden = true; });
+      document.querySelectorAll("[data-company-research]").forEach(form => form.addEventListener("submit", async event => {
+        event.preventDefault();
+        const button = form.querySelector("button");
+        if (button) button.disabled = true;
+        try {
+          const response = await fetch(form.dataset.researchStartUrl, {method: "POST"});
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.detail || "Company research could not start");
+          renderCompanyResearch(result.status);
+          if (!companyResearchPollingTimer) companyResearchPollingTimer = setInterval(refreshCompanyResearchStatus, 1000);
+          refreshCompanyResearchStatus();
+        } catch (error) {
+          renderCompanyResearch({phase: "failed", message: "Company research could not start", error: error.message, progress_percent: 100});
+          if (button) button.disabled = false;
+        }
+      }));
     </script>
   </body>
 </html>

@@ -1,10 +1,10 @@
 {% extends "base.html" %}
 {% from "_help.html" import tip %}
-{% block title %}Setup · RoleBeacon{% endblock %}
+{% block title %}{{ 'Preferences' if editing else 'Setup' }} · RoleBeacon{% endblock %}
 {% block content %}
-<section class="page-heading"><div><p class="eyebrow">FIRST-RUN SETUP</p><h1>Make RoleBeacon yours</h1><p>Rules-only scoring works without a model. No job source is contacted until you activate setup.</p></div></section>
+<section class="page-heading"><div><p class="eyebrow">{{ 'PREFERENCES' if editing else 'FIRST-RUN SETUP' }}</p><h1>{{ 'Edit your RoleBeacon preferences' if editing else 'Make RoleBeacon yours' }}</h1><p>{% if editing %}Every setup value is editable here. Saving preserves the page state and does not contact any job source by itself.{% else %}Rules-only scoring works without a model. No job source is contacted until you activate setup.{% endif %}</p></div></section>
 <div id="setup-message" class="toast" role="status" aria-live="polite" hidden></div>
-<form id="setup-form" class="form-stack">
+<form id="setup-form" class="form-stack" data-complete-url="/api/setup/complete{% if editing %}?return_to=/settings{% endif %}">
   <section class="panel">
     <h2>Candidate profile</h2>
     <div class="form-grid">
@@ -39,7 +39,7 @@
       <label>Preferred domains {{ tip("Problem domains you enjoy, such as distributed systems, developer tools, or fintech.") }}<textarea id="preferred-domains" rows="5"></textarea></label>
       <label>Preferred seniority {{ tip("Seniority terms you want to see, for example senior, staff, or lead.") }}<textarea id="preferred-seniority" rows="5" placeholder="senior&#10;staff"></textarea></label>
       <div class="country-field"><span class="field-label">Authorized countries {{ tip("Countries where you can work now without employer sponsorship. Do not add Germany or the United States unless you already have that work right.") }}</span><div class="country-picker" data-country-field="authorizations" data-country-kind="authorization"><input class="country-search" type="search" placeholder="Search countries or ISO codes" autocomplete="off" aria-label="Search authorized countries"><div class="country-chips" aria-live="polite"></div><div class="country-options" role="listbox" hidden>{% for country in countries %}<button type="button" role="option" class="country-option" data-country-code="{{ country.code }}" data-country-name="{{ country.name }}"><span>{{ country.name }}</span><code>{{ country.code }}</code></button>{% endfor %}</div><textarea id="authorizations" class="country-value" rows="1">TR</textarea></div></div>
-      <div class="country-field"><span class="field-label">Relocation targets {{ tip("Countries you are willing to move to if the employer supports the required visa or relocation. Selecting a country here never claims existing work authorization.") }}</span><div class="country-picker" data-country-field="relocation-targets" data-country-kind="relocation"><input class="country-search" type="search" placeholder="Search countries to relocate to" autocomplete="off" aria-label="Search relocation targets"><div class="country-chips" aria-live="polite"></div><div class="country-options" role="listbox" hidden>{% for country in countries %}<button type="button" role="option" class="country-option" data-country-code="{{ country.code }}" data-country-name="{{ country.name }}"><span>{{ country.name }}</span><code>{{ country.code }}</code></button>{% endfor %}</div><textarea id="relocation-targets" class="country-value" rows="1"></textarea></div></div>
+      <div class="country-field"><span class="field-label">Relocation targets {{ tip("Countries, or the Europe region, where you are willing to move if the employer supports the required visa or relocation. Selecting a target never claims existing work authorization.") }}</span><div class="country-picker" data-country-field="relocation-targets" data-country-kind="relocation"><input class="country-search" type="search" placeholder="Type to filter countries, or choose Europe" autocomplete="off" aria-label="Search relocation targets"><div class="country-chips" aria-live="polite"></div><div class="country-options" role="listbox" hidden><button type="button" role="option" class="country-option country-region-option" data-country-code="EUROPE" data-country-name="Europe"><span>Europe</span><code>REGION</code></button>{% for country in countries %}<button type="button" role="option" class="country-option" data-country-code="{{ country.code }}" data-country-name="{{ country.name }}"><span>{{ country.name }}</span><code>{{ country.code }}</code></button>{% endfor %}<p class="country-empty" hidden>No country or region matches this search.</p></div><textarea id="relocation-targets" class="country-value" rows="1"></textarea></div></div>
       <label>Priority companies {{ tip("Companies that deserve a dedicated search strategy even when stack fit is imperfect.") }}<textarea id="priority-companies" rows="5"></textarea></label>
       <label>Company watchlist {{ tip("Companies to surface more prominently without creating a dedicated strategy.") }}<textarea id="company-watchlist" rows="5"></textarea></label>
       <label>Company blocklist {{ tip("Companies whose roles should be excluded from recommendations.") }}<textarea id="company-blocklist" rows="5"></textarea></label>
@@ -87,7 +87,7 @@
 
   <div class="setup-actions">
     <label><input id="activate" type="checkbox" checked> Activate scheduled collection after setup</label>
-    <button class="button button-primary" type="submit">Save and finish setup</button>
+    <button class="button button-primary" type="submit">{{ 'Save preferences' if editing else 'Save and finish setup' }}</button>
   </div>
 </form>
 <script>
@@ -108,9 +108,10 @@
     return code;
   };
   const relocationTargets = () => lines("relocation-targets").map(value => {
-    const match = /^([A-Za-z]{2}):([^:]+)$/.exec(value);
-    if (!match) throw new Error(`Relocation target "${value}" must use CODE:Country, for example DE:Germany.`);
-    return {country_code: countryCode(match[1], "Relocation country code"), country_name: match[2].trim(), cities: []};
+    const match = /^([A-Za-z]{2}|EUROPE):([^:]+)$/i.exec(value);
+    if (!match) throw new Error(`Relocation target "${value}" must use CODE:Country, for example DE:Germany or EUROPE:Europe.`);
+    const code = match[1].toUpperCase();
+    return {country_code: code === "EUROPE" ? code : countryCode(code, "Relocation country code"), country_name: match[2].trim(), cities: []};
   });
   const countryPickers = [...document.querySelectorAll(".country-picker")];
   const pickerEntries = picker => {
@@ -153,7 +154,13 @@
     const filter = () => {
       const query = search.value.trim().toLowerCase();
       options.hidden = false;
-      picker.querySelectorAll(".country-option").forEach(option => { option.hidden = Boolean(query) && !`${option.dataset.countryName} ${option.dataset.countryCode}`.toLowerCase().includes(query); });
+      let visible = 0;
+      picker.querySelectorAll(".country-option").forEach(option => {
+        option.hidden = Boolean(query) && !`${option.dataset.countryName} ${option.dataset.countryCode}`.toLowerCase().includes(query);
+        if (!option.hidden) visible += 1;
+      });
+      const empty = picker.querySelector(".country-empty");
+      if (empty) empty.hidden = visible > 0;
     };
     search.addEventListener("focus", filter);
     search.addEventListener("input", filter);
@@ -226,7 +233,7 @@
     document.getElementById("activate").checked = Boolean(setup.activate);
     syncCountryPickers();
   };
-  syncCountryPickers();
+  {% if initial_setup %}hydrateSetup({{ initial_setup|tojson }});{% else %}syncCountryPickers();{% endif %}
   document.getElementById("candidate-json").addEventListener("input", event => {
     if (!event.target.value.trim()) return;
     try {
@@ -287,6 +294,6 @@
   document.getElementById("start-model").addEventListener("click", async () => { try { const value = await post("/api/setup/model/start"); message(`Ollama started as process ${value.pid}.`, true); } catch (error) { message(error.message); } });
   document.getElementById("pull-model").addEventListener("click", async () => { try { message("Downloading the model. Keep this page open…"); const value = await post("/api/setup/model/pull", {model: document.getElementById("llm-model").value}); message(`Downloaded ${value.model}.`, true); } catch (error) { message(error.message); } });
   document.getElementById("test-model").addEventListener("click", async () => { try { const data = modelConfig(); const value = await post("/api/setup/model/test", data); const text = value.ok ? `Connected to ${data.base_url}. ${value.model_found ? `Model ${data.model} is ready.` : `The endpoint did not list ${data.model}.`}` : value.error; showModelConnection(text, value.ok && value.model_found ? "success" : "warning"); message(text, value.ok && value.model_found); } catch (error) { showModelConnection(error.message, "warning"); message(error.message); } });
-  document.getElementById("setup-form").addEventListener("submit", async event => { event.preventDefault(); try { const value = await post("/api/setup/complete", payload()); window.location.assign(value.redirect); } catch (error) { message(error.message); } });
+  document.getElementById("setup-form").addEventListener("submit", async event => { event.preventDefault(); try { const value = await post(event.currentTarget.dataset.completeUrl || "/api/setup/complete", payload()); window.location.assign(value.redirect); } catch (error) { message(error.message); } });
 </script>
 {% endblock %}

@@ -24,7 +24,7 @@
 </section>
 <div class="job-list">
   {% for job in jobs %}{% include "_job-card.html" %}{% else %}
-  <div class="empty-state"><h3>No scored jobs yet</h3><p>Run the first sync. Collection continues even if the LAN model is offline.</p></div>
+  <div class="empty-state"><h3>No recommended jobs yet</h3>{% if stats.total %}<p>RoleBeacon shows only eligible jobs scoring 65 or higher here. Review all collected jobs to see lower-scoring or ineligible results.</p>{% else %}<p>Run the first sync to collect jobs. Collection continues even if the LAN model is offline.</p>{% endif %}</div>
   {% endfor %}
 </div>
 {% endblock %}

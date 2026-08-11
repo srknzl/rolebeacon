@@ -43,6 +43,22 @@ class SetupService:
             "rules_only_available": True,
         }
 
+    def saved_payload(self) -> dict[str, Any]:
+        """Return the editable setup state without ever returning a stored secret."""
+        return {
+            "candidate": self.settings.load_candidate_profile(),
+            "mobility": self.settings.load_mobility_profile(),
+            "preferences": self.settings.load_search_profile(),
+            "enabled_source_ids": [source.id for source in self.settings.load_sources() if source.enabled],
+            "llm": {
+                "mode": self.settings.llm_mode,
+                "base_url": self.settings.llm_base_url,
+                "model": self.settings.llm_model,
+                "api_key": "",
+            },
+            "activate": self.settings.activated,
+        }
+
     def schemas(self) -> dict[str, Any]:
         return {
             "candidate": candidate_schema(),

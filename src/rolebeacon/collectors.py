@@ -20,6 +20,17 @@ from .domain import CollectedJob, CollectionBatch, SourceConfig
 
 USER_AGENT = "RoleBeacon/0.2 (+https://github.com/srknzl/rolebeacon)"
 
+MOJIBAKE_REPLACEMENTS = {
+    "â€™": "’",
+    "â€˜": "‘",
+    "â€œ": "“",
+    "â€": "”",
+    "â€“": "–",
+    "â€”": "—",
+    "â€¦": "…",
+    "Â ": " ",
+}
+
 
 class _TextExtractor(HTMLParser):
     def __init__(self) -> None:
@@ -48,7 +59,17 @@ def plain_text(value: str | None) -> str:
         return ""
     parser = _TextExtractor()
     parser.feed(html.unescape(value))
-    return re.sub(r"\s+", " ", " ".join(parser.parts)).strip()
+    return repair_text(re.sub(r"\s+", " ", " ".join(parser.parts)).strip())
+
+
+def repair_text(value: str | None) -> str:
+    """Repair common UTF-8-as-Windows-1252 damage without altering ordinary text."""
+    if not value:
+        return ""
+    repaired = str(value)
+    for broken, replacement in MOJIBAKE_REPLACEMENTS.items():
+        repaired = repaired.replace(broken, replacement)
+    return repaired
 
 
 def parse_datetime(value: Any) -> datetime | None:

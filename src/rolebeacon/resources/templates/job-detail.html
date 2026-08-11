@@ -21,7 +21,7 @@
       <h2>Gaps and risks</h2>
       {% if job.gaps %}<ul class="gap-list">{% for item in job.gaps %}<li><span class="severity severity-{{ item.severity }}">{{ item.severity }}</span>{{ item.requirement }}</li>{% endfor %}</ul>{% else %}<p class="muted">No material gaps recorded.</p>{% endif %}
     </div>
-    <div class="panel job-description"><h2>Job description</h2><p>{{ job.description }}</p></div>
+    <div class="panel job-description"><h2>Job description</h2><p>{{ job.description|repair_text }}</p></div>
   </div>
   <aside class="detail-sidebar">
     <div class="panel sticky-panel">
@@ -38,7 +38,7 @@
       {% else %}
       <p class="muted">Company fit is kept separate from job fit and cannot override an authorization blocker.</p>
       {% endif %}
-      <form action="/api/jobs/{{ job.id }}/research-company" method="post"><button class="button wide" title="Collect provenance-backed company evidence. It does not change job eligibility.">{{ 'Refresh' if job.company_id else 'Research' }} company</button></form>
+      <form action="/api/jobs/{{ job.id }}/research-company" method="post" data-company-research data-research-start-url="/api/jobs/{{ job.id }}/research-company/start"><button class="button wide" title="Collect provenance-backed company evidence. It does not change job eligibility.">{{ 'Refresh' if job.company_id else 'Research' }} company</button></form>
       <hr>
       <h2>Application kit</h2>
       {% if application and application.resume_path %}<a class="artifact-link" href="/artifacts/{{ job.id }}/resume.pdf" title="Open the locally generated resume PDF for review.">Open tailored resume</a>{% else %}<form action="/api/jobs/{{ job.id }}/resume" method="post"><button class="button wide" title="Create a factual resume draft using only verified profile evidence.">Generate tailored resume</button></form>{% endif %}

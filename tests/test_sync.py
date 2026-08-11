@@ -52,3 +52,33 @@ def test_collector_duplicates_are_collapsed_before_upsert() -> None:
 
     assert len(result) == 1
     assert result[0].description == "Updated representation"
+
+
+async def test_unavailable_selected_llm_stops_refresh_before_collection_or_rules_fallback(tmp_path, monkeypatch) -> None:
+    from rolebeacon.setup import SetupService
+
+    payload = {
+        "candidate": {"schema_version": "1.0", "name": "Candidate", "location": {"country_code": "TR", "country_name": "Türkiye"}, "skills": {}},
+        "mobility": {"schema_version": "1.0", "current_country_code": "TR", "work_authorizations": ["TR"]},
+        "preferences": {"schema_version": "1.0", "target_roles": ["Backend Engineer"]},
+        "enabled_source_ids": ["arbeitnow"],
+        "llm": {"mode": "custom", "base_url": "http://unavailable.example/v1", "model": "missing"},
+        "activate": True,
+    }
+    settings = SetupService(Settings.load(tmp_path)).complete(payload)
+    database = Database(settings.database_path)
+    database.initialize()
+    service = SyncService(settings, database, LlmClient(settings))
+
+    async def unavailable() -> dict[str, object]:
+        return {"available": False, "status": "unavailable", "error": "Connection refused"}
+
+    monkeypatch.setattr(service.llm, "health", unavailable)
+    result = await service.run()
+
+    assert result.phase == "failed"
+    assert "LLM unavailable: Connection refused" in result.error
+    assert "Rules only" in result.error
+    assert result.jobs_seen == 0
+    assert result.rule_fallback_jobs == 0
+    assert database.list_sources() == []

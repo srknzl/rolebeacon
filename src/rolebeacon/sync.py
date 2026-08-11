@@ -83,6 +83,13 @@ class SyncService:
                 self.status.llm_available = bool(health["available"])
                 self.status.llm_status = str(health["status"])
                 self.status.llm_error = str(health["error"])
+                if self.settings.llm_enabled and not self.status.llm_available:
+                    self.status.error = (
+                        "LLM unavailable: "
+                        f"{self.status.llm_error or 'the configured endpoint did not provide the selected model'}. "
+                        "Fix the model in Settings or explicitly choose Rules only, then refresh again."
+                    )
+                    return self.status
                 self.status.phase = "collecting"
                 self.status.phase_message = "Collecting job postings"
                 self.status.progress_percent = 10
@@ -163,20 +170,16 @@ class SyncService:
                     score = rules
                     score_status = "scored"
                     if eligibility.status != EligibilityStatus.INELIGIBLE and self.settings.llm_enabled:
-                        if self.status.llm_available:
-                            try:
-                                score = await self.llm.score(
-                                    job_record, eligibility, search_profile, candidate_profile
-                                )
-                            except LlmUnavailable as error:
-                                score_status = "pending_llm"
-                                self.status.llm_available = False
-                                self.status.llm_status = "unavailable"
-                                self.status.llm_error = f"The model became unavailable while scoring: {error}"
-                                self.status.rule_fallback_jobs += 1
-                        else:
-                            score_status = "pending_llm"
-                            self.status.rule_fallback_jobs += 1
+                        try:
+                            score = await self.llm.score(job_record, eligibility, search_profile, candidate_profile)
+                        except LlmUnavailable as error:
+                            self.status.llm_available = False
+                            self.status.llm_status = "unavailable"
+                            self.status.llm_error = f"The model became unavailable while scoring: {error}"
+                            raise LlmUnavailable(
+                                f"LLM unavailable: {self.status.llm_error}. Fix the model in Settings or explicitly "
+                                "choose Rules only, then refresh again."
+                            ) from error
                     score.prompt_version = scoring_version
                     self.database.save_evaluation(job_id, eligibility, score, score_status)
                     self.status.jobs_scored += 1

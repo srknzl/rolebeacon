@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from time import sleep
 
 from fastapi.testclient import TestClient
 
@@ -130,6 +131,21 @@ def test_setup_validation_rejects_unknown_iso_country_codes(tmp_path) -> None:
     assert "ISO 3166-1" in str(response.json()["errors"])
 
 
+def test_setup_validation_allows_europe_as_a_relocation_region_only(tmp_path) -> None:
+    app = create_app(Settings.load(tmp_path))
+    payload = setup_payload()
+    payload["mobility"]["relocation_targets"] = [{"country_code": "EUROPE", "country_name": "Europe"}]
+
+    with TestClient(app) as client:
+        accepted = client.post("/api/setup/validate", json=payload)
+        payload["mobility"]["work_authorizations"] = ["EUROPE"]
+        rejected = client.post("/api/setup/validate", json=payload)
+
+    assert accepted.json()["valid"] is True
+    assert rejected.json()["valid"] is False
+    assert "ISO 3166-1" in str(rejected.json()["errors"])
+
+
 def test_setup_planning_requires_an_enabled_model(tmp_path) -> None:
     app = create_app(Settings.load(tmp_path))
 
@@ -167,9 +183,61 @@ def test_dashboard_jobs_api_and_feedback(tmp_path) -> None:
 
     assert dashboard.status_code == 200
     assert "RoleBeacon" in dashboard.text
+    assert "No recommended jobs yet" in dashboard.text
     assert jobs.json()["jobs"][0]["title"] == "Backend Engineer"
     assert feedback.json()["status"] == "interested"
     assert database.get_job(job_id)["status"] == "interested"
+
+
+def test_job_detail_renders_mojibake_repair_filter_end_to_end(tmp_path) -> None:
+    app = create_app(configured_settings(tmp_path))
+    job_id, _ = app.state.database.upsert_job(
+        CollectedJob(
+            source="fixture", source_job_id="job-detail", title="Backend Engineer", company="Example",
+            location="Remote Worldwide", description="Lemon.io â€” build systems", url="https://example.test/jobs/1",
+            published_at=datetime.now(UTC),
+        )
+    )
+
+    with TestClient(app) as client:
+        response = client.get(f"/jobs/{job_id}")
+
+    assert response.status_code == 200
+    assert "Lemon.io — build systems" in response.text
+    assert "No filter named" not in response.text
+
+
+def test_preferences_page_edits_the_complete_saved_setup_without_resetting_it(tmp_path) -> None:
+    payload = setup_payload()
+    payload["mobility"]["relocation_targets"].append({"country_code": "EUROPE", "country_name": "Europe"})
+    payload["preferences"].update(
+        {
+            "priority_companies": ["Google", "Microsoft"],
+            "company_watchlist": ["Cloudflare"],
+            "company_blocklist": ["Example Bad Co"],
+            "preferred_domains": ["distributed systems"],
+        }
+    )
+    payload["llm"] = {"mode": "custom", "base_url": "http://model.example/v1", "model": "test-model"}
+    settings = SetupService(Settings.load(tmp_path)).complete(payload)
+    app = create_app(settings)
+    updated = setup_payload()
+    updated["mobility"]["relocation_targets"] = [{"country_code": "EUROPE", "country_name": "Europe"}]
+    updated["preferences"].update(payload["preferences"])
+    updated["llm"] = payload["llm"]
+
+    with TestClient(app) as client:
+        page = client.get("/settings")
+        saved = client.post("/api/setup/complete?return_to=/settings", json=updated)
+
+    assert page.status_code == 200
+    assert "Edit your RoleBeacon preferences" in page.text
+    assert 'data-complete-url="/api/setup/complete?return_to=/settings"' in page.text
+    assert '"country_code": "EUROPE"' in page.text
+    assert "Google" in page.text and "Cloudflare" in page.text
+    assert saved.json()["redirect"] == "/settings"
+    assert app.state.settings.load_mobility_profile()["relocation_targets"][0]["country_code"] == "EUROPE"
+    assert app.state.settings.load_search_profile()["priority_companies"] == ["Google", "Microsoft"]
 
 
 def test_invalid_feedback_is_rejected(tmp_path) -> None:
@@ -198,3 +266,56 @@ def test_manual_import_does_not_fetch_and_creates_job(tmp_path) -> None:
 
     assert response.status_code == 201
     assert app.state.database.get_job(response.json()["job_id"])["company"] == "Example"
+
+
+def test_company_research_can_be_refreshed_from_the_company_profile(tmp_path) -> None:
+    app = create_app(configured_settings(tmp_path))
+    job_id, _ = app.state.database.upsert_job(
+        CollectedJob(
+            source="fixture",
+            source_job_id="company-refresh",
+            title="Backend Engineer",
+            company="Example",
+            location="Remote Worldwide",
+            description="Build distributed backend systems with relocation support.",
+            url="https://example.test/jobs/company-refresh",
+            published_at=datetime.now(UTC),
+        )
+    )
+
+    with TestClient(app) as client:
+        headers = {"Accept": "text/html"}
+        initial = client.post(f"/api/jobs/{job_id}/research-company", headers=headers, follow_redirects=False)
+        company = app.state.database.list_companies()[0]
+        refreshed = client.post(
+            f"/api/companies/{company['id']}/research", headers=headers, follow_redirects=False
+        )
+
+    assert initial.status_code == 303
+    assert refreshed.status_code == 303
+    assert refreshed.headers["location"] == f"/companies/{company['id']}"
+
+
+def test_company_research_progress_endpoint_completes_without_a_raw_error_page(tmp_path) -> None:
+    app = create_app(configured_settings(tmp_path))
+    job_id, _ = app.state.database.upsert_job(
+        CollectedJob(
+            source="fixture", source_job_id="company-progress", title="Backend Engineer", company="Example",
+            location="Remote Worldwide", description="Build distributed backend systems.",
+            url="https://example.test/jobs/company-progress", published_at=datetime.now(UTC),
+        )
+    )
+
+    with TestClient(app) as client:
+        started = client.post(f"/api/jobs/{job_id}/research-company/start")
+        state = started.json()["status"]
+        for _ in range(50):
+            state = client.get("/api/company-research/status").json()
+            if not state["running"]:
+                break
+            sleep(0.01)
+
+    assert started.status_code == 202
+    assert state["phase"] == "complete"
+    assert state["company_id"] is not None
+    assert not state["error"]

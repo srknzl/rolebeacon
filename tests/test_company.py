@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
 from rolebeacon.company import CompanyResearchService
 from rolebeacon.config import Settings
 from rolebeacon.database import Database
 from rolebeacon.domain import CollectedJob, EligibilityResult, EligibilityStatus, ScoreResult
 from rolebeacon.llm import LlmClient
+from rolebeacon.setup import SetupService
 
 
 def test_deterministic_company_fit_uses_only_evidence(tmp_path) -> None:
@@ -188,3 +191,43 @@ def test_opportunity_score_combines_job_and_company_fit(tmp_path) -> None:
 
     assert job["company_score"] == 60
     assert job["opportunity_score"] == 76
+
+
+async def test_configured_llm_company_research_never_silently_falls_back_to_rules(tmp_path, monkeypatch) -> None:
+    payload = {
+        "candidate": {"schema_version": "1.0", "name": "Candidate", "location": {"country_code": "TR", "country_name": "Türkiye"}, "skills": {}},
+        "mobility": {"schema_version": "1.0", "current_country_code": "TR", "work_authorizations": ["TR"]},
+        "preferences": {"schema_version": "1.0", "target_roles": ["Backend Engineer"]},
+        "enabled_source_ids": [],
+        "llm": {"mode": "custom", "base_url": "http://model.example/v1", "model": "test-model"},
+        "activate": True,
+    }
+    settings = SetupService(Settings.load(tmp_path)).complete(payload)
+    database = Database(settings.database_path)
+    database.initialize()
+    database.upsert_job(
+        CollectedJob(
+            source="fixture", source_job_id="llm-company", title="Backend Engineer", company="Example",
+            location="Remote", description="Build systems", url="https://example.test/jobs/1", published_at=datetime.now(UTC),
+        )
+    )
+    service = CompanyResearchService(settings, database, LlmClient(settings))
+
+    async def available() -> bool:
+        return True
+
+    async def invalid_response(*_args, **_kwargs):
+        return {
+            "summary": "Example", "industry": "", "headquarters": "", "size": "", "remote_policy": "unknown",
+            "sponsorship": "unknown", "relocation": "unknown", "engineering_signals": [], "risks": [], "confidence": 0.5,
+            "score": {"total": 99, "dimensions": {"domain_alignment": 1, "engineering_environment": 1, "location_mobility": 1, "compensation": 1, "company_quality": 1, "evidence_confidence": 1}, "reasons": [], "risks": []},
+        }
+
+    monkeypatch.setattr(service.llm, "available", available)
+    monkeypatch.setattr(service, "_llm_research", invalid_response)
+
+    from rolebeacon.llm import LlmUnavailable
+
+    with pytest.raises(LlmUnavailable, match="invalid company assessment"):
+        await service.research("Example")
+    assert database.list_companies() == []

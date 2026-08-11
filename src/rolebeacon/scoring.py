@@ -41,6 +41,14 @@ SCOPED_REMOTE_PATTERNS = (
     r"remote (?:within|in|across) [a-z][a-z .-]+",
     r"must be (?:based|located|resident) in",
 )
+EUROPE_LOCATION_TERMS = (
+    "europe", "european union", "eu", "eea", "albania", "andorra", "austria", "belgium", "bosnia",
+    "bulgaria", "croatia", "cyprus", "czechia", "czech republic", "denmark", "estonia", "finland",
+    "france", "germany", "greece", "hungary", "iceland", "ireland", "italy", "kosovo", "latvia",
+    "liechtenstein", "lithuania", "luxembourg", "malta", "moldova", "monaco", "montenegro", "netherlands",
+    "north macedonia", "norway", "poland", "portugal", "romania", "san marino", "serbia", "slovakia",
+    "slovenia", "spain", "sweden", "switzerland", "ukraine", "united kingdom", "england", "scotland", "wales",
+)
 
 
 def _contains(text: str, patterns: tuple[str, ...]) -> bool:
@@ -53,6 +61,9 @@ def _company_in(company: str, values: list[str]) -> bool:
 
 
 def _country_match(location: str, strategy: dict[str, Any]) -> bool:
+    if strategy.get("country_code") == "EUROPE":
+        text = location.casefold()
+        return any(re.search(rf"\b{re.escape(term)}\b", text) for term in EUROPE_LOCATION_TERMS)
     terms = [strategy.get("country_name", ""), strategy.get("country_code", ""), *strategy.get("cities", [])]
     text = location.casefold()
     return any(re.search(rf"\b{re.escape(str(term).casefold())}\b", text) for term in terms if term)

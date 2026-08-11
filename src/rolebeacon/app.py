@@ -3,19 +3,20 @@ from __future__ import annotations
 import hashlib
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from typing import Annotated, Any
+from typing import Any
 
-from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, Query, Request, status
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .company import CompanyResearchService
+from .collectors import repair_text
+from .company import CompanyResearchCoordinator, CompanyResearchService
 from .config import Settings
 from .database import Database
 from .domain import CollectedJob, JobStatus
 from .llm import LlmClient, LlmUnavailable
-from .profile import SearchPreferencesV1, country_catalog
+from .profile import country_catalog
 from .services import ArtifactService, ProfileValidationError, cover_letter_recommendation
 from .setup import LocalModelService, SetupService
 from .sync import Scheduler, SyncService
@@ -30,10 +31,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     sync_service = SyncService(app_settings, database, llm)
     artifacts = ArtifactService(app_settings, database, llm)
     company_research = CompanyResearchService(app_settings, database, llm)
+    company_research_coordinator = CompanyResearchCoordinator(company_research)
     scheduler = Scheduler(sync_service, app_settings.sync_interval_seconds)
     setup_service = SetupService(app_settings)
     local_models = LocalModelService(app_settings)
     templates = Jinja2Templates(directory=app_settings.resource_dir / "templates")
+    templates.env.filters["repair_text"] = repair_text
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -51,6 +54,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.sync_service = sync_service
     app.state.artifacts = artifacts
     app.state.company_research = company_research
+    app.state.company_research_coordinator = company_research_coordinator
     app.state.setup_service = setup_service
 
     @app.middleware("http")
@@ -192,32 +196,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     @app.get("/settings", response_class=HTMLResponse)
-    async def settings_page(request: Request, saved: bool = False) -> HTMLResponse:
+    async def settings_page(request: Request) -> HTMLResponse:
         return templates.TemplateResponse(
             request,
-            "settings.html",
-            page_context(request, profile=app_settings.load_search_profile(), settings=app_settings, saved=saved),
+            "setup.html",
+            page_context(
+                request,
+                setup=setup_service.status(),
+                schemas=setup_service.schemas(),
+                sources=app_settings.load_sources(),
+                countries=country_catalog(),
+                editing=True,
+                initial_setup=setup_service.saved_payload(),
+            ),
         )
-
-    @app.post("/settings")
-    async def update_settings(
-        target_roles: Annotated[str, Form()],
-        preferred_skills: Annotated[str, Form()] = "",
-        preferred_domains: Annotated[str, Form()] = "",
-        priority_companies: Annotated[str, Form()] = "",
-        company_watchlist: Annotated[str, Form()] = "",
-        company_blocklist: Annotated[str, Form()] = "",
-    ) -> RedirectResponse:
-        profile = app_settings.load_search_profile()
-        profile["target_roles"] = _lines(target_roles)
-        profile["preferred_skills"] = _lines(preferred_skills)
-        profile["preferred_domains"] = _lines(preferred_domains)
-        profile["priority_companies"] = _lines(priority_companies)
-        profile["company_watchlist"] = _lines(company_watchlist)
-        profile["company_blocklist"] = _lines(company_blocklist)
-        validated = SearchPreferencesV1.model_validate(profile)
-        app_settings.save_search_profile(validated.model_dump(mode="json"))
-        return RedirectResponse("/settings?saved=true", status_code=303)
 
     @app.get("/setup", response_class=HTMLResponse)
     async def setup_page(request: Request) -> HTMLResponse:
@@ -286,7 +278,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=409, detail=str(error)) from error
 
     @app.post("/api/setup/complete")
-    async def complete_setup(request: Request) -> dict[str, Any]:
+    async def complete_setup(request: Request, return_to: str = "") -> dict[str, Any]:
         nonlocal app_settings, llm
         try:
             app_settings = setup_service.complete(await _payload(request))
@@ -303,7 +295,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.settings = app_settings
         if app_settings.activated and app_settings.auto_sync:
             scheduler.start(run_immediately=True)
-        return {"completed": True, "activated": app_settings.activated, "redirect": "/"}
+        redirect = "/settings" if return_to == "/settings" else "/"
+        return {"completed": True, "activated": app_settings.activated, "redirect": redirect}
 
     @app.post("/api/sync", status_code=status.HTTP_202_ACCEPTED)
     async def trigger_sync(background_tasks: BackgroundTasks) -> dict[str, Any]:
@@ -406,6 +399,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return RedirectResponse(f"/companies/{company_id}", status_code=303)
         return JSONResponse({"job_id": job_id, "company_id": company_id})
 
+    @app.post("/api/jobs/{job_id}/research-company/start", status_code=status.HTTP_202_ACCEPTED)
+    async def start_company_research_for_job(job_id: int) -> dict[str, Any]:
+        job = database.get_job(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return company_research_coordinator.start(str(job["company"]))
+
+    @app.post("/api/companies/{company_id}/research")
+    async def refresh_company_research(company_id: int, request: Request) -> Response:
+        company = database.get_company(company_id)
+        if not company:
+            raise HTTPException(status_code=404, detail="Company not found")
+        try:
+            refreshed_company_id = await company_research.research(str(company["name"]))
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except (LlmUnavailable, RuntimeError) as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+        if _wants_html(request):
+            return RedirectResponse(f"/companies/{refreshed_company_id}", status_code=303)
+        return JSONResponse({"company_id": refreshed_company_id, "refreshed": True})
+
+    @app.post("/api/companies/{company_id}/research/start", status_code=status.HTTP_202_ACCEPTED)
+    async def start_company_research(company_id: int) -> dict[str, Any]:
+        company = database.get_company(company_id)
+        if not company:
+            raise HTTPException(status_code=404, detail="Company not found")
+        return company_research_coordinator.start(str(company["name"]))
+
+    @app.get("/api/company-research/status")
+    async def company_research_status() -> dict[str, Any]:
+        return company_research_coordinator.status.to_dict()
+
     @app.get("/api/applications")
     async def applications_api() -> dict[str, Any]:
         return {"applications": database.list_applications()}
@@ -485,10 +511,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return FileResponse(path)
 
     return app
-
-
-def _lines(value: str) -> list[str]:
-    return [line.strip() for line in value.splitlines() if line.strip()]
 
 
 async def _payload(request: Request) -> dict[str, Any]:

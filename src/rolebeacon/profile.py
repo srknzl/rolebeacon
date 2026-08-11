@@ -8,6 +8,7 @@ import pycountry
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
 COUNTRY_NAME_OVERRIDES = {"TR": "Türkiye"}
+RELOCATION_REGION_CODES = {"EUROPE": "Europe"}
 
 
 @lru_cache
@@ -30,6 +31,14 @@ def normalize_iso_country_code(value: str) -> str:
     if code not in country_names_by_code():
         raise ValueError("Use a valid ISO 3166-1 alpha-2 country code, such as TR or DE")
     return code
+
+
+def normalize_relocation_target_code(value: str) -> str:
+    """Accept an ISO country code or a deliberately small set of named regions."""
+    code = value.upper()
+    if code in RELOCATION_REGION_CODES:
+        return code
+    return normalize_iso_country_code(code)
 
 
 class StrictModel(BaseModel):
@@ -100,14 +109,14 @@ class CandidateProfileV1(StrictModel):
 
 
 class CountryPreference(StrictModel):
-    country_code: str = Field(min_length=2, max_length=2)
+    country_code: str = Field(min_length=2, max_length=16)
     country_name: str = Field(min_length=2)
     cities: list[str] = Field(default_factory=list)
 
     @field_validator("country_code")
     @classmethod
     def normalize_country_code(cls, value: str) -> str:
-        return normalize_iso_country_code(value)
+        return normalize_relocation_target_code(value)
 
 
 class MobilityProfileV1(StrictModel):
@@ -277,4 +286,4 @@ Set schema_version to \"1.0\" and return JSON only.
 
 SETUP_PLANNING_PROMPT = """Help a candidate plan a RoleBeacon setup. Return only one valid SetupPayloadV1 JSON object, with no Markdown or explanation.
 
-Preserve the supplied candidate profile exactly. Use only stated facts for work authorization, relocation, remote-work eligibility, compensation, and seniority. Do not infer a work right, visa sponsorship, salary, or location permission. For countries where the candidate requires a visa or sponsorship, add them only as relocation targets, not as work authorizations. Country codes must be ISO 3166-1 alpha-2 values. Include focused target roles, relevant preferred skills and domains, and a conservative company priority/watch list based on the candidate's stated goals. Keep `activate` false so the candidate reviews the configuration before any source is contacted."""
+Preserve the supplied candidate profile exactly. Use only stated facts for work authorization, relocation, remote-work eligibility, compensation, and seniority. Do not infer a work right, visa sponsorship, salary, or location permission. For countries where the candidate requires a visa or sponsorship, add them only as relocation targets, not as work authorizations. Work authorizations and current country must use ISO 3166-1 alpha-2 codes. Relocation targets may additionally use `EUROPE` with the country name `Europe` when the candidate wants Europe-wide relocation. Include focused target roles, relevant preferred skills and domains, and a conservative company priority/watch list based on the candidate's stated goals. Keep `activate` false so the candidate reviews the configuration before any source is contacted."""

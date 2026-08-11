@@ -34,6 +34,17 @@ def test_legacy_import_is_copy_only_and_idempotent(tmp_path) -> None:
     assert "must-not-import" not in (settings.data_dir / "legacy-import.json").read_text(encoding="utf-8")
 
 
+def test_default_registries_include_first_party_and_budgeted_sources(tmp_path) -> None:
+    settings = Settings.load(tmp_path)
+    settings.ensure_directories()
+
+    source_ids = {source.id for source in settings.load_sources()}
+    company_names = {item["name"] for item in settings.load_company_registry()}
+
+    assert {"arbeitnow-sponsored", "cloudflare", "gitlab", "adzuna-germany", "jooble-remote", "serpapi-google-jobs-germany"} <= source_ids
+    assert {"Google", "Microsoft", "Cloudflare", "GitLab", "SAP", "Zalando"} <= company_names
+
+
 def test_builtin_resume_uses_only_profile_facts() -> None:
     profile = {
         "name": "Example Candidate",

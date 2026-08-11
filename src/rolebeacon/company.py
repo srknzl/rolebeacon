@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import re
+from dataclasses import asdict, dataclass
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 from urllib.robotparser import RobotFileParser
@@ -107,35 +109,75 @@ REMOTE_REGIONAL_PATTERNS = (
 )
 
 
+@dataclass(slots=True)
+class CompanyResearchStatus:
+    running: bool = False
+    company_name: str = ""
+    company_id: int | None = None
+    phase: str = "idle"
+    message: str = "Ready"
+    progress_percent: int = 0
+    llm_used: bool = False
+    used_rules_fallback: bool = False
+    error: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
 class CompanyResearchService:
     def __init__(self, settings: Settings, database: Database, llm: LlmClient):
         self.settings = settings
         self.database = database
         self.llm = llm
 
-    async def research(self, name: str) -> int:
+    async def research(self, name: str, progress: Any = None) -> int:
+        report = progress or (lambda _phase, _message, _percent: None)
+        report("collected_jobs", "Reading current job evidence", 12)
         registry = self._registry_entry(name)
         jobs = self.database.company_jobs(name)
         evidence = self._job_evidence(jobs)
         domain = registry.get("domain", "") if registry else ""
         if registry:
+            report("official_sources", "Fetching configured official sources", 32)
             evidence.extend(await self._fetch_official_sources(registry.get("sources", [])))
         if not evidence:
             raise ValueError("No configured official sources or collected jobs are available for this company")
 
         search_profile = self.settings.load_search_profile()
-        if await self.llm.available():
-            result = await self._llm_research(name, evidence, search_profile)
-            profile = {key: value for key, value in result.items() if key != "score"}
-            score = result["score"]
-            self._validate_score(score)
-            provider = "openai-compatible"
-            model = self.settings.llm_model
+        provider = "rules"
+        model = "company-rules-v1"
+        if self.settings.llm_enabled:
+            if not await self.llm.available():
+                health = await self.llm.health()
+                raise LlmUnavailable(
+                    "LLM unavailable: "
+                    f"{health.get('error') or 'the configured endpoint did not provide the selected model'}. "
+                    "Fix the model in Settings or explicitly choose Rules only, then try company research again."
+                )
+            report("llm_analysis", "Analyzing evidence with the configured model", 60)
+            last_error: Exception | None = None
+            for _attempt in range(2):
+                try:
+                    result = await self._llm_research(name, evidence, search_profile)
+                    profile = {key: value for key, value in result.items() if key != "score"}
+                    score = result["score"]
+                    self._validate_score(score)
+                    provider = "openai-compatible"
+                    model = self.settings.llm_model
+                    break
+                except (LlmUnavailable, ValueError) as error:
+                    last_error = error
+                    continue
+            else:
+                raise LlmUnavailable(
+                    "The configured model returned an invalid company assessment after two attempts: "
+                    f"{last_error}. Fix the model or explicitly choose Rules only, then try again."
+                )
         else:
             profile, score = self._deterministic_research(name, evidence, jobs, search_profile)
-            provider = "rules"
-            model = "company-rules-v1"
-        return self.database.save_company_research(
+        report("saving", "Saving the evidence-backed company profile", 92)
+        company_id = self.database.save_company_research(
             name=name,
             domain=domain,
             profile=profile,
@@ -144,6 +186,8 @@ class CompanyResearchService:
             provider=provider,
             model=model,
         )
+        report("complete", "Company research complete", 100)
+        return company_id
 
     def _registry_entry(self, name: str) -> dict[str, Any] | None:
         key = company_key(name)
@@ -420,3 +464,50 @@ class CompanyResearchService:
     def _validate_score(score: dict[str, Any]) -> None:
         if sum(int(value) for value in score["dimensions"].values()) != int(score["total"]):
             raise LlmUnavailable("Company score dimensions do not add up to total")
+
+
+class CompanyResearchCoordinator:
+    """Keeps one observable local company-research operation for the web interface."""
+
+    def __init__(self, service: CompanyResearchService):
+        self.service = service
+        self.status = CompanyResearchStatus()
+        self._lock = asyncio.Lock()
+
+    def start(self, name: str) -> dict[str, Any]:
+        if self.status.running:
+            return {"accepted": False, "reason": "already_running", "status": self.status.to_dict()}
+        self.status = CompanyResearchStatus(
+            running=True,
+            company_name=name,
+            phase="queued",
+            message="Preparing company research",
+            progress_percent=3,
+        )
+        asyncio.create_task(self._run(name))
+        return {"accepted": True, "status": self.status.to_dict()}
+
+    async def _run(self, name: str) -> None:
+        async with self._lock:
+            def report(phase: str, message: str, progress_percent: int) -> None:
+                self.status.phase = phase
+                self.status.message = message
+                self.status.progress_percent = progress_percent
+                if phase == "llm_analysis":
+                    self.status.llm_used = True
+                if phase == "rules_fallback":
+                    self.status.used_rules_fallback = True
+
+            try:
+                company_id = await self.service.research(name, progress=report)
+                self.status.company_id = company_id
+                self.status.phase = "complete"
+                self.status.message = "Company research complete"
+                self.status.progress_percent = 100
+            except Exception as error:
+                self.status.phase = "failed"
+                self.status.message = "Company research failed"
+                self.status.error = f"{type(error).__name__}: {error}"
+                self.status.progress_percent = 100
+            finally:
+                self.status.running = False

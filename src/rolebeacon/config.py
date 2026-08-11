@@ -134,6 +134,20 @@ class Settings:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         (self.data_dir / "applications").mkdir(exist_ok=True)
         (self.data_dir / "browser-profile").mkdir(exist_ok=True)
+        self._merge_default_sources()
+
+    def _merge_default_sources(self) -> None:
+        """Add newly shipped sources without changing a user's existing enablement choices."""
+        defaults = _read_json(self.resource_dir / "config" / "sources.json", [])
+        current = _read_json(self.source_config_path, [])
+        if not current:
+            _write_private_json(self.source_config_path, defaults)
+            return
+        current_by_id = {str(item.get("id", "")): item for item in current if isinstance(item, dict)}
+        merged = [{**item, **current_by_id.pop(str(item.get("id", "")), {})} for item in defaults]
+        merged.extend(current_by_id.values())
+        if merged != current:
+            _write_private_json(self.source_config_path, merged)
 
     def load_sources(self) -> list[SourceConfig]:
         path = self.source_config_path if self.source_config_path.exists() else self.resource_dir / "config" / "sources.json"

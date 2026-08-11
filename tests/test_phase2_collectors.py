@@ -5,7 +5,13 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 
-from rolebeacon.collectors import ArbeitnowCollector, JobicyCollector, RemotiveCollector, stable_alert_job_id
+from rolebeacon.collectors import (
+    ArbeitnowCollector,
+    JobicyCollector,
+    RemotiveCollector,
+    repair_text,
+    stable_alert_job_id,
+)
 from rolebeacon.domain import SourceConfig
 
 
@@ -28,6 +34,10 @@ async def test_arbeitnow_preserves_sponsorship_signal() -> None:
 
     assert batch.requests_made == 1
     assert batch.jobs[0].metadata["signals"]["visa_sponsorship"] is True
+
+
+def test_repair_text_fixes_common_job_description_mojibake() -> None:
+    assert repair_text("Lemon.io â€” work that fits") == "Lemon.io — work that fits"
 
 
 @pytest.mark.asyncio

@@ -1,1 +1,14 @@
-[]
+[
+  {"name":"Google","domain":"google.com","sources":[{"url":"https://about.google/","type":"about"},{"url":"https://www.google.com/about/careers/applications/","type":"careers"}]},
+  {"name":"Microsoft","domain":"microsoft.com","sources":[{"url":"https://www.microsoft.com/en-us/about","type":"about"},{"url":"https://careers.microsoft.com/","type":"careers"}]},
+  {"name":"Amazon","domain":"amazon.com","sources":[{"url":"https://www.aboutamazon.com/about-us","type":"about"},{"url":"https://www.amazon.jobs/content/en/career-programs","type":"careers"}]},
+  {"name":"Meta","domain":"meta.com","sources":[{"url":"https://about.meta.com/company-info/","type":"about"},{"url":"https://www.metacareers.com/","type":"careers"}]},
+  {"name":"Apple","domain":"apple.com","sources":[{"url":"https://www.apple.com/careers/us/","type":"careers"}]},
+  {"name":"Cloudflare","domain":"cloudflare.com","sources":[{"url":"https://www.cloudflare.com/about-overview/","type":"about"},{"url":"https://www.cloudflare.com/careers/","type":"careers"}]},
+  {"name":"GitLab","domain":"gitlab.com","sources":[{"url":"https://about.gitlab.com/company/","type":"about"},{"url":"https://handbook.gitlab.com/handbook/company/culture/all-remote/","type":"handbook"},{"url":"https://about.gitlab.com/jobs/","type":"careers"}]},
+  {"name":"Zalando","domain":"zalando.com","sources":[{"url":"https://corporate.zalando.com/en/about-us","type":"about"},{"url":"https://jobs.zalando.com/en/","type":"careers"}]},
+  {"name":"Delivery Hero","domain":"deliveryhero.com","sources":[{"url":"https://www.deliveryhero.com/about/","type":"about"},{"url":"https://careers.deliveryhero.com/","type":"careers"}]},
+  {"name":"SAP","domain":"sap.com","sources":[{"url":"https://www.sap.com/about/company.html","type":"about"},{"url":"https://jobs.sap.com/","type":"careers"}]},
+  {"name":"Celonis","domain":"celonis.com","sources":[{"url":"https://www.celonis.com/company/","type":"about"},{"url":"https://www.celonis.com/careers/jobs/","type":"careers"}]},
+  {"name":"Personio","domain":"personio.com","sources":[{"url":"https://www.personio.com/about-personio/","type":"about"},{"url":"https://www.personio.com/careers/","type":"careers"}]}
+]

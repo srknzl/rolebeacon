@@ -80,6 +80,29 @@ def test_remote_emea_is_not_assumed_to_include_turkiye() -> None:
     assert result.location_fit == "remote-scope-unknown"
 
 
+def test_europe_relocation_target_matches_european_roles_but_requires_sponsorship() -> None:
+    mobility = MobilityProfileV1.model_validate(
+        {
+            **MOBILITY.model_dump(mode="json"),
+            "relocation_targets": [{"country_code": "EUROPE", "country_name": "Europe", "cities": []}],
+        }
+    )
+    strategies = [item.model_dump(mode="json") for item in generate_strategies(CANDIDATE, mobility, PREFERENCES)]
+    eligible = evaluate_eligibility(
+        job(location="Berlin, Germany", description="Visa sponsorship available. Build backend systems."),
+        PREFERENCES.model_dump(mode="json"), mobility.model_dump(mode="json"), strategies,
+    )
+    rejected = evaluate_eligibility(
+        job(location="Paris, France", description="No visa sponsorship. Build backend systems."),
+        PREFERENCES.model_dump(mode="json"), mobility.model_dump(mode="json"), strategies,
+    )
+
+    assert eligible.status == EligibilityStatus.ELIGIBLE
+    assert eligible.route == "relocate-europe"
+    assert rejected.status == EligibilityStatus.INELIGIBLE
+    assert rejected.route == "relocate-europe"
+
+
 def test_country_scoped_remote_is_not_assumed_worldwide() -> None:
     result = evaluate(
         job(
