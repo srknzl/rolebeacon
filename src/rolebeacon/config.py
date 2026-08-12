@@ -153,6 +153,37 @@ class Settings:
         path = self.source_config_path if self.source_config_path.exists() else self.resource_dir / "config" / "sources.json"
         return [SourceConfig.from_dict(value) for value in _read_json(path, [])]
 
+    def save_source(self, source: SourceConfig) -> tuple[SourceConfig, bool]:
+        """Add or update one source instance without altering other source choices."""
+        from .source_discovery import same_source
+
+        self.ensure_directories()
+        sources = self.load_sources()
+        for index, current in enumerate(sources):
+            if same_source(current, source):
+                source.id = current.id
+                sources[index] = source
+                _write_private_json(self.source_config_path, [item.to_dict() for item in sources])
+                return source, False
+        existing_ids = {item.id for item in sources}
+        base_id = source.id
+        suffix = 2
+        while source.id in existing_ids:
+            source.id = f"{base_id[:94]}-{suffix}"
+            suffix += 1
+        sources.append(source)
+        _write_private_json(self.source_config_path, [item.to_dict() for item in sources])
+        return source, True
+
+    def set_source_enabled(self, source_id: str, enabled: bool) -> SourceConfig:
+        sources = self.load_sources()
+        for source in sources:
+            if source.id == source_id:
+                source.enabled = enabled
+                _write_private_json(self.source_config_path, [item.to_dict() for item in sources])
+                return source
+        raise LookupError(f"Source not found: {source_id}")
+
     def load_search_profile(self) -> dict[str, Any]:
         return _read_json(self.search_profile_path, {})
 
@@ -191,12 +222,11 @@ class Settings:
         _write_private_json(self.mobility_profile_path, mobility)
         _write_private_json(self.search_profile_path, preferences)
         _write_private_json(self.strategies_path, strategies)
-        sources = []
+        sources = self.load_sources()
         enabled = set(enabled_source_ids)
-        for source in _read_json(self.resource_dir / "config" / "sources.json", []):
-            source["enabled"] = source.get("id") in enabled
-            sources.append(source)
-        _write_private_json(self.source_config_path, sources)
+        for source in sources:
+            source.enabled = source.id in enabled
+        _write_private_json(self.source_config_path, [source.to_dict() for source in sources])
         public_llm = {key: value for key, value in llm.items() if key != "api_key"}
         _write_private_json(
             self.setup_state_path,

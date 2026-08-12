@@ -258,12 +258,12 @@ def rule_score(
         "location_authorization": location_score,
         "salary_employment": salary_score,
     }
-    total = sum(dimensions.values())
     strategy = next((item for item in strategies if item.get("id") == eligibility.route), None)
     if strategy and strategy.get("kind") == "priority_company":
-        total = max(total, 55)
+        _raise_dimensions_to_floor(dimensions, 55)
     if eligibility.status == EligibilityStatus.INELIGIBLE:
-        total = min(total, 39)
+        _cap_dimensions(dimensions, 39)
+    total = sum(dimensions.values())
     threshold = int(strategy.get("threshold", 80)) if strategy else 80
     verdict = (
         "reject"
@@ -294,3 +294,24 @@ def rule_score(
         model="deterministic-v2",
         prompt_version=f"{SCORING_PROMPT_VERSION}:rules",
     )
+
+
+def _raise_dimensions_to_floor(dimensions: dict[str, int], floor: int) -> None:
+    maximums = {"role_domain": 25, "domain_experience": 20, "stack": 20}
+    shortfall = max(0, floor - sum(dimensions.values()))
+    for key in ("role_domain", "domain_experience", "stack"):
+        increase = min(shortfall, maximums[key] - dimensions[key])
+        dimensions[key] += increase
+        shortfall -= increase
+        if not shortfall:
+            return
+
+
+def _cap_dimensions(dimensions: dict[str, int], cap: int) -> None:
+    overflow = max(0, sum(dimensions.values()) - cap)
+    for key in ("salary_employment", "location_authorization", "seniority", "domain_experience", "stack", "role_domain"):
+        decrease = min(overflow, dimensions[key])
+        dimensions[key] -= decrease
+        overflow -= decrease
+        if not overflow:
+            return

@@ -1,8 +1,196 @@
 {% extends "base.html" %}
+{% from "_help.html" import tip %}
 {% block title %}Sources · RoleBeacon{% endblock %}
 {% block content %}
-<section class="page-heading"><div><p class="eyebrow">INGESTION</p><h1>Sources</h1></div></section>
-<div class="table-wrap"><table><thead><tr><th title="Public job board, ATS endpoint, or user-owned alert feed.">Source</th><th title="The adapter protocol RoleBeacon uses to collect this source.">Kind</th><th title="Whether this source participates in scheduled collection.">Enabled</th><th title="Result of the latest collection attempt.">Status</th><th title="Timestamp of the most recent successful collection.">Last success</th><th title="Jobs seen in the source response, then newly stored or changed locally.">Seen / new / changed</th><th title="Jobs removed by filters or identified as cross-source duplicates.">Filtered / duplicates</th><th title="Network requests made and elapsed collection time.">Requests / duration</th><th title="Latest source error or reason the source was skipped.">Note</th></tr></thead><tbody>
-{% for row in sources %}<tr><td><strong>{{ row.config.name }}</strong><small>{{ row.config.id }}</small></td><td>{{ row.config.kind }}</td><td>{{ 'yes' if row.config.enabled else 'no' }}</td><td><span class="status status-{{ row.state.status or 'idle' }}">{{ row.state.status or 'not run' }}</span></td><td>{{ row.state.last_successful_sync_at or '—' }}</td><td>{{ row.state.jobs_seen or 0 }} / {{ row.state.last_jobs_new or 0 }} / {{ row.state.jobs_changed or 0 }}</td><td>{{ row.state.last_jobs_filtered or 0 }} / {{ row.state.last_duplicates or 0 }}</td><td>{{ row.state.last_requests_made or 0 }} / {{ row.state.last_duration_ms or 0 }} ms</td><td class="{% if row.state.status == 'error' %}error-cell{% elif row.state.status == 'skipped' %}muted-cell{% endif %}">{{ (row.state.last_error or row.state.last_skipped_reason or '')|replace('_', ' ') }}</td></tr>{% endfor %}
-</tbody></table></div>
+<section class="page-heading source-heading">
+  <div>
+    <p class="eyebrow">INGESTION</p>
+    <h1>Sources</h1>
+    <p class="lede">Connect a company's public careers board once. RoleBeacon detects the ATS, validates its endpoint, previews real jobs, and keeps every source isolated during refresh.</p>
+  </div>
+</section>
+
+<div id="source-message" class="toast" role="status" aria-live="polite" hidden></div>
+
+<section class="panel source-connect-panel">
+  <div class="panel-heading">
+    <div>
+      <p class="eyebrow">ADD A COMPANY</p>
+      <h2>Connect a careers board</h2>
+    </div>
+    <span>Nothing is saved until you confirm the preview.</span>
+  </div>
+  <p class="muted">Paste the public board URL, not a LinkedIn company page. Greenhouse, Lever, Ashby, SmartRecruiters, Workday, Google Careers, and Amazon Jobs are detected automatically.</p>
+  <form id="source-discovery-form" class="source-discovery-form">
+    <label>Company name {{ tip("The employer name RoleBeacon should use when normalizing and matching jobs from this board.") }}
+      <input id="source-company" maxlength="120" placeholder="Example: Cloudflare" autocomplete="organization">
+    </label>
+    <label>Careers or ATS board URL {{ tip("Use a public Greenhouse, Lever, Ashby, SmartRecruiters, Workday, Google Careers, or Amazon Jobs URL. RoleBeacon derives an allow-listed read endpoint from it.") }}
+      <input id="source-url" type="url" required placeholder="https://boards.greenhouse.io/company" autocomplete="url">
+    </label>
+    <button id="source-preview-button" class="button button-primary" type="submit">Detect and preview</button>
+  </form>
+
+  <div id="source-preview" class="source-preview" hidden>
+    <div class="source-preview-heading">
+      <div><p class="eyebrow">VALIDATED SOURCE</p><h3 id="source-preview-name"></h3></div>
+      <span id="source-preview-count" class="status status-interested"></span>
+    </div>
+    <p id="source-preview-message" class="muted"></p>
+    <div id="source-preview-jobs" class="source-preview-jobs"></div>
+    <div class="source-preview-actions">
+      <label><input id="source-enable" type="checkbox" checked> Enable this source immediately</label>
+      <button id="source-save-button" class="button button-primary" type="button">Add source</button>
+    </div>
+  </div>
+
+  <details class="source-help">
+    <summary>What about Google, Microsoft, Amazon, Meta, Apple, Netflix, or LinkedIn?</summary>
+    <p>Google Careers and Amazon Jobs have dedicated first-party connectors. Microsoft, Meta, Apple, and Netflix still require their own adapters, so RoleBeacon reports that limitation instead of pretending the URL is supported. LinkedIn Job Alerts through your own Gmail account remain an optional coverage source; authenticated LinkedIn pages are never scraped.</p>
+  </details>
+</section>
+
+{% if coverage %}
+<section class="section-heading"><div><p class="eyebrow">WATCHLIST COVERAGE</p><h2>Priority companies</h2></div></section>
+<div class="source-coverage-grid">
+  {% for item in coverage %}
+  <article class="source-coverage-card {% if item.sources %}is-connected{% endif %}">
+    <div><strong>{{ item.company }}</strong><span>{{ item.sources|length }} connected source{{ '' if item.sources|length == 1 else 's' }}</span></div>
+    {% if item.sources %}<span class="status status-interested">covered</span>{% else %}<span class="status status-running">needs source</span>{% endif %}
+  </article>
+  {% endfor %}
+</div>
+{% endif %}
+
+<section class="section-heading"><div><p class="eyebrow">SOURCE HEALTH</p><h2>Configured sources</h2></div></section>
+<div class="table-wrap source-table-wrap">
+  <table>
+    <thead><tr><th>Source</th><th>Connector</th><th>Enabled</th><th>Status</th><th>Last success</th><th>Seen / new / changed</th><th>Requests / duration</th><th>Note</th><th></th></tr></thead>
+    <tbody>
+      {% for row in sources %}
+      <tr>
+        <td><strong>{{ row.config.name }}</strong><small>{{ row.config.company or row.config.id }}</small></td>
+        <td>{{ row.config.kind }}</td>
+        <td>{{ 'yes' if row.config.enabled else 'no' }}</td>
+        <td><span class="status status-{{ row.state.status or 'idle' }}">{{ row.state.status or 'not run' }}</span></td>
+        <td>{{ row.state.last_successful_sync_at or '—' }}</td>
+        <td>{{ row.state.jobs_seen or 0 }} / {{ row.state.last_jobs_new or 0 }} / {{ row.state.jobs_changed or 0 }}</td>
+        <td>{{ row.state.last_requests_made or 0 }} / {{ row.state.last_duration_ms or 0 }} ms</td>
+        <td class="{% if row.state.status == 'error' %}error-cell{% elif row.state.status == 'skipped' %}muted-cell{% endif %}">{{ (row.state.last_error or row.state.last_skipped_reason or '')|replace('_', ' ') }}</td>
+        <td><button class="button button-quiet source-toggle" type="button" data-source-toggle="{{ row.config.id }}" data-enabled="{{ 'false' if row.config.enabled else 'true' }}">{{ 'Disable' if row.config.enabled else 'Enable' }}</button></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<script>
+  const sourceForm = document.getElementById("source-discovery-form");
+  const sourceCompany = document.getElementById("source-company");
+  const sourceUrl = document.getElementById("source-url");
+  const sourcePreviewButton = document.getElementById("source-preview-button");
+  const sourcePreview = document.getElementById("source-preview");
+  const sourcePreviewName = document.getElementById("source-preview-name");
+  const sourcePreviewCount = document.getElementById("source-preview-count");
+  const sourcePreviewMessage = document.getElementById("source-preview-message");
+  const sourcePreviewJobs = document.getElementById("source-preview-jobs");
+  const sourceSaveButton = document.getElementById("source-save-button");
+  const sourceEnable = document.getElementById("source-enable");
+  const sourceMessage = document.getElementById("source-message");
+  let sourceDraft = null;
+
+  function showSourceMessage(message, success = false) {
+    sourceMessage.textContent = message;
+    sourceMessage.className = `toast${success ? " alert-success" : ""}`;
+    sourceMessage.hidden = false;
+  }
+
+  async function sourceError(response) {
+    try {
+      const value = await response.json();
+      return typeof value.detail === "string" ? value.detail : JSON.stringify(value.detail);
+    } catch (_) {
+      return `Request failed with HTTP ${response.status}`;
+    }
+  }
+
+  function renderSourcePreview(value) {
+    sourceDraft = value;
+    sourcePreviewName.textContent = `${value.source.name} · ${value.source.kind}`;
+    sourcePreviewCount.textContent = `${value.jobs_found} jobs found`;
+    sourcePreviewMessage.textContent = value.message;
+    sourcePreviewJobs.replaceChildren();
+    value.sample_jobs.forEach(job => {
+      const card = document.createElement("article");
+      const title = document.createElement("strong");
+      const location = document.createElement("span");
+      title.textContent = job.title || "Untitled job";
+      location.textContent = job.location || "Location not provided";
+      card.append(title, location);
+      sourcePreviewJobs.append(card);
+    });
+    sourcePreview.hidden = false;
+    sourcePreview.scrollIntoView({behavior: "smooth", block: "nearest"});
+  }
+
+  sourceForm.addEventListener("submit", async event => {
+    event.preventDefault();
+    sourcePreviewButton.disabled = true;
+    sourcePreviewButton.textContent = "Checking board…";
+    sourceDraft = null;
+    sourcePreview.hidden = true;
+    const response = await fetch("/api/sources/discover", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({company: sourceCompany.value, careers_url: sourceUrl.value}),
+    });
+    sourcePreviewButton.disabled = false;
+    sourcePreviewButton.textContent = "Detect and preview";
+    if (!response.ok) {
+      showSourceMessage(await sourceError(response));
+      return;
+    }
+    renderSourcePreview(await response.json());
+    showSourceMessage("Source validated. Review the sample jobs before adding it.", true);
+  });
+
+  sourceSaveButton.addEventListener("click", async () => {
+    if (!sourceDraft) return;
+    sourceSaveButton.disabled = true;
+    sourceSaveButton.textContent = "Adding…";
+    const response = await fetch("/api/sources", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        company: sourceCompany.value,
+        careers_url: sourceUrl.value,
+        enabled: sourceEnable.checked,
+      }),
+    });
+    if (!response.ok) {
+      sourceSaveButton.disabled = false;
+      sourceSaveButton.textContent = "Add source";
+      showSourceMessage(await sourceError(response));
+      return;
+    }
+    const value = await response.json();
+    showSourceMessage(value.created ? "Source added. It will run on the next refresh." : "Existing source updated.", true);
+    setTimeout(() => window.location.reload(), 650);
+  });
+
+  document.querySelectorAll("[data-source-toggle]").forEach(button => button.addEventListener("click", async () => {
+    button.disabled = true;
+    const response = await fetch(`/api/sources/${encodeURIComponent(button.dataset.sourceToggle)}/enabled`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({enabled: button.dataset.enabled === "true"}),
+    });
+    if (!response.ok) {
+      button.disabled = false;
+      showSourceMessage(await sourceError(response));
+      return;
+    }
+    window.location.reload();
+  }));
+</script>
 {% endblock %}

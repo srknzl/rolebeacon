@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from time import sleep
 
+import pytest
 from fastapi.testclient import TestClient
 
 from rolebeacon.app import create_app
 from rolebeacon.config import Settings
-from rolebeacon.domain import CollectedJob
-from rolebeacon.llm import LlmClient
+from rolebeacon.domain import CollectedJob, EligibilityResult, EligibilityStatus
+from rolebeacon.llm import SCORING_RUBRIC, LlmClient
 from rolebeacon.setup import SetupService
 
 
@@ -106,6 +109,131 @@ def test_llm_client_does_not_send_an_empty_bearer_token(tmp_path) -> None:
     assert client._headers() == {"Content-Type": "application/json"}
 
 
+def test_llm_score_total_is_derived_from_dimensions(tmp_path) -> None:
+    value = {
+        "total": 99,
+        "dimensions": {
+            "role_domain": 20,
+            "stack": 15,
+            "domain_experience": 15,
+            "seniority": 8,
+            "location_authorization": 12,
+            "salary_employment": 5,
+        },
+    }
+    value["confidence"] = 80
+    LlmClient._normalize_score(value, EligibilityStatus.ELIGIBLE)
+    LlmClient._validate_score(value)
+
+    assert value["total"] == 75
+    assert value["confidence"] == 0.8
+    assert value["verdict"] == "review"
+
+
+def test_llm_rubric_uses_full_point_ranges_and_positive_evidence() -> None:
+    assert "not 0-to-1 ratings" in SCORING_RUBRIC
+    assert "role_domain (0-25)" in SCORING_RUBRIC
+    assert 'never write "absent"' in SCORING_RUBRIC.casefold()
+
+
+def test_llm_semantic_validation_rejects_negative_evidence_and_generic_gaps() -> None:
+    value = {
+        "dimensions": {
+            "role_domain": 0,
+            "stack": 0,
+            "domain_experience": 10,
+            "seniority": 8,
+            "location_authorization": 15,
+            "salary_employment": 5,
+        },
+        "evidence": [
+            {
+                "requirement": "stack",
+                "profile_evidence": "Candidate knows Java, but the role requires React.",
+            }
+        ],
+        "gaps": [
+            {"requirement": "stack", "severity": "high"},
+            {"requirement": "stack", "severity": "high"},
+        ],
+    }
+
+    with pytest.raises(ValueError, match="zero-score dimension stack"):
+        LlmClient._validate_score_semantics(value)
+
+
+@pytest.mark.asyncio
+async def test_llm_score_retries_with_specific_semantic_feedback(tmp_path) -> None:
+    invalid = {
+        "dimensions": {
+            "role_domain": 0, "stack": 0, "domain_experience": 0,
+            "seniority": 0, "location_authorization": 15, "salary_employment": 5,
+        },
+        "confidence": 0.2,
+        "evidence": [{"requirement": "stack", "profile_evidence": "Java, but the role needs React"}],
+        "gaps": [{"requirement": "stack", "severity": "high"}],
+    }
+    corrected = {
+        **invalid,
+        "evidence": [
+            {
+                "requirement": "location_authorization",
+                "profile_evidence": "Worldwide remote work explicitly includes the candidate location.",
+            }
+        ],
+        "gaps": [{"requirement": "React", "severity": "high"}],
+    }
+
+    class CorrectingClient(LlmClient):
+        def __init__(self) -> None:
+            super().__init__(Settings.load(tmp_path))
+            self.calls: list[list[dict[str, str]]] = []
+
+        async def _chat_content(self, messages, *_args, **_kwargs) -> str:
+            self.calls.append(messages)
+            return json.dumps(invalid if len(self.calls) == 1 else corrected)
+
+    client = CorrectingClient()
+    score = await client.score(
+        {"title": "Frontend Engineer", "description": "React", "remote_scope": "Worldwide"},
+        EligibilityResult(
+            status=EligibilityStatus.ELIGIBLE,
+            route="remote-from-tr",
+            sponsorship="not_required",
+            relocation="not_required",
+            location_fit="remote:TR",
+            reasons=[],
+            risks=[],
+        ),
+        {},
+        {"location": {"country_code": "TR", "country_name": "Türkiye"}},
+    )
+
+    assert score.gaps == [{"requirement": "React", "severity": "high"}]
+    assert len(client.calls) == 2
+    assert "previous JSON is invalid" in client.calls[1][-1]["content"]
+
+
+def test_qwen3_prompts_disable_thinking_for_structured_output(tmp_path) -> None:
+    settings = SetupService(Settings.load(tmp_path)).complete(setup_payload())
+    settings = replace(settings, llm_model="qwen3:14b")
+
+    assert LlmClient(settings)._prompt_for_model("Return JSON").endswith("/no_think")
+
+
+def test_ollama_native_payload_disables_thinking_and_uses_json_schema(tmp_path) -> None:
+    settings = replace(Settings.load(tmp_path), llm_mode="ollama", llm_enabled=True, llm_model="qwen3:14b")
+    schema = {"type": "object", "properties": {"result": {"type": "string"}}, "required": ["result"]}
+
+    payload = LlmClient(settings)._ollama_payload(
+        [{"role": "user", "content": "Return JSON"}], schema, temperature=0.1, max_tokens=900
+    )
+
+    assert payload["think"] is False
+    assert payload["format"] == schema
+    assert payload["options"]["num_predict"] == 900
+
+
 def test_setup_shows_searchable_country_catalog_and_rules_model_status(tmp_path) -> None:
     app = create_app(Settings.load(tmp_path))
 
@@ -194,7 +322,13 @@ def test_job_detail_renders_mojibake_repair_filter_end_to_end(tmp_path) -> None:
     job_id, _ = app.state.database.upsert_job(
         CollectedJob(
             source="fixture", source_job_id="job-detail", title="Backend Engineer", company="Example",
-            location="Remote Worldwide", description="Lemon.io â€” build systems", url="https://example.test/jobs/1",
+            location="Remote Worldwide",
+            description=(
+                "<h2>About the role</h2><p>Lemon.io â€” build systems.</p>"
+                "<h3>Responsibilities</h3><ul><li>Own backend services</li><li>Review designs</li></ul>"
+                "<script>alert('unsafe')</script>"
+            ),
+            url="https://example.test/jobs/1",
             published_at=datetime.now(UTC),
         )
     )
@@ -203,7 +337,10 @@ def test_job_detail_renders_mojibake_repair_filter_end_to_end(tmp_path) -> None:
         response = client.get(f"/jobs/{job_id}")
 
     assert response.status_code == 200
-    assert "Lemon.io — build systems" in response.text
+    assert "<h3>About the role</h3>" in response.text
+    assert "Lemon.io — build systems." in response.text
+    assert "<li>Own backend services</li>" in response.text
+    assert "unsafe" not in response.text
     assert "No filter named" not in response.text
 
 

@@ -9,6 +9,8 @@ from rolebeacon.collectors import (
     ArbeitnowCollector,
     JobicyCollector,
     RemotiveCollector,
+    description_blocks,
+    plain_text,
     repair_text,
     stable_alert_job_id,
 )
@@ -38,6 +40,38 @@ async def test_arbeitnow_preserves_sponsorship_signal() -> None:
 
 def test_repair_text_fixes_common_job_description_mojibake() -> None:
     assert repair_text("Lemon.io â€” work that fits") == "Lemon.io — work that fits"
+
+
+def test_plain_text_preserves_job_description_structure_without_scripts() -> None:
+    value = """
+    <h2>Responsibilities</h2>
+    <p>Build reliable APIs.</p>
+    <ul><li>Own backend services</li><li>Review designs</li></ul>
+    <script>ignore me</script>
+    """
+
+    assert plain_text(value) == (
+        "Responsibilities\nBuild reliable APIs.\n• Own backend services\n• Review designs"
+    )
+
+
+def test_description_blocks_create_safe_headings_lists_and_readable_paragraphs() -> None:
+    value = (
+        "About the role: Build reliable systems. "
+        "Responsibilities:\n• Own backend services\n• Review designs\n\n"
+        "What we offer: Remote work â€” worldwide."
+    )
+
+    blocks = description_blocks(value)
+
+    assert blocks == [
+        {"kind": "heading", "text": "About the role"},
+        {"kind": "paragraph", "text": "Build reliable systems."},
+        {"kind": "heading", "text": "Responsibilities"},
+        {"kind": "list", "items": ["Own backend services", "Review designs"]},
+        {"kind": "heading", "text": "What we offer"},
+        {"kind": "paragraph", "text": "Remote work — worldwide."},
+    ]
 
 
 @pytest.mark.asyncio

@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 
 import uvicorn
@@ -11,6 +12,7 @@ import uvicorn
 from .company import CompanyResearchService
 from .config import Settings
 from .database import Database
+from .evaluation import run_model_evaluation, run_rules_evaluation
 from .llm import LlmClient
 from .migration import import_legacy
 from .setup import LocalModelService
@@ -38,6 +40,16 @@ def main() -> None:
     test.add_argument("--base-url", default="http://127.0.0.1:11434/v1")
     test.add_argument("--model", default="qwen3:8b")
     test.add_argument("--api-key", default="")
+    evaluate = subparsers.add_parser("evaluate-model", help="Run the repeatable scoring-quality evaluation")
+    evaluate.add_argument("--base-url", default="http://127.0.0.1:11434/v1")
+    evaluate.add_argument("--model", default="qwen3:14b")
+    evaluate.add_argument("--api-key", default="")
+    evaluate.add_argument("--provider", choices=("ollama", "custom"), default="ollama")
+    evaluate.add_argument("--runs", type=int, default=1)
+    evaluate.add_argument("--output", type=Path)
+    evaluate_rules = subparsers.add_parser("evaluate-rules", help="Run the deterministic scoring-quality evaluation")
+    evaluate_rules.add_argument("--runs", type=int, default=3)
+    evaluate_rules.add_argument("--output", type=Path)
     research = subparsers.add_parser("research-company", help="Refresh a provenance-backed company profile")
     research.add_argument("company")
     args = parser.parse_args()
@@ -107,6 +119,30 @@ def main() -> None:
                 models.test_endpoint(base_url=args.base_url, model=args.model, api_key=args.api_key)
             )
         print(json.dumps(model_result, indent=2))
+    elif args.command == "evaluate-model":
+        evaluation_settings = replace(
+            settings,
+            llm_mode=args.provider,
+            llm_enabled=True,
+            llm_base_url=args.base_url.rstrip("/"),
+            llm_model=args.model,
+            llm_api_key=args.api_key,
+        )
+        report = asyncio.run(run_model_evaluation(LlmClient(evaluation_settings), runs=max(1, args.runs)))
+        rendered_report = json.dumps({"model": args.model, "base_url": args.base_url, **report}, indent=2)
+        if args.output:
+            args.output.write_text(f"{rendered_report}\n", encoding="utf-8")
+        print(rendered_report)
+        if not report["passed"]:
+            raise SystemExit(1)
+    elif args.command == "evaluate-rules":
+        rules_report = run_rules_evaluation(runs=max(2, args.runs))
+        rendered_rules_report = json.dumps(rules_report, indent=2)
+        if args.output:
+            args.output.write_text(f"{rendered_rules_report}\n", encoding="utf-8")
+        print(rendered_rules_report)
+        if not rules_report["passed"]:
+            raise SystemExit(1)
 
 
 if __name__ == "__main__":

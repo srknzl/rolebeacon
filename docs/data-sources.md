@@ -6,6 +6,29 @@ RoleBeacon favors first-party career pages and documented provider APIs. A sourc
 the original posting URL, publication time, location restrictions, and provider attribution. A
 large feed is not useful if its employment geography cannot be assessed conservatively.
 
+## Company board workflow
+
+The Sources page accepts a public careers URL and supports two classes of company source:
+
+- documented public ATS boards: Greenhouse, Lever, Ashby, SmartRecruiters, and Workday;
+- isolated first-party connectors: Google Careers server-rendered job pages and the Amazon Jobs
+  public-site JSON response.
+
+Detection is deterministic and restricted to known HTTPS hostnames. RoleBeacon derives the provider
+endpoint, fetches a small preview, and saves the source only after confirmation. A connector is reusable
+code; each company board or filtered first-party search is a separate source instance. Saving preferences
+preserves user-added instances.
+
+Google Careers and Amazon Jobs do not advertise these read surfaces as supported public APIs. Their
+connectors therefore use four-hour polling by default, content hashes, provider-specific contract tests,
+and independent health reporting. A response change disables only that source run. Microsoft, Meta,
+Apple, and Netflix remain explicit coverage gaps until equivalent first-party adapters are implemented.
+
+Amazon's free-text `loc_query` is display state rather than an enforced JSON API filter. When a pasted
+URL does not include coordinates, RoleBeacon derives a deterministic country or city post-filter and
+applies it to every collected page. The preview reports matches from the newest provider page instead
+of presenting Amazon's unfiltered global count as local coverage.
+
 ## LinkedIn boundary
 
 LinkedIn does not expose a general personal job-search API. Its documented Job Posting and Apply

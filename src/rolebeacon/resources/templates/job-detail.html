@@ -21,7 +21,17 @@
       <h2>Gaps and risks</h2>
       {% if job.gaps %}<ul class="gap-list">{% for item in job.gaps %}<li><span class="severity severity-{{ item.severity }}">{{ item.severity }}</span>{{ item.requirement }}</li>{% endfor %}</ul>{% else %}<p class="muted">No material gaps recorded.</p>{% endif %}
     </div>
-    <div class="panel job-description"><h2>Job description</h2><p>{{ job.description|repair_text }}</p></div>
+    <div class="panel job-description">
+      <h2>Job description</h2>
+      <div class="job-description-content">
+        {% for block in job.description|description_blocks %}
+          {% if block.kind == 'heading' %}<h3>{{ block.text }}</h3>
+          {% elif block.kind == 'list' %}<ul>{% for item in block['items'] %}<li>{{ item }}</li>{% endfor %}</ul>
+          {% else %}<p>{{ block.text }}</p>{% endif %}
+        {% else %}<p class="muted">No description was provided by this source.</p>
+        {% endfor %}
+      </div>
+    </div>
   </div>
   <aside class="detail-sidebar">
     <div class="panel sticky-panel">

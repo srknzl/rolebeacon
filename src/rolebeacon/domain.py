@@ -61,6 +61,12 @@ class SourceConfig:
         }
         return cls(**known)
 
+    def to_dict(self) -> dict[str, Any]:
+        value = asdict(self)
+        options = value.pop("options")
+        value.update(options)
+        return value
+
 
 @dataclass(slots=True)
 class CollectedJob:

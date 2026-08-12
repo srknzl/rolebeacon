@@ -17,6 +17,7 @@ from xml.etree import ElementTree
 import httpx
 
 from .domain import CollectedJob, CollectionBatch, SourceConfig
+from .source_discovery import amazon_location_matches, amazon_search_params, google_result_links
 
 USER_AGENT = "RoleBeacon/0.2 (+https://github.com/srknzl/rolebeacon)"
 
@@ -38,28 +39,129 @@ class _TextExtractor(HTMLParser):
         self.parts: list[str] = []
         self.skipped_depth = 0
 
+    def _break(self) -> None:
+        if self.parts and self.parts[-1] != "\n":
+            self.parts.append("\n")
+
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag.casefold() in {"script", "style", "noscript", "svg", "template"}:
+        normalized = tag.casefold()
+        if normalized in {"script", "style", "noscript", "svg", "template"}:
             self.skipped_depth += 1
+            return
+        if self.skipped_depth:
+            return
+        if normalized == "li":
+            self._break()
+            self.parts.append("• ")
+        elif normalized in {"br", "p", "div", "section", "article", "h1", "h2", "h3", "h4", "h5", "h6"}:
+            self._break()
 
     def handle_endtag(self, tag: str) -> None:
-        if tag.casefold() in {"script", "style", "noscript", "svg", "template"} and self.skipped_depth:
+        normalized = tag.casefold()
+        if normalized in {"script", "style", "noscript", "svg", "template"} and self.skipped_depth:
             self.skipped_depth -= 1
+            return
+        if not self.skipped_depth and normalized in {
+            "li", "p", "div", "section", "article", "h1", "h2", "h3", "h4", "h5", "h6",
+        }:
+            self._break()
 
     def handle_data(self, data: str) -> None:
         if self.skipped_depth:
             return
-        value = data.strip()
+        value = re.sub(r"\s+", " ", data).strip()
         if value:
+            if self.parts and self.parts[-1] != "\n" and not self.parts[-1].endswith((" ", "• ")):
+                self.parts.append(" ")
             self.parts.append(value)
 
 
 def plain_text(value: str | None) -> str:
     if not value:
         return ""
+    if not re.search(r"<\s*[a-zA-Z][^>]*>", value):
+        return _normalize_description_text(html.unescape(value))
     parser = _TextExtractor()
     parser.feed(html.unescape(value))
-    return repair_text(re.sub(r"\s+", " ", " ".join(parser.parts)).strip())
+    return _normalize_description_text("".join(parser.parts))
+
+
+def _normalize_description_text(value: str) -> str:
+    normalized = value.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = re.sub(r"[ \t]+", " ", normalized)
+    normalized = re.sub(r" *\n *", "\n", normalized)
+    normalized = re.sub(r"\n{3,}", "\n\n", normalized)
+    return repair_text(normalized.strip())
+
+
+DESCRIPTION_HEADINGS = {
+    "about the job", "about the role", "the role", "what you'll do", "what you will do",
+    "responsibilities", "your responsibilities", "requirements", "qualifications",
+    "minimum qualifications", "preferred qualifications", "basic qualifications",
+    "what we offer", "benefits", "skills and experience", "who you are", "nice to have",
+}
+
+
+def description_blocks(value: str | None) -> list[dict[str, Any]]:
+    """Return safe semantic blocks without rewriting or summarizing the posting."""
+    text = plain_text(value)
+    if not text:
+        return []
+    for heading in sorted(DESCRIPTION_HEADINGS, key=len, reverse=True):
+        pattern = re.compile(rf"(?i)\b({re.escape(heading)})\s*:\s*")
+        text = pattern.sub(lambda match: f"\n\n{match.group(1).strip()}\n", text)
+
+    blocks: list[dict[str, Any]] = []
+    list_items: list[str] = []
+
+    def flush_list() -> None:
+        if list_items:
+            blocks.append({"kind": "list", "items": list_items.copy()})
+            list_items.clear()
+
+    for section in re.split(r"\n{2,}", text):
+        lines = [line.strip() for line in section.splitlines() if line.strip()]
+        paragraph_lines: list[str] = []
+        for line in lines:
+            bullet = re.match(r"^[•*\-–]\s+(.+)$", line)
+            if bullet:
+                if paragraph_lines:
+                    flush_list()
+                    _append_paragraphs(blocks, " ".join(paragraph_lines))
+                    paragraph_lines.clear()
+                list_items.append(bullet.group(1).strip())
+                continue
+            flush_list()
+            if _is_description_heading(line):
+                if paragraph_lines:
+                    _append_paragraphs(blocks, " ".join(paragraph_lines))
+                    paragraph_lines.clear()
+                blocks.append({"kind": "heading", "text": line.rstrip(":")})
+            else:
+                paragraph_lines.append(line)
+        flush_list()
+        if paragraph_lines:
+            _append_paragraphs(blocks, " ".join(paragraph_lines))
+    return blocks
+
+
+def _is_description_heading(value: str) -> bool:
+    normalized = value.rstrip(":").strip().casefold()
+    return normalized in DESCRIPTION_HEADINGS or (value.endswith(":") and len(value) <= 80)
+
+
+def _append_paragraphs(blocks: list[dict[str, Any]], value: str) -> None:
+    sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9])", value)
+    chunk = ""
+    for sentence in sentences:
+        candidate = f"{chunk} {sentence}".strip()
+        if chunk and len(candidate) > 620:
+            blocks.append({"kind": "paragraph", "text": chunk})
+            chunk = sentence
+        else:
+            chunk = candidate
+    if chunk:
+        blocks.append({"kind": "paragraph", "text": chunk})
 
 
 def repair_text(value: str | None) -> str:
@@ -381,7 +483,7 @@ class SmartRecruitersCollector(Collector):
                 location_value = item.get("location") or {}
                 location = ", ".join(filter(None, (location_value.get("city"), location_value.get("region"), location_value.get("country"))))
                 sections = item.get("jobAd") or {}
-                description = " ".join(
+                description = "\n\n".join(
                     plain_text(section.get("text"))
                     for section in sections.get("sections", {}).values()
                     if isinstance(section, dict)
@@ -451,6 +553,117 @@ class WorkdayCollector(Collector):
             if not items or offset >= payload.get("total", 0):
                 break
         return result
+
+
+class GoogleCareersCollector(Collector):
+    async def collect(self, since: datetime, cursor: str = "") -> CollectionBatch:
+        if not self.config.url:
+            raise ValueError("Google Careers source requires a filtered search URL")
+        jobs: list[CollectedJob] = []
+        seen_urls: set[str] = set()
+        requests = 0
+        for page_number in range(1, max(1, self.config.max_pages) + 1):
+            search_url = str(httpx.URL(self.config.url).copy_set_param("page", str(page_number)))
+            response = await self.client.get(search_url)
+            requests += 1
+            response.raise_for_status()
+            links = [item for item in google_result_links(response.text, str(response.url)) if item[0] not in seen_urls]
+            if not links:
+                break
+            for url, title in links:
+                seen_urls.add(url)
+                detail_response = await self.client.get(url)
+                requests += 1
+                detail_response.raise_for_status()
+                detail = _google_job_detail(plain_text(detail_response.text), title)
+                identifier_match = re.search(r"/jobs/results/(\d+)", url)
+                jobs.append(
+                    CollectedJob(
+                        source=self.config.id,
+                        source_job_id=identifier_match.group(1) if identifier_match else stable_alert_job_id(url),
+                        title=title,
+                        company=self.config.company or "Google",
+                        location=detail["location"],
+                        description=detail["description"],
+                        url=url,
+                        apply_url=url,
+                        metadata={"official_first_party": True, "careers_system": "google_careers"},
+                    )
+                )
+        return CollectionBatch(jobs=jobs, requests_made=requests, attribution="Google Careers")
+
+
+def _google_job_detail(text: str, title: str) -> dict[str, str]:
+    start = text.rfind(title)
+    detail = text[start:] if start >= 0 else text
+    footer = detail.find("Information collected and processed as part of your Google Careers profile")
+    if footer >= 0:
+        detail = detail[:footer]
+    location_match = re.search(r"Google place (.*?) bar_chart", detail)
+    location = location_match.group(1).strip(" ;") if location_match else ""
+    return {"location": location, "description": detail}
+
+
+class AmazonJobsCollector(Collector):
+    async def collect(self, since: datetime, cursor: str = "") -> CollectionBatch:
+        if not self.config.url:
+            raise ValueError("Amazon Jobs source requires a filtered search URL")
+        jobs: list[CollectedJob] = []
+        requests = 0
+        page_size = 100
+        for page_number in range(max(1, self.config.max_pages)):
+            response = await self.client.get(
+                "https://www.amazon.jobs/en/search.json",
+                params=amazon_search_params(self.config.url, page_number * page_size, page_size),
+            )
+            requests += 1
+            response.raise_for_status()
+            payload = response.json()
+            provider_items = payload.get("jobs", [])
+            items = [item for item in provider_items if amazon_location_matches(item, self.config)]
+            for item in items:
+                published = parse_datetime(item.get("posted_date")) or _month_date(item.get("posted_date"))
+                description = "\n\n".join(
+                    f"{heading}\n{plain_text(str(item.get(key, '')))}"
+                    for key, heading in (
+                        ("description", "About the job"),
+                        ("basic_qualifications", "Basic qualifications"),
+                        ("preferred_qualifications", "Preferred qualifications"),
+                    )
+                    if item.get(key)
+                )
+                job = CollectedJob(
+                    source=self.config.id,
+                    source_job_id=str(item.get("id_icims") or item.get("id") or item.get("job_path", "")),
+                    title=str(item.get("title", "")).strip(),
+                    company=self.config.company or "Amazon",
+                    location=str(item.get("location", "")),
+                    description=description,
+                    url=urljoin("https://www.amazon.jobs", str(item.get("job_path", ""))),
+                    apply_url=urljoin("https://www.amazon.jobs", str(item.get("job_path", ""))),
+                    employment_type=str(item.get("job_schedule_type", "")),
+                    published_at=published,
+                    updated_at=parse_datetime(item.get("updated_time")),
+                    metadata={
+                        "official_first_party": True,
+                        "business_category": item.get("business_category", ""),
+                        "job_category": item.get("job_category", ""),
+                    },
+                )
+                if is_recent(job, since):
+                    jobs.append(job)
+            if not provider_items or (page_number + 1) * page_size >= int(payload.get("hits", 0)):
+                break
+        return CollectionBatch(jobs=jobs, requests_made=requests, attribution="Amazon Jobs")
+
+
+def _month_date(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.strptime(str(value), "%B %d, %Y").replace(tzinfo=UTC)
+    except ValueError:
+        return None
 
 
 class ArbeitnowCollector(Collector):
@@ -789,6 +1002,8 @@ COLLECTORS: dict[str, type[Collector]] = {
     "wwr": WwrCollector,
     "smartrecruiters": SmartRecruitersCollector,
     "workday": WorkdayCollector,
+    "google_careers": GoogleCareersCollector,
+    "amazon_jobs": AmazonJobsCollector,
     "arbeitnow": ArbeitnowCollector,
     "jobicy": JobicyCollector,
     "remotive": RemotiveCollector,

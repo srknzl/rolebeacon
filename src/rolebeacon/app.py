@@ -5,12 +5,13 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
 
+import httpx
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .collectors import repair_text
+from .collectors import description_blocks, plain_text, repair_text
 from .company import CompanyResearchCoordinator, CompanyResearchService
 from .config import Settings
 from .database import Database
@@ -19,6 +20,7 @@ from .llm import LlmClient, LlmUnavailable
 from .profile import country_catalog
 from .services import ArtifactService, ProfileValidationError, cover_letter_recommendation
 from .setup import LocalModelService, SetupService
+from .source_discovery import SourceDiscoveryError, SourceDiscoveryService, detect_source
 from .sync import Scheduler, SyncService
 
 
@@ -34,9 +36,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     company_research_coordinator = CompanyResearchCoordinator(company_research)
     scheduler = Scheduler(sync_service, app_settings.sync_interval_seconds)
     setup_service = SetupService(app_settings)
+    source_discovery = SourceDiscoveryService()
     local_models = LocalModelService(app_settings)
     templates = Jinja2Templates(directory=app_settings.resource_dir / "templates")
     templates.env.filters["repair_text"] = repair_text
+    templates.env.filters["description_blocks"] = description_blocks
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -56,6 +60,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.company_research = company_research
     app.state.company_research_coordinator = company_research_coordinator
     app.state.setup_service = setup_service
+    app.state.source_discovery = source_discovery
 
     @app.middleware("http")
     async def local_origin_guard(request: Request, call_next: Any) -> Response:
@@ -163,7 +168,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         rows = []
         for source_id, config in configured.items():
             rows.append({"config": config, "state": states.get(source_id, {})})
-        return templates.TemplateResponse(request, "sources.html", page_context(request, sources=rows))
+        preferences = app_settings.load_search_profile()
+        priority_companies = list(
+            dict.fromkeys(preferences.get("priority_companies", []) + preferences.get("company_watchlist", []))
+        )
+        coverage = []
+        for company in priority_companies:
+            matches = [source for source in configured.values() if source.company.casefold() == str(company).casefold()]
+            coverage.append({"company": company, "sources": matches})
+        return templates.TemplateResponse(
+            request, "sources.html", page_context(request, sources=rows, coverage=coverage)
+        )
 
     @app.get("/duplicates", response_class=HTMLResponse)
     async def duplicates_page(request: Request) -> HTMLResponse:
@@ -440,6 +455,49 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def source_metrics_api() -> dict[str, Any]:
         return {"sources": database.list_sources(), "api_usage": database.list_api_usage()}
 
+    @app.post("/api/sources/discover")
+    async def discover_source(request: Request) -> dict[str, Any]:
+        payload = await _payload(request)
+        try:
+            preview = await source_discovery.preview(
+                str(payload.get("careers_url", "")), str(payload.get("company", ""))
+            )
+        except SourceDiscoveryError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except httpx.HTTPStatusError as error:
+            raise HTTPException(
+                status_code=502,
+                detail=f"The detected ATS endpoint returned HTTP {error.response.status_code}",
+            ) from error
+        except httpx.RequestError as error:
+            raise HTTPException(status_code=502, detail=f"Could not reach the detected ATS endpoint: {error}") from error
+        return preview.to_dict()
+
+    @app.post("/api/sources")
+    async def add_source(request: Request) -> Response:
+        payload = await _payload(request)
+        try:
+            source = detect_source(str(payload.get("careers_url", "")), str(payload.get("company", "")))
+        except SourceDiscoveryError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        source.enabled = bool(payload.get("enabled", True))
+        saved, created = app_settings.save_source(source)
+        return JSONResponse(
+            {"source": saved.to_dict(), "created": created},
+            status_code=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+    @app.post("/api/sources/{source_id}/enabled")
+    async def set_source_enabled(source_id: str, request: Request) -> dict[str, Any]:
+        payload = await _payload(request)
+        if not isinstance(payload.get("enabled"), bool):
+            raise HTTPException(status_code=422, detail="enabled must be true or false")
+        try:
+            source = app_settings.set_source_enabled(source_id, bool(payload["enabled"]))
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return {"source": source.to_dict()}
+
     @app.get("/api/duplicates")
     async def duplicates_api() -> dict[str, Any]:
         return {"candidates": database.list_duplicate_candidates()}
@@ -478,7 +536,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             CollectedJob(
                 source="manual", source_job_id=source_job_id, title=str(values["title"]),
                 company=str(values["company"]), location=str(values.get("location", "")),
-                description=str(values.get("description", "")), url=str(values["url"]),
+                description=plain_text(str(values.get("description", ""))), url=str(values["url"]),
                 apply_url=str(values["url"]), remote_scope=str(values.get("remote_scope", "")),
                 published_at=datetime.now(UTC), metadata={"manual_import": True},
             ),

@@ -41,7 +41,16 @@ def test_default_registries_include_first_party_and_budgeted_sources(tmp_path) -
     source_ids = {source.id for source in settings.load_sources()}
     company_names = {item["name"] for item in settings.load_company_registry()}
 
-    assert {"arbeitnow-sponsored", "cloudflare", "gitlab", "adzuna-germany", "jooble-remote", "serpapi-google-jobs-germany"} <= source_ids
+    assert {
+        "arbeitnow-sponsored",
+        "cloudflare",
+        "gitlab",
+        "google-careers-germany",
+        "amazon-jobs-germany",
+        "adzuna-germany",
+        "jooble-remote",
+        "serpapi-google-jobs-germany",
+    } <= source_ids
     assert {"Google", "Microsoft", "Cloudflare", "GitLab", "SAP", "Zalando"} <= company_names
 
 

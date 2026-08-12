@@ -89,6 +89,34 @@
     "ingestion_filter": true
   },
   {
+    "id": "google-careers-germany",
+    "kind": "google_careers",
+    "name": "Google Careers — Germany",
+    "company": "Google",
+    "url": "https://www.google.com/about/careers/applications/jobs/results/?q=Software%20Engineer&location=Germany",
+    "enabled": false,
+    "min_sync_interval_seconds": 14400,
+    "trust_priority": 100,
+    "max_pages": 2,
+    "ingestion_filter": true,
+    "official_first_party": true
+  },
+  {
+    "id": "amazon-jobs-germany",
+    "kind": "amazon_jobs",
+    "name": "Amazon Jobs — Germany",
+    "company": "Amazon",
+    "url": "https://www.amazon.jobs/en/search?base_query=software%20engineer&loc_query=Germany",
+    "enabled": false,
+    "min_sync_interval_seconds": 14400,
+    "trust_priority": 100,
+    "max_pages": 5,
+    "location_filter_code": "DE",
+    "location_filter_text": "Germany",
+    "ingestion_filter": true,
+    "official_first_party": true
+  },
+  {
     "id": "adzuna-germany",
     "kind": "adzuna",
     "name": "Adzuna — Germany",

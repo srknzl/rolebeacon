@@ -86,6 +86,30 @@ RoleBeacon never installs Ollama or downloads a model silently.
 The default recommendation is `qwen3:8b`. `qwen3:14b` is the higher-quality option for machines
 with enough memory, including a 16 GB RTX-class desktop when using an appropriate quantization.
 
+Model quality is measured with a synthetic, privacy-safe scoring evaluation covering a strong backend
+match, a frontend stack mismatch, transferable big-tech experience, ambiguous EMEA eligibility, and a
+hard no-sponsorship blocker. Run the same rubric against any OpenAI-compatible model:
+
+```bash
+uv run rolebeacon evaluate-model \
+  --base-url http://desktop.local:11434/v1 \
+  --model qwen3:14b \
+  --runs 2 \
+  --output qwen3-14b-eval.json
+```
+
+The command fails when score bands, evidence/gap requirements, ranking checks, eligibility handling, or
+schema consistency fail. It reports median and maximum latency so model changes can be compared fairly.
+
+Run the same scenarios through the deterministic engine without any network or model dependency:
+
+```bash
+uv run rolebeacon evaluate-rules --runs 5 --output rules-eval.json
+```
+
+The rules report checks eligibility gates, score bands, dimension bounds and sums, ranking order, blocker
+verdicts, and exact repeatability across runs.
+
 The same actions are available from the CLI:
 
 ```bash
@@ -97,9 +121,10 @@ uv run rolebeacon model test --model qwen3:8b
 
 ### Custom OpenAI-compatible endpoint
 
-Choose **Custom** in setup and provide a base URL, model, and optional API key. This works with
-Ollama on another LAN machine, LM Studio, `llama.cpp`'s `llama-server`, and compatible hosted
-services. The browser never receives the stored API key.
+Choose **Ollama** for local or LAN Ollama servers so RoleBeacon can use Ollama's native structured
+output and `think: false` controls. Choose **Custom** for LM Studio, `llama.cpp`'s `llama-server`,
+or another OpenAI-compatible service, then provide its base URL, model, and optional API key. The
+browser never receives the stored API key.
 
 RoleBeacon does not yet download or manage `llama.cpp` binaries itself. A future managed runtime
 can implement the existing provider boundary without changing scoring or profile formats.
@@ -167,11 +192,22 @@ Built-in source adapters include:
 - Himalayas
 - We Work Remotely
 - Greenhouse, Lever, Ashby, SmartRecruiters, and Workday public career endpoints
+- Google Careers and Amazon Jobs first-party public-site connectors
 - optional Adzuna, Jooble, and SerpApi adapters
 - optional LinkedIn Job Alert ingestion through a user-owned Gmail label
 
 Only sources selected in setup are enabled. LinkedIn authenticated pages are never scraped.
 See [docs/data-sources.md](docs/data-sources.md) before adding or enabling a source.
+
+The Sources page also accepts a public company careers URL. RoleBeacon detects the connector, calls only
+an allow-listed provider endpoint, previews sample jobs, and saves the source after confirmation. Google
+Careers uses server-rendered public job pages; Amazon Jobs uses its public site JSON response. These
+first-party contracts are health-checked and isolated because they are not documented public APIs.
+
+Job descriptions are normalized without an LLM. The ingestion layer repairs common encoding damage,
+preserves paragraphs and source lists, removes non-content script/style markup, and the detail page
+renders recognized headings, bullet groups, and bounded paragraphs. This keeps the original facts
+available to scoring while making long postings readable and avoiding model-authored rewrites.
 
 ## Résumés and cover letters
 
@@ -238,6 +274,9 @@ Core endpoints:
 - `POST /api/sync`
 - `GET /api/sync/status`
 - `GET /api/model/status`
+- `POST /api/sources/discover`
+- `POST /api/sources`
+- `POST /api/sources/{id}/enabled`
 - `GET /api/jobs`
 - `POST /api/jobs/{id}/feedback`
 - `POST /api/jobs/{id}/resume`
