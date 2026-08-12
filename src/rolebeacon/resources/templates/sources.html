@@ -12,6 +12,61 @@
 
 <div id="source-message" class="toast" role="status" aria-live="polite" hidden></div>
 
+<section class="source-catalog-section">
+  <div class="section-heading source-section-heading">
+    <div><p class="eyebrow">CURATED CATALOG</p><h2>Source packs</h2></div>
+    <span>Registry verified {{ source_catalog.verified_at }}</span>
+  </div>
+  <p class="muted source-catalog-intro">Start with a focused pack instead of hunting for ATS URLs. Adding a pack stores its official boards locally; enable it only when you are ready for the next refresh and its scoring workload.</p>
+  <div class="source-pack-grid">
+    {% for pack in source_catalog.packs %}
+    <article class="source-pack-card" data-source-pack="{{ pack.id }}">
+      <div class="source-pack-heading">
+        <div><h3>{{ pack.name }}</h3>{% if pack.recommended %}<span class="status status-interested">recommended</span>{% endif %}</div>
+        <strong>{{ pack.source_count }}</strong>
+      </div>
+      <p>{{ pack.description }}</p>
+      <div class="source-pack-progress"><span style="width:{{ (100 * pack.installed_count / pack.source_count)|round|int }}%"></span></div>
+      <small>{{ pack.installed_count }} added · {{ pack.enabled_count }} enabled</small>
+      <details>
+        <summary>View companies</summary>
+        <div class="source-pack-companies">{% for source in pack.sources %}<span class="source-company-chip {% if source.enabled %}is-enabled{% elif source.installed %}is-installed{% endif %}">{{ source.company }}</span>{% endfor %}</div>
+      </details>
+      <div class="source-pack-actions">
+          <button class="button source-pack-install" type="button" data-pack-id="{{ pack.id }}" data-enable="false">{{ 'Update pack' if pack.installed_count == pack.source_count else 'Add pack' }}</button>
+          <button class="button button-primary source-pack-install" type="button" data-pack-id="{{ pack.id }}" data-enable="true">{{ 'Enable pack' if pack.installed_count == pack.source_count else 'Add & enable' }}</button>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+  <details class="source-library">
+    <summary>Browse all {{ source_catalog.sources|length }} verified company boards</summary>
+    <label class="source-library-search">Search the catalog
+      <input id="source-catalog-search" type="search" placeholder="Company or connector, such as MongoDB or Ashby">
+    </label>
+    <div id="source-library-list" class="source-library-list">
+      {% for source in source_catalog.sources %}
+      <article class="source-library-row" data-source-search="{{ source.company|lower }} {{ source.connector|lower }}">
+        <div><strong>{{ source.company }}</strong><span>{{ source.connector|replace('_', ' ') }}</span></div>
+        <a href="{{ source.url }}" target="_blank" rel="noopener" title="Open the official public careers board">Official board ↗</a>
+        <span class="status {% if source.enabled %}status-interested{% elif source.installed %}status-running{% endif %}">{{ 'enabled' if source.enabled else 'added' if source.installed else 'available' }}</span>
+        <div class="source-library-actions">
+          <button class="button button-quiet source-entry-install" type="button" data-entry-id="{{ source.id }}" data-enable="false">Add</button>
+          <button class="button source-entry-install" type="button" data-entry-id="{{ source.id }}" data-enable="true">Add &amp; enable</button>
+        </div>
+      </article>
+      {% endfor %}
+      <p id="source-library-empty" class="muted" hidden>No verified source matches this search.</p>
+    </div>
+  </details>
+  {% if source_catalog.coverage_gaps %}
+  <details class="source-help source-gap-list">
+    <summary>Known first-party coverage gaps</summary>
+    <ul>{% for gap in source_catalog.coverage_gaps %}<li><strong>{{ gap.company }}</strong> — {{ gap.reason }}</li>{% endfor %}</ul>
+  </details>
+  {% endif %}
+</section>
+
 <section class="panel source-connect-panel">
   <div class="panel-heading">
     <div>
@@ -191,6 +246,60 @@
       return;
     }
     window.location.reload();
+  }));
+
+  document.querySelectorAll(".source-pack-install").forEach(button => button.addEventListener("click", async () => {
+    const packId = button.dataset.packId;
+    const enabled = button.dataset.enable === "true";
+    if (packId === "tech-company-catalog" && enabled && !window.confirm("Enable all verified company boards? The next refresh may collect thousands of jobs and use substantial model time.")) return;
+    const cardButtons = document.querySelectorAll(`[data-source-pack="${CSS.escape(packId)}"] .source-pack-install`);
+    cardButtons.forEach(item => { item.disabled = true; });
+    button.textContent = enabled ? "Enabling…" : "Adding…";
+    const response = await fetch(`/api/source-packs/${encodeURIComponent(packId)}/install`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({enabled}),
+    });
+    if (!response.ok) {
+      cardButtons.forEach(item => { item.disabled = false; });
+      showSourceMessage(await sourceError(response));
+      return;
+    }
+    const value = await response.json();
+    const action = enabled ? "added and enabled" : "added";
+    showSourceMessage(`${value.source_ids.length} sources ${action}. ${value.added} new, ${value.updated} already present.`, true);
+    setTimeout(() => window.location.reload(), 700);
+  }));
+
+  const sourceCatalogSearch = document.getElementById("source-catalog-search");
+  sourceCatalogSearch.addEventListener("input", () => {
+    const query = sourceCatalogSearch.value.trim().toLowerCase();
+    let visible = 0;
+    document.querySelectorAll(".source-library-row").forEach(row => {
+      row.hidden = !row.dataset.sourceSearch.includes(query);
+      if (!row.hidden) visible += 1;
+    });
+    document.getElementById("source-library-empty").hidden = visible > 0;
+  });
+
+  document.querySelectorAll(".source-entry-install").forEach(button => button.addEventListener("click", async () => {
+    const entryId = button.dataset.entryId;
+    const enabled = button.dataset.enable === "true";
+    const rowButtons = document.querySelectorAll(`[data-entry-id="${CSS.escape(entryId)}"]`);
+    rowButtons.forEach(item => { item.disabled = true; });
+    const response = await fetch(`/api/source-catalog/${encodeURIComponent(entryId)}/install`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({enabled}),
+    });
+    if (!response.ok) {
+      rowButtons.forEach(item => { item.disabled = false; });
+      showSourceMessage(await sourceError(response));
+      return;
+    }
+    const value = await response.json();
+    showSourceMessage(`${value.source.name} ${enabled ? "added and enabled" : "added"}.`, true);
+    setTimeout(() => window.location.reload(), 650);
   }));
 </script>
 {% endblock %}

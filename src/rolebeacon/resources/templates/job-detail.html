@@ -2,6 +2,7 @@
 {% block title %}{{ job.title }} · RoleBeacon{% endblock %}
 {% block content %}
 <a class="back-link" href="/jobs">← All jobs</a>
+<div id="job-message" class="toast" role="status" aria-live="polite" hidden></div>
 <section class="detail-header">
   <div>
     <div class="badge-row"><span class="route-badge" title="The search strategy that surfaced this job.">{{ job.route or 'UNCLASSIFIED' }}</span><span class="status status-{{ job.status }}" title="Your personal pipeline decision for this job.">{{ job.status }}</span><span class="status status-{{ job.eligibility_status or 'unknown' }}" title="Eligibility is checked before fit and cannot be overridden by a high score.">{{ job.eligibility_status or 'eligibility unknown' }}</span></div>
@@ -27,7 +28,7 @@
         {% for block in job.description|description_blocks %}
           {% if block.kind == 'heading' %}<h3>{{ block.text }}</h3>
           {% elif block.kind == 'list' %}<ul>{% for item in block['items'] %}<li>{{ item }}</li>{% endfor %}</ul>
-          {% else %}<p>{{ block.text }}</p>{% endif %}
+          {% else %}<p>{% if block.segments %}{% for segment in block.segments %}{% if segment.kind == 'strong' %}<strong>{{ segment.text }}</strong>{% elif segment.kind == 'emphasis' %}<em>{{ segment.text }}</em>{% elif segment.kind == 'link' %}<a href="{{ segment.url }}" target="_blank" rel="noopener noreferrer">{{ segment.text }}</a>{% else %}{{ segment.text }}{% endif %}{% endfor %}{% else %}{{ block.text }}{% endif %}</p>{% endif %}
         {% else %}<p class="muted">No description was provided by this source.</p>
         {% endfor %}
       </div>
@@ -36,7 +37,7 @@
   <aside class="detail-sidebar">
     <div class="panel sticky-panel">
       <h2>Decision</h2>
-      <form action="/api/jobs/{{ job.id }}/feedback" method="post" class="decision-grid">
+      <form action="/api/jobs/{{ job.id }}/feedback" method="post" class="decision-grid" data-decision-form>
         <button name="status" value="interested" class="button button-primary" title="Keep this job in your shortlist for follow-up.">Interested</button>
         <button name="status" value="maybe" class="button" title="Keep this job visible without committing it to your shortlist.">Maybe</button>
         <button name="status" value="rejected" class="button button-quiet" title="Hide this job from recommendations. The original posting is not changed.">Reject</button>
@@ -46,18 +47,33 @@
       {% if job.company_id %}
       <a class="artifact-link" href="/companies/{{ job.company_id }}">Open company profile · {{ job.company_score }}/100</a>
       {% else %}
-      <p class="muted">Company fit is kept separate from job fit and cannot override an authorization blocker.</p>
+      <p class="muted">Research this employer's remote-work, relocation, sponsorship, engineering, and compensation signals.</p>
       {% endif %}
       <form action="/api/jobs/{{ job.id }}/research-company" method="post" data-company-research data-research-start-url="/api/jobs/{{ job.id }}/research-company/start"><button class="button wide" title="Collect provenance-backed company evidence. It does not change job eligibility.">{{ 'Refresh' if job.company_id else 'Research' }} company</button></form>
       <hr>
       <h2>Application kit</h2>
+      <p class="safety-note">The tailored résumé uses only your locally stored candidate profile and this job description. It works without an LLM and never invents experience.</p>
       {% if application and application.resume_path %}<a class="artifact-link" href="/artifacts/{{ job.id }}/resume.pdf" title="Open the locally generated resume PDF for review.">Open tailored resume</a>{% else %}<form action="/api/jobs/{{ job.id }}/resume" method="post"><button class="button wide" title="Create a factual resume draft using only verified profile evidence.">Generate tailored resume</button></form>{% endif %}
       <div class="recommendation {% if cover_letter_recommended %}recommended{% endif %}"><strong>{{ 'Recommended' if cover_letter_recommended else 'Optional' }} cover letter</strong><p>{{ cover_letter_reason }}</p></div>
-      {% if application and application.cover_letter_path %}<a class="artifact-link" href="/artifacts/{{ job.id }}/cover-letter.txt" title="Open the locally generated cover letter for review.">Open cover letter</a>{% else %}<form action="/api/jobs/{{ job.id }}/cover-letter" method="post"><button class="button wide" title="Create an on-demand factual cover letter. You must review it before use.">Generate cover letter</button></form>{% endif %}
+      {% if application and application.cover_letter_path %}<a class="artifact-link" href="/artifacts/{{ job.id }}/cover-letter.txt" title="Open the locally generated cover letter for review.">Open cover letter</a>{% elif llm_enabled %}<form action="/api/jobs/{{ job.id }}/cover-letter" method="post"><button class="button wide" title="Create an on-demand factual cover letter. You must review it before use.">Generate cover letter</button></form>{% else %}<button class="button wide" disabled title="Choose and test an LLM in Settings to generate a cover letter.">Cover letter requires an LLM</button>{% endif %}
       <form action="/api/jobs/{{ job.id }}/prepare-application" method="post"><button class="button button-primary wide" title="Prepare supported form fields in a browser. RoleBeacon never submits an application.">Prepare application</button></form>
       <a class="button button-quiet wide" href="{{ job.apply_url or job.canonical_url }}" target="_blank" rel="noopener" title="Open the original posting in a new tab for your review and final submission.">Open original posting ↗</a>
       <p class="safety-note">RoleBeacon never submits the application. Review every answer and press Submit yourself.</p>
     </div>
   </aside>
 </section>
+<script>
+  const decisionForm = document.querySelector("[data-decision-form]");
+  const jobMessage = document.getElementById("job-message");
+  const showJobMessage = text => { jobMessage.textContent = text; jobMessage.className = "toast alert-success"; jobMessage.hidden = false; setTimeout(() => { jobMessage.hidden = true; }, 4000); };
+  decisionForm?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const submitter = event.submitter;
+    if (!submitter) return;
+    const response = await fetch(decisionForm.action, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({status: submitter.value})});
+    if (!response.ok) { showJobMessage("Could not save this decision."); return; }
+    document.querySelectorAll(".detail-header .status").forEach(item => { if (["new", "interested", "maybe", "rejected"].some(value => item.classList.contains(`status-${value}`))) { item.className = `status status-${submitter.value}`; item.textContent = submitter.value; } });
+    showJobMessage(`Marked as ${submitter.value}.`);
+  });
+</script>
 {% endblock %}

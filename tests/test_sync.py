@@ -7,7 +7,7 @@ from rolebeacon.config import Settings
 from rolebeacon.database import Database
 from rolebeacon.domain import CollectedJob
 from rolebeacon.llm import LlmClient
-from rolebeacon.sync import SyncService, deduplicate_source_jobs
+from rolebeacon.sync import SyncService, deduplicate_source_jobs, personalize_source
 
 
 def test_incremental_window_overlaps_last_success(tmp_path) -> None:
@@ -52,6 +52,22 @@ def test_collector_duplicates_are_collapsed_before_upsert() -> None:
 
     assert len(result) == 1
     assert result[0].description == "Updated representation"
+
+
+def test_first_party_sources_use_saved_roles_and_relocation_targets(tmp_path) -> None:
+    settings = Settings.load(tmp_path)
+    google = next(source for source in settings.load_sources() if source.kind == "google_careers")
+    amazon = next(source for source in settings.load_sources() if source.kind == "amazon_jobs")
+    search = {"target_roles": ["Backend Engineer", "Platform Engineer"]}
+    mobility = {"relocation_targets": [{"country_code": "DE", "country_name": "Germany"}]}
+
+    personalized_google = personalize_source(google, search, mobility)
+    personalized_amazon = personalize_source(amazon, search, mobility)
+
+    assert "q=Backend+Engineer+OR+Platform+Engineer" in personalized_google.url
+    assert "location=Germany" in personalized_google.url
+    assert "base_query=Backend+Engineer+OR+Platform+Engineer" in personalized_amazon.url
+    assert "loc_query=Germany" in personalized_amazon.url
 
 
 async def test_unavailable_selected_llm_stops_refresh_before_collection_or_rules_fallback(tmp_path, monkeypatch) -> None:

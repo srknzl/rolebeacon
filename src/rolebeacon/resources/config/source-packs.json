@@ -1,0 +1,173 @@
+{
+  "schema_version": "1.0",
+  "verified_at": "2026-08-13",
+  "packs": [
+    {
+      "id": "big-tech",
+      "name": "Big tech and frontier AI",
+      "description": "Official boards for large technology companies and high-signal AI employers.",
+      "recommended": true,
+      "source_ids": [
+        "google-software-germany", "amazon-software-germany", "openai", "databricks",
+        "cloudflare", "mongodb", "datadog", "figma", "coinbase", "reddit"
+      ]
+    },
+    {
+      "id": "developer-infrastructure",
+      "name": "Developer infrastructure",
+      "description": "Cloud, data, observability, database, platform, and developer-tool companies.",
+      "recommended": true,
+      "source_ids": [
+        "cloudflare", "gitlab", "datadog", "mongodb", "elastic", "grafana-labs", "canonical",
+        "cockroach-labs", "postman", "tailscale", "vercel", "supabase"
+      ]
+    },
+    {
+      "id": "high-growth-ai",
+      "name": "High-growth AI and SaaS",
+      "description": "Frontier AI labs and engineering-heavy product companies using public Ashby boards.",
+      "recommended": false,
+      "source_ids": [
+        "openai", "cursor", "perplexity", "replit", "ramp", "linear", "supabase", "posthog", "resend"
+      ]
+    },
+    {
+      "id": "remote-friendly-tech",
+      "name": "Remote-friendly engineering",
+      "description": "Companies known for distributed or location-flexible engineering teams; every role is still checked individually.",
+      "recommended": false,
+      "source_ids": ["gitlab", "grafana-labs", "canonical", "tailscale", "vercel", "posthog"]
+    },
+    {
+      "id": "europe-tech",
+      "name": "Europe technology",
+      "description": "European product, infrastructure, and fintech companies with currently active public boards.",
+      "recommended": true,
+      "source_ids": [
+        "jetbrains", "contentful", "n26", "celonis", "sumup", "getyourguide", "hellofresh",
+        "wise", "elastic", "grafana-labs", "canonical"
+      ]
+    },
+    {
+      "id": "ai-data-infrastructure",
+      "name": "AI and data infrastructure",
+      "description": "AI labs, databases, orchestration, inference, and data-platform companies.",
+      "recommended": true,
+      "source_ids": [
+        "openai", "cohere", "cursor", "perplexity", "modal", "midjourney", "runway", "elevenlabs",
+        "langchain", "harvey", "databricks", "mongodb", "clickhouse", "temporal", "airbyte", "pinecone",
+        "weaviate", "motherduck", "neon"
+      ]
+    },
+    {
+      "id": "fintech",
+      "name": "Fintech",
+      "description": "Payments, banking, financial infrastructure, and consumer-finance engineering teams.",
+      "recommended": false,
+      "source_ids": [
+        "stripe", "block", "coinbase", "ramp", "brex", "affirm", "robinhood", "chime", "n26",
+        "wise", "sumup"
+      ]
+    },
+    {
+      "id": "tech-company-catalog",
+      "name": "Complete tech company catalog",
+      "description": "Every currently verified company board in RoleBeacon. Add first, then enable selectively to control sync volume and model usage.",
+      "recommended": false,
+      "source_ids": [
+        "google-software-germany", "amazon-software-germany", "cloudflare", "gitlab", "datadog",
+        "mongodb", "elastic", "grafana-labs", "canonical", "figma", "dropbox", "cockroach-labs",
+        "postman", "databricks", "coinbase", "tailscale", "vercel", "discord", "twilio", "reddit",
+        "roblox", "duolingo", "openai", "linear", "supabase", "posthog", "ramp", "replit", "cursor",
+        "perplexity", "resend", "stripe", "asana", "lyft", "okta", "pinterest", "contentful", "n26",
+        "airbnb", "celonis", "block", "pagerduty", "new-relic", "fastly", "epic-games", "gusto",
+        "robinhood", "affirm", "brex", "sumup", "chime", "getyourguide", "hellofresh", "jetbrains",
+        "cohere", "modal", "railway", "motherduck", "neon", "render", "airbyte", "pinecone", "temporal",
+        "weaviate", "clickhouse", "runway", "midjourney", "langchain", "vanta", "notion", "harvey",
+        "elevenlabs", "drata", "wise"
+      ]
+    }
+  ],
+  "sources": [
+    {"id":"google-software-germany","company":"Google","name":"Google Software Engineering — Germany","url":"https://www.google.com/about/careers/applications/jobs/results/?q=Software%20Engineer&location=Germany","connector":"google_careers"},
+    {"id":"amazon-software-germany","company":"Amazon","name":"Amazon Software Engineering — Germany","url":"https://www.amazon.jobs/en/search?base_query=software%20engineer&loc_query=Germany","connector":"amazon_jobs"},
+    {"id":"cloudflare","company":"Cloudflare","name":"Cloudflare","url":"https://job-boards.greenhouse.io/cloudflare","connector":"greenhouse"},
+    {"id":"gitlab","company":"GitLab","name":"GitLab","url":"https://job-boards.greenhouse.io/gitlab","connector":"greenhouse"},
+    {"id":"datadog","company":"Datadog","name":"Datadog","url":"https://job-boards.greenhouse.io/datadog","connector":"greenhouse"},
+    {"id":"mongodb","company":"MongoDB","name":"MongoDB","url":"https://job-boards.greenhouse.io/mongodb","connector":"greenhouse"},
+    {"id":"elastic","company":"Elastic","name":"Elastic","url":"https://job-boards.greenhouse.io/elastic","connector":"greenhouse"},
+    {"id":"grafana-labs","company":"Grafana Labs","name":"Grafana Labs","url":"https://job-boards.greenhouse.io/grafanalabs","connector":"greenhouse"},
+    {"id":"canonical","company":"Canonical","name":"Canonical","url":"https://job-boards.greenhouse.io/canonical","connector":"greenhouse"},
+    {"id":"figma","company":"Figma","name":"Figma","url":"https://job-boards.greenhouse.io/figma","connector":"greenhouse"},
+    {"id":"dropbox","company":"Dropbox","name":"Dropbox","url":"https://job-boards.greenhouse.io/dropbox","connector":"greenhouse"},
+    {"id":"cockroach-labs","company":"Cockroach Labs","name":"Cockroach Labs","url":"https://job-boards.greenhouse.io/cockroachlabs","connector":"greenhouse"},
+    {"id":"postman","company":"Postman","name":"Postman","url":"https://job-boards.greenhouse.io/postman","connector":"greenhouse"},
+    {"id":"databricks","company":"Databricks","name":"Databricks","url":"https://job-boards.greenhouse.io/databricks","connector":"greenhouse"},
+    {"id":"coinbase","company":"Coinbase","name":"Coinbase","url":"https://job-boards.greenhouse.io/coinbase","connector":"greenhouse"},
+    {"id":"tailscale","company":"Tailscale","name":"Tailscale","url":"https://job-boards.greenhouse.io/tailscale","connector":"greenhouse"},
+    {"id":"vercel","company":"Vercel","name":"Vercel","url":"https://job-boards.greenhouse.io/vercel","connector":"greenhouse"},
+    {"id":"discord","company":"Discord","name":"Discord","url":"https://job-boards.greenhouse.io/discord","connector":"greenhouse"},
+    {"id":"twilio","company":"Twilio","name":"Twilio","url":"https://job-boards.greenhouse.io/twilio","connector":"greenhouse"},
+    {"id":"reddit","company":"Reddit","name":"Reddit","url":"https://job-boards.greenhouse.io/reddit","connector":"greenhouse"},
+    {"id":"roblox","company":"Roblox","name":"Roblox","url":"https://job-boards.greenhouse.io/roblox","connector":"greenhouse"},
+    {"id":"duolingo","company":"Duolingo","name":"Duolingo","url":"https://job-boards.greenhouse.io/duolingo","connector":"greenhouse"},
+    {"id":"openai","company":"OpenAI","name":"OpenAI","url":"https://jobs.ashbyhq.com/openai","connector":"ashby"},
+    {"id":"linear","company":"Linear","name":"Linear","url":"https://jobs.ashbyhq.com/linear","connector":"ashby"},
+    {"id":"supabase","company":"Supabase","name":"Supabase","url":"https://jobs.ashbyhq.com/supabase","connector":"ashby"},
+    {"id":"posthog","company":"PostHog","name":"PostHog","url":"https://jobs.ashbyhq.com/posthog","connector":"ashby"},
+    {"id":"ramp","company":"Ramp","name":"Ramp","url":"https://jobs.ashbyhq.com/ramp","connector":"ashby"},
+    {"id":"replit","company":"Replit","name":"Replit","url":"https://jobs.ashbyhq.com/replit","connector":"ashby"},
+    {"id":"cursor","company":"Cursor","name":"Cursor","url":"https://jobs.ashbyhq.com/cursor","connector":"ashby"},
+    {"id":"perplexity","company":"Perplexity","name":"Perplexity","url":"https://jobs.ashbyhq.com/perplexity","connector":"ashby"},
+    {"id":"resend","company":"Resend","name":"Resend","url":"https://jobs.ashbyhq.com/resend","connector":"ashby"},
+    {"id":"stripe","company":"Stripe","name":"Stripe","url":"https://job-boards.greenhouse.io/stripe","connector":"greenhouse"},
+    {"id":"asana","company":"Asana","name":"Asana","url":"https://job-boards.greenhouse.io/asana","connector":"greenhouse"},
+    {"id":"lyft","company":"Lyft","name":"Lyft","url":"https://job-boards.greenhouse.io/lyft","connector":"greenhouse"},
+    {"id":"okta","company":"Okta","name":"Okta","url":"https://job-boards.greenhouse.io/okta","connector":"greenhouse"},
+    {"id":"pinterest","company":"Pinterest","name":"Pinterest","url":"https://job-boards.greenhouse.io/pinterest","connector":"greenhouse"},
+    {"id":"contentful","company":"Contentful","name":"Contentful","url":"https://job-boards.greenhouse.io/contentful","connector":"greenhouse"},
+    {"id":"n26","company":"N26","name":"N26","url":"https://job-boards.greenhouse.io/n26","connector":"greenhouse"},
+    {"id":"airbnb","company":"Airbnb","name":"Airbnb","url":"https://job-boards.greenhouse.io/airbnb","connector":"greenhouse"},
+    {"id":"celonis","company":"Celonis","name":"Celonis","url":"https://job-boards.greenhouse.io/celonis","connector":"greenhouse"},
+    {"id":"block","company":"Block","name":"Block","url":"https://job-boards.greenhouse.io/block","connector":"greenhouse"},
+    {"id":"pagerduty","company":"PagerDuty","name":"PagerDuty","url":"https://job-boards.greenhouse.io/pagerduty","connector":"greenhouse"},
+    {"id":"new-relic","company":"New Relic","name":"New Relic","url":"https://job-boards.greenhouse.io/newrelic","connector":"greenhouse"},
+    {"id":"fastly","company":"Fastly","name":"Fastly","url":"https://job-boards.greenhouse.io/fastly","connector":"greenhouse"},
+    {"id":"epic-games","company":"Epic Games","name":"Epic Games","url":"https://job-boards.greenhouse.io/epicgames","connector":"greenhouse"},
+    {"id":"gusto","company":"Gusto","name":"Gusto","url":"https://job-boards.greenhouse.io/gusto","connector":"greenhouse"},
+    {"id":"robinhood","company":"Robinhood","name":"Robinhood","url":"https://job-boards.greenhouse.io/robinhood","connector":"greenhouse"},
+    {"id":"affirm","company":"Affirm","name":"Affirm","url":"https://job-boards.greenhouse.io/affirm","connector":"greenhouse"},
+    {"id":"brex","company":"Brex","name":"Brex","url":"https://job-boards.greenhouse.io/brex","connector":"greenhouse"},
+    {"id":"sumup","company":"SumUp","name":"SumUp","url":"https://job-boards.greenhouse.io/sumup","connector":"greenhouse"},
+    {"id":"chime","company":"Chime","name":"Chime","url":"https://job-boards.greenhouse.io/chime","connector":"greenhouse"},
+    {"id":"getyourguide","company":"GetYourGuide","name":"GetYourGuide","url":"https://job-boards.greenhouse.io/getyourguide","connector":"greenhouse"},
+    {"id":"hellofresh","company":"HelloFresh","name":"HelloFresh","url":"https://job-boards.greenhouse.io/helloFresh","connector":"greenhouse"},
+    {"id":"jetbrains","company":"JetBrains","name":"JetBrains","url":"https://job-boards.greenhouse.io/jetbrains","connector":"greenhouse"},
+    {"id":"wise","company":"Wise","name":"Wise","url":"https://job-boards.greenhouse.io/wise","connector":"greenhouse"},
+    {"id":"cohere","company":"Cohere","name":"Cohere","url":"https://jobs.ashbyhq.com/cohere","connector":"ashby"},
+    {"id":"modal","company":"Modal","name":"Modal","url":"https://jobs.ashbyhq.com/modal","connector":"ashby"},
+    {"id":"railway","company":"Railway","name":"Railway","url":"https://jobs.ashbyhq.com/railway","connector":"ashby"},
+    {"id":"motherduck","company":"MotherDuck","name":"MotherDuck","url":"https://jobs.ashbyhq.com/motherduck","connector":"ashby"},
+    {"id":"neon","company":"Neon","name":"Neon","url":"https://jobs.ashbyhq.com/neon","connector":"ashby"},
+    {"id":"render","company":"Render","name":"Render","url":"https://jobs.ashbyhq.com/render","connector":"ashby"},
+    {"id":"airbyte","company":"Airbyte","name":"Airbyte","url":"https://jobs.ashbyhq.com/airbyte","connector":"ashby"},
+    {"id":"pinecone","company":"Pinecone","name":"Pinecone","url":"https://jobs.ashbyhq.com/pinecone","connector":"ashby"},
+    {"id":"temporal","company":"Temporal","name":"Temporal","url":"https://jobs.ashbyhq.com/temporal","connector":"ashby"},
+    {"id":"weaviate","company":"Weaviate","name":"Weaviate","url":"https://jobs.ashbyhq.com/weaviate","connector":"ashby"},
+    {"id":"clickhouse","company":"ClickHouse","name":"ClickHouse","url":"https://jobs.ashbyhq.com/clickhouse","connector":"ashby"},
+    {"id":"runway","company":"Runway","name":"Runway","url":"https://jobs.ashbyhq.com/runway","connector":"ashby"},
+    {"id":"midjourney","company":"Midjourney","name":"Midjourney","url":"https://jobs.ashbyhq.com/midjourney","connector":"ashby"},
+    {"id":"langchain","company":"LangChain","name":"LangChain","url":"https://jobs.ashbyhq.com/langchain","connector":"ashby"},
+    {"id":"vanta","company":"Vanta","name":"Vanta","url":"https://jobs.ashbyhq.com/vanta","connector":"ashby"},
+    {"id":"notion","company":"Notion","name":"Notion","url":"https://jobs.ashbyhq.com/notion","connector":"ashby"},
+    {"id":"harvey","company":"Harvey","name":"Harvey","url":"https://jobs.ashbyhq.com/harvey","connector":"ashby"},
+    {"id":"elevenlabs","company":"ElevenLabs","name":"ElevenLabs","url":"https://jobs.ashbyhq.com/elevenlabs","connector":"ashby"},
+    {"id":"drata","company":"Drata","name":"Drata","url":"https://jobs.ashbyhq.com/drata","connector":"ashby"}
+  ],
+  "coverage_gaps": [
+    {"company":"Microsoft","url":"https://apply.careers.microsoft.com/careers","reason":"Dedicated first-party connector required"},
+    {"company":"Meta","url":"https://www.metacareers.com/jobs","reason":"Dedicated first-party connector required"},
+    {"company":"Apple","url":"https://jobs.apple.com/en-us/search","reason":"Dedicated first-party connector required"},
+    {"company":"Netflix","url":"https://jobs.netflix.com/search","reason":"Dedicated first-party connector required"}
+  ]
+}

@@ -156,12 +156,42 @@ def _append_paragraphs(blocks: list[dict[str, Any]], value: str) -> None:
     for sentence in sentences:
         candidate = f"{chunk} {sentence}".strip()
         if chunk and len(candidate) > 620:
-            blocks.append({"kind": "paragraph", "text": chunk})
+            blocks.append(_paragraph_block(chunk))
             chunk = sentence
         else:
             chunk = candidate
     if chunk:
-        blocks.append({"kind": "paragraph", "text": chunk})
+        blocks.append(_paragraph_block(chunk))
+
+
+def _paragraph_block(value: str) -> dict[str, Any]:
+    block: dict[str, Any] = {"kind": "paragraph", "text": value}
+    segments = _safe_markdown_segments(value)
+    if any(segment["kind"] != "text" for segment in segments):
+        block["segments"] = segments
+    return block
+
+
+def _safe_markdown_segments(value: str) -> list[dict[str, str]]:
+    """Parse a small Markdown subset into auto-escaped template data; raw HTML is never trusted."""
+    pattern = re.compile(r"(\[[^\]\n]+\]\(https?://[^)\s]+\)|\*\*[^*\n]+\*\*|__[^_\n]+__|(?<!\*)\*[^*\n]+\*(?!\*))")
+    segments: list[dict[str, str]] = []
+    position = 0
+    for match in pattern.finditer(value):
+        if match.start() > position:
+            segments.append({"kind": "text", "text": value[position:match.start()]})
+        token = match.group(0)
+        link = re.fullmatch(r"\[([^\]\n]+)\]\((https?://[^)\s]+)\)", token)
+        if link:
+            segments.append({"kind": "link", "text": link.group(1), "url": link.group(2)})
+        elif token.startswith(("**", "__")):
+            segments.append({"kind": "strong", "text": token[2:-2]})
+        else:
+            segments.append({"kind": "emphasis", "text": token[1:-1]})
+        position = match.end()
+    if position < len(value):
+        segments.append({"kind": "text", "text": value[position:]})
+    return segments or [{"kind": "text", "text": value}]
 
 
 def repair_text(value: str | None) -> str:

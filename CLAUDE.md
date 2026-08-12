@@ -34,6 +34,11 @@ an LLM must never be required for collection, deterministic scoring, or setup.
   clearance, or explicit geographic restrictions.
 - Country-scoped remote wording is regional, not worldwide. Unknown facts remain unknown.
 - Company fit and job fit stay separate; company fit contributes at most 20% of opportunity fit.
+- Company search may discover official domains and pages, but search snippets and third-party profiles
+  are never evidence. Score only successfully fetched official pages and collected job postings.
+- Deduplicate company evidence and describe its coverage; never present source count as model confidence.
+  Keep missing company facts unknown and avoid catalog fields that do not improve hiring decisions.
+- No-key company research must remain functional when Wikidata or another discovery provider is offline.
 - Version scoring behavior so changed rules or prompts requeue stale evaluations exactly once.
 - Use official pages, documented APIs, or user-owned messages by default. Document terms,
   attribution, polling limits, and canonical URLs for every source.

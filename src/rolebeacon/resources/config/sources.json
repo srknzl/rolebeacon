@@ -91,7 +91,7 @@
   {
     "id": "google-careers-germany",
     "kind": "google_careers",
-    "name": "Google Careers — Germany",
+    "name": "Google Careers",
     "company": "Google",
     "url": "https://www.google.com/about/careers/applications/jobs/results/?q=Software%20Engineer&location=Germany",
     "enabled": false,
@@ -104,7 +104,7 @@
   {
     "id": "amazon-jobs-germany",
     "kind": "amazon_jobs",
-    "name": "Amazon Jobs — Germany",
+    "name": "Amazon Jobs",
     "company": "Amazon",
     "url": "https://www.amazon.jobs/en/search?base_query=software%20engineer&loc_query=Germany",
     "enabled": false,

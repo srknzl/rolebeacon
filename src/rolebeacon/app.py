@@ -20,6 +20,7 @@ from .llm import LlmClient, LlmUnavailable
 from .profile import country_catalog
 from .services import ArtifactService, ProfileValidationError, cover_letter_recommendation
 from .setup import LocalModelService, SetupService
+from .source_catalog import SourceCatalog, SourceCatalogError
 from .source_discovery import SourceDiscoveryError, SourceDiscoveryService, detect_source
 from .sync import Scheduler, SyncService
 
@@ -37,6 +38,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     scheduler = Scheduler(sync_service, app_settings.sync_interval_seconds)
     setup_service = SetupService(app_settings)
     source_discovery = SourceDiscoveryService()
+    source_catalog = SourceCatalog(app_settings)
     local_models = LocalModelService(app_settings)
     templates = Jinja2Templates(directory=app_settings.resource_dir / "templates")
     templates.env.filters["repair_text"] = repair_text
@@ -61,6 +63,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.company_research_coordinator = company_research_coordinator
     app.state.setup_service = setup_service
     app.state.source_discovery = source_discovery
+    app.state.source_catalog = source_catalog
 
     @app.middleware("http")
     async def local_origin_guard(request: Request, call_next: Any) -> Response:
@@ -144,6 +147,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 application=application,
                 cover_letter_recommended=recommended,
                 cover_letter_reason=recommendation_reason,
+                llm_enabled=app_settings.llm_enabled,
             ),
         )
 
@@ -177,7 +181,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             matches = [source for source in configured.values() if source.company.casefold() == str(company).casefold()]
             coverage.append({"company": company, "sources": matches})
         return templates.TemplateResponse(
-            request, "sources.html", page_context(request, sources=rows, coverage=coverage)
+            request,
+            "sources.html",
+            page_context(request, sources=rows, coverage=coverage, source_catalog=source_catalog.view()),
         )
 
     @app.get("/duplicates", response_class=HTMLResponse)
@@ -211,7 +217,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     @app.get("/settings", response_class=HTMLResponse)
-    async def settings_page(request: Request) -> HTMLResponse:
+    async def settings_page(request: Request, saved: int = 0) -> HTMLResponse:
         return templates.TemplateResponse(
             request,
             "setup.html",
@@ -222,6 +228,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 sources=app_settings.load_sources(),
                 countries=country_catalog(),
                 editing=True,
+                saved=bool(saved),
+                company_search={
+                    "provider": app_settings.company_search_provider,
+                    "configured": bool(app_settings.company_search_api_key),
+                    "registry_count": len(app_settings.load_company_registry()),
+                },
                 initial_setup=setup_service.saved_payload(),
             ),
         )
@@ -292,6 +304,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except (RuntimeError, ValueError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
 
+    @app.post("/api/setup/company-search")
+    async def save_company_search(request: Request) -> dict[str, Any]:
+        nonlocal app_settings
+        payload = await _payload(request)
+        app_settings = app_settings.save_company_search_key(str(payload.get("api_key", "")))
+        company_research.settings = app_settings
+        setup_service.settings = app_settings
+        app.state.settings = app_settings
+        return {
+            "configured": bool(app_settings.company_search_api_key),
+            "provider": app_settings.company_search_provider,
+        }
+
     @app.post("/api/setup/complete")
     async def complete_setup(request: Request, return_to: str = "") -> dict[str, Any]:
         nonlocal app_settings, llm
@@ -306,7 +331,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         artifacts.llm = llm
         company_research.settings = app_settings
         company_research.llm = llm
+        setup_service.settings = app_settings
         local_models.settings = app_settings
+        source_catalog.settings = app_settings
         app.state.settings = app_settings
         if app_settings.activated and app_settings.auto_sync:
             scheduler.start(run_immediately=True)
@@ -315,11 +342,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/sync", status_code=status.HTTP_202_ACCEPTED)
     async def trigger_sync(background_tasks: BackgroundTasks) -> dict[str, Any]:
-        if not app_settings.setup_complete or not app_settings.activated:
-            raise HTTPException(status_code=409, detail="Complete and activate setup before syncing")
+        if not app_settings.setup_complete:
+            raise HTTPException(status_code=409, detail="Complete setup before syncing")
         if sync_service.status.running:
             return {"accepted": False, "reason": "already_running", "status": sync_service.status.to_dict()}
-        background_tasks.add_task(sync_service.run)
+        background_tasks.add_task(sync_service.run, False, True)
         return {"accepted": True}
 
     @app.get("/api/sync/status")
@@ -454,6 +481,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/sources/metrics")
     async def source_metrics_api() -> dict[str, Any]:
         return {"sources": database.list_sources(), "api_usage": database.list_api_usage()}
+
+    @app.get("/api/source-packs")
+    async def source_packs() -> dict[str, Any]:
+        return source_catalog.view()
+
+    @app.post("/api/source-packs/{pack_id}/install")
+    async def install_source_pack(pack_id: str, request: Request) -> dict[str, Any]:
+        payload = await _payload(request)
+        if not isinstance(payload.get("enabled", False), bool):
+            raise HTTPException(status_code=422, detail="enabled must be true or false")
+        try:
+            result = source_catalog.install(pack_id, enabled=bool(payload.get("enabled", False)))
+        except SourceCatalogError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return result.to_dict()
+
+    @app.post("/api/source-catalog/{entry_id}/install")
+    async def install_catalog_source(entry_id: str, request: Request) -> Response:
+        payload = await _payload(request)
+        if not isinstance(payload.get("enabled", False), bool):
+            raise HTTPException(status_code=422, detail="enabled must be true or false")
+        try:
+            source, created = source_catalog.install_entry(
+                entry_id,
+                enabled=bool(payload.get("enabled", False)),
+            )
+        except SourceCatalogError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return JSONResponse(
+            {"source": source.to_dict(), "created": created},
+            status_code=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
 
     @app.post("/api/sources/discover")
     async def discover_source(request: Request) -> dict[str, Any]:

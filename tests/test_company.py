@@ -59,6 +59,119 @@ def test_company_summary_uses_complete_sentences_instead_of_character_truncation
     assert not profile["summary"].endswith("…")
 
 
+def test_company_evidence_is_deduplicated_and_coverage_uses_distinct_official_types(tmp_path) -> None:
+    settings = Settings.load(tmp_path)
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    service = CompanyResearchService(settings, database, LlmClient(settings))
+    duplicate_job = {
+        "source_url": "https://board.example/jobs/1",
+        "source_type": "current_job_posting",
+        "title": "Backend Engineer",
+        "excerpt": "Backend Engineer Build distributed systems.",
+    }
+    evidence = service._deduplicate_evidence([
+        duplicate_job,
+        {**duplicate_job, "source_url": "https://mirror.example/jobs/1"},
+        {
+            "source_url": "https://example.com/careers",
+            "source_type": "careers",
+            "title": "Careers",
+            "excerpt": "Our careers page describes remote engineering roles.",
+        },
+        {
+            "source_url": "https://example.com/jobs",
+            "source_type": "careers",
+            "title": "Jobs",
+            "excerpt": "Current openings across our engineering organization.",
+        },
+    ])
+
+    assert len(evidence) == 3
+    assert service._evidence_coverage(evidence) == (0.75, "moderate", 8)
+    evidence.append({
+        "source_url": "https://example.com/engineering",
+        "source_type": "engineering",
+        "title": "Engineering",
+        "excerpt": "How our engineering teams build and operate services.",
+    })
+    assert service._evidence_coverage(evidence) == (0.9, "strong", 10)
+
+
+async def test_no_key_registry_failure_does_not_break_company_research(tmp_path, monkeypatch) -> None:
+    settings = Settings.load(tmp_path)
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    database.upsert_job(
+        CollectedJob(
+            source="fixture", source_job_id="registry-offline", title="Backend Engineer", company="Example",
+            location="Remote", description="Build distributed services", url="https://jobs.example.test/1",
+            published_at=datetime.now(UTC),
+        )
+    )
+    service = CompanyResearchService(settings, database, LlmClient(settings))
+
+    async def unavailable_registry(_name: str):
+        return "", []
+
+    monkeypatch.setattr(service, "_wikidata_entry", unavailable_registry)
+    company_id = await service.research("Example")
+
+    company = database.get_company(company_id)
+    assert company is not None
+    assert company["coverage_label"] == "low"
+    assert company["evidence_count"] == 1
+
+
+def test_company_profile_hides_catalog_fields_and_explains_coverage(tmp_path) -> None:
+    from fastapi.testclient import TestClient
+
+    from rolebeacon.app import create_app
+
+    settings = SetupService(Settings.load(tmp_path)).complete({
+        "candidate": {
+            "schema_version": "1.0", "name": "Candidate",
+            "location": {"country_code": "TR", "country_name": "Türkiye"}, "skills": {},
+        },
+        "mobility": {"schema_version": "1.0", "current_country_code": "TR", "work_authorizations": ["TR"]},
+        "preferences": {"schema_version": "1.0", "target_roles": ["Backend Engineer"]},
+        "enabled_source_ids": [],
+        "llm": {"mode": "rules", "base_url": "http://127.0.0.1:11434/v1", "model": "qwen3:8b"},
+        "activate": False,
+    })
+    app = create_app(settings)
+    company_id = app.state.database.save_company_research(
+        name="Example",
+        domain="example.com",
+        profile={
+            "summary": "Evidence-backed employer assessment.", "remote_policy": "unknown",
+            "sponsorship": "unknown", "relocation": "unknown", "confidence": 0.75,
+        },
+        evidence=[{
+            "source_url": "https://example.com/careers", "source_type": "careers",
+            "title": "Careers", "excerpt": "Engineering careers",
+        }],
+        score={
+            "total": 40,
+            "dimensions": {
+                "domain_alignment": 8, "engineering_environment": 6, "location_mobility": 4,
+                "compensation": 5, "company_quality": 9, "evidence_confidence": 8,
+            },
+            "reasons": [], "risks": [],
+        },
+        provider="rules", model="test",
+    )
+    with TestClient(app) as client:
+        response = client.get(f"/companies/{company_id}")
+
+    assert response.status_code == 200
+    assert "source quality 8/10" in response.text
+    assert "1 unique sources · 1 official page types" in response.text
+    assert "Industry unknown" not in response.text
+    assert "Headquarters unknown" not in response.text
+    assert "% confidence" not in response.text
+
+
 def test_country_scoped_remote_policy_is_not_worldwide(tmp_path) -> None:
     settings = Settings.load()
     database = Database(tmp_path / "jobs.sqlite3")

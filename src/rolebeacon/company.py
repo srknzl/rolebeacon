@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import re
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -19,9 +20,6 @@ COMPANY_SCHEMA = {
     "additionalProperties": False,
     "properties": {
         "summary": {"type": "string"},
-        "industry": {"type": "string"},
-        "headquarters": {"type": "string"},
-        "size": {"type": "string"},
         "remote_policy": {"type": "string", "enum": ["worldwide", "regional", "hybrid", "onsite", "unknown"]},
         "sponsorship": {"type": "string", "enum": ["available", "unavailable", "unknown"]},
         "relocation": {"type": "string", "enum": ["available", "unavailable", "unknown"]},
@@ -84,7 +82,7 @@ COMPANY_SCHEMA = {
             "required": ["total", "dimensions", "reasons", "risks"],
         },
     },
-    "required": ["summary", "industry", "headquarters", "size", "remote_policy", "sponsorship", "relocation", "engineering_signals", "risks", "confidence", "score"],
+    "required": ["summary", "remote_policy", "sponsorship", "relocation", "engineering_signals", "risks", "confidence", "score"],
 }
 
 REMOTE_WORLDWIDE_PATTERNS = (
@@ -138,9 +136,21 @@ class CompanyResearchService:
         jobs = self.database.company_jobs(name)
         evidence = self._job_evidence(jobs)
         domain = registry.get("domain", "") if registry else ""
+        if not domain:
+            report("official_sources", "Checking the public company registry", 24)
+            domain, registry_evidence = await self._wikidata_entry(name)
+            evidence.extend(registry_evidence)
         if registry:
             report("official_sources", "Fetching configured official sources", 32)
             evidence.extend(await self._fetch_official_sources(registry.get("sources", [])))
+        if domain:
+            evidence.extend(await self._fetch_official_sources(self._conventional_official_sources(domain)))
+        if self.settings.company_search_api_key:
+            report("official_sources", "Discovering current official company pages", 42)
+            discovered_domain, discovered_sources = await self._discover_official_sources(name, domain)
+            domain = domain or discovered_domain
+            evidence.extend(await self._fetch_official_sources(discovered_sources))
+        evidence = self._deduplicate_evidence(evidence)
         if not evidence:
             raise ValueError("No configured official sources or collected jobs are available for this company")
 
@@ -176,6 +186,11 @@ class CompanyResearchService:
                 )
         else:
             profile, score = self._deterministic_research(name, evidence, jobs, search_profile)
+        coverage, coverage_label, coverage_score = self._evidence_coverage(evidence)
+        profile["confidence"] = coverage
+        profile["coverage_label"] = coverage_label
+        score["dimensions"]["evidence_confidence"] = coverage_score
+        score["total"] = sum(int(value) for value in score["dimensions"].values())
         report("saving", "Saving the evidence-backed company profile", 92)
         company_id = self.database.save_company_research(
             name=name,
@@ -192,6 +207,120 @@ class CompanyResearchService:
     def _registry_entry(self, name: str) -> dict[str, Any] | None:
         key = company_key(name)
         return next((item for item in self.settings.load_company_registry() if company_key(item["name"]) == key), None)
+
+    async def _discover_official_sources(self, name: str, domain: str) -> tuple[str, list[dict[str, str]]]:
+        queries = [f'"{name}" official company about careers']
+        if domain:
+            queries = [f"site:{domain} about careers engineering remote sponsorship relocation"]
+        candidates: list[dict[str, str]] = []
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            for query in queries:
+                response = await client.get(
+                    "https://api.search.brave.com/res/v1/web/search",
+                    params={"q": query, "count": 10, "search_lang": "en", "safesearch": "strict"},
+                    headers={"Accept": "application/json", "X-Subscription-Token": self.settings.company_search_api_key},
+                )
+                response.raise_for_status()
+                for result in response.json().get("web", {}).get("results", []):
+                    url = str(result.get("url", ""))
+                    title = str(result.get("title", ""))
+                    host = self._registrable_host(urlsplit(url).hostname or "")
+                    if not host or self._excluded_discovery_host(host):
+                        continue
+                    if not domain and company_key(name) not in company_key(title):
+                        continue
+                    if not domain:
+                        domain = host
+                    if host != self._registrable_host(domain):
+                        continue
+                    source_type = self._source_type(url, title)
+                    candidates.append({"url": url, "type": source_type})
+        unique = {item["url"]: item for item in candidates}
+        ordered = sorted(unique.values(), key=lambda item: {"about": 0, "careers": 1, "engineering": 2, "official": 3}[item["type"]])
+        return domain, ordered[:5]
+
+    async def _wikidata_entry(self, name: str) -> tuple[str, list[dict[str, str]]]:
+        """Use Wikidata only to discover an official domain without an API key."""
+        params: dict[str, str | int] = {
+            "action": "wbsearchentities",
+            "search": name,
+            "language": "en",
+            "format": "json",
+            "limit": 5,
+            "type": "item",
+            "origin": "*",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=8, follow_redirects=True, headers={"User-Agent": USER_AGENT}) as client:
+                response = await client.get("https://www.wikidata.org/w/api.php", params=params)
+                response.raise_for_status()
+                candidates = response.json().get("search", [])
+                exact = next(
+                    (item for item in candidates if company_key(str(item.get("label", ""))) == company_key(name)),
+                    None,
+                )
+                if not exact:
+                    return "", []
+                entity_id = str(exact["id"])
+                entity_response = await client.get(f"https://www.wikidata.org/wiki/Special:EntityData/{entity_id}.json")
+                entity_response.raise_for_status()
+                entity = entity_response.json().get("entities", {}).get(entity_id, {})
+                website = self._claim_string(entity.get("claims", {}), "P856")
+                host = self._registrable_host(urlsplit(website).hostname or "")
+                if not host or self._excluded_discovery_host(host):
+                    return "", []
+                evidence = [{
+                    "source_url": f"https://www.wikidata.org/wiki/{entity_id}",
+                    "source_type": "public_registry",
+                    "title": f"Official website registry entry for {name}",
+                    "excerpt": f"Official website: {website}",
+                }]
+                return host, evidence
+        except (httpx.HTTPError, KeyError, TypeError, ValueError):
+            return "", []
+
+    @staticmethod
+    def _claim_string(claims: dict[str, Any], property_id: str) -> str:
+        try:
+            return str(claims[property_id][0]["mainsnak"]["datavalue"]["value"])
+        except (KeyError, IndexError, TypeError):
+            return ""
+
+    @staticmethod
+    def _conventional_official_sources(domain: str) -> list[dict[str, str]]:
+        origin = f"https://{domain}"
+        return [
+            {"url": f"{origin}/about", "type": "about"},
+            {"url": f"{origin}/company", "type": "about"},
+            {"url": f"{origin}/careers", "type": "careers"},
+            {"url": f"{origin}/jobs", "type": "careers"},
+            {"url": f"{origin}/engineering", "type": "engineering"},
+        ]
+
+    @staticmethod
+    def _registrable_host(host: str) -> str:
+        normalized = host.casefold().removeprefix("www.")
+        parts = normalized.split(".")
+        return ".".join(parts[-2:]) if len(parts) >= 2 else normalized
+
+    @staticmethod
+    def _excluded_discovery_host(host: str) -> bool:
+        blocked = {
+            "linkedin.com", "crunchbase.com", "wikipedia.org", "glassdoor.com", "indeed.com",
+            "greenhouse.io", "lever.co", "ashbyhq.com", "himalayas.app", "remoteok.com",
+        }
+        return host in blocked
+
+    @staticmethod
+    def _source_type(url: str, title: str) -> str:
+        text = f"{url} {title}".casefold()
+        if "career" in text or "/jobs" in text:
+            return "careers"
+        if "engineering" in text or "developer" in text:
+            return "engineering"
+        if "about" in text or "company" in text:
+            return "about"
+        return "official"
 
     async def _fetch_official_sources(self, sources: list[dict[str, str]]) -> list[dict[str, str]]:
         evidence = []
@@ -257,6 +386,35 @@ class CompanyResearchService:
                 }
             )
         return evidence
+
+    @staticmethod
+    def _deduplicate_evidence(evidence: list[dict[str, str]]) -> list[dict[str, str]]:
+        unique: dict[str, dict[str, str]] = {}
+        for item in evidence:
+            excerpt_key = re.sub(r"\W+", " ", item.get("excerpt", "").casefold()).strip()
+            key = hashlib.sha256(excerpt_key.encode()).hexdigest() if excerpt_key else item.get("source_url", "")
+            current = unique.get(key)
+            if current is None or current.get("source_type") == "current_job_posting" and item.get("source_type") != "current_job_posting":
+                unique[key] = item
+        return list(unique.values())
+
+    @staticmethod
+    def _evidence_coverage(evidence: list[dict[str, str]]) -> tuple[float, str, int]:
+        official = [
+            item for item in evidence
+            if item.get("source_type") not in {"current_job_posting", "public_registry"}
+        ]
+        official_types = {item.get("source_type", "official") for item in official}
+        job_items = [item for item in evidence if item.get("source_type") == "current_job_posting"]
+        if len(official_types) >= 2:
+            return 0.9, "strong", 10
+        if official:
+            return 0.75, "moderate", 8
+        if any(item.get("source_type") == "public_registry" for item in evidence):
+            return 0.55, "limited", 6
+        if len(job_items) >= 2:
+            return 0.45, "limited", 5
+        return 0.25, "low", 3
 
     async def _llm_research(
         self,
@@ -332,13 +490,14 @@ class CompanyResearchService:
         }[remote_policy]
         if sponsor or relocation:
             mobility_score = max(mobility_score, 15)
+        coverage, coverage_label, coverage_score = self._evidence_coverage(evidence)
         dimensions = {
             "domain_alignment": min(25, 8 + 5 * len(domain_hits)),
             "engineering_environment": min(20, 4 + 3 * len(engineering_terms)),
             "location_mobility": mobility_score,
             "compensation": 10 if salary_known else 5,
             "company_quality": 8 if target else 5,
-            "evidence_confidence": min(10, 2 + len(evidence) * 2),
+            "evidence_confidence": coverage_score,
         }
         def source_for(*terms: str) -> str:
             return next(
@@ -400,15 +559,13 @@ class CompanyResearchService:
         )
         profile = {
             "summary": self._summary_from_evidence(summary_source["excerpt"]),
-            "industry": "",
-            "headquarters": "",
-            "size": "",
             "remote_policy": remote_policy,
             "sponsorship": "unavailable" if official_no_sponsor else "available" if sponsor else "unknown",
             "relocation": "available" if relocation else "unknown",
             "engineering_signals": reasons,
             "risks": risks,
-            "confidence": min(0.85, 0.35 + len(evidence) * 0.1),
+            "confidence": coverage,
+            "coverage_label": coverage_label,
         }
         score = {"total": sum(dimensions.values()), "dimensions": dimensions, "reasons": reasons, "risks": risks}
         return profile, score

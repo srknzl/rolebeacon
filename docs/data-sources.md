@@ -19,6 +19,22 @@ endpoint, fetches a small preview, and saves the source only after confirmation.
 code; each company board or filtered first-party search is a separate source instance. Saving preferences
 preserves user-added instances.
 
+## Curated source catalog and packs
+
+`source-packs.json` is RoleBeacon's versioned archive of known official company boards. Each entry has a
+stable catalog ID, company, public board URL, detected connector, schema version, and verification date.
+Packs are named, overlapping selections over that registry; they do not duplicate connector code or job
+records. Users can install a pack, browse and search every verified entry, or install one company board.
+
+Pack installation is idempotent and atomic. Installing an updated pack refreshes catalog metadata without
+disabling a source the user already enabled. The default Add action makes no external request; Add & enable
+opts the source into the next refresh. This separation matters because the complete tech-company catalog
+can produce thousands of postings and substantial local-model work.
+
+The registry includes unsupported first-party career sites as explicit coverage gaps rather than
+installable sources. Entries are reviewed against public provider endpoints, but the verification date is
+not a promise of permanent availability. Contract tests and source-local health reporting handle changes.
+
 Google Careers and Amazon Jobs do not advertise these read surfaces as supported public APIs. Their
 connectors therefore use four-hour polling by default, content hashes, provider-specific contract tests,
 and independent health reporting. A response change disables only that source run. Microsoft, Meta,

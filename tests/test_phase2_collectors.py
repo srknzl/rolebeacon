@@ -74,6 +74,24 @@ def test_description_blocks_create_safe_headings_lists_and_readable_paragraphs()
     ]
 
 
+def test_description_blocks_render_only_a_safe_markdown_subset() -> None:
+    blocks = description_blocks(
+        "About the role\n\nUse **Python** with *care*; read [the guide](https://example.com/guide)."
+    )
+
+    paragraph = blocks[1]
+    assert paragraph["segments"] == [
+        {"kind": "text", "text": "Use "},
+        {"kind": "strong", "text": "Python"},
+        {"kind": "text", "text": " with "},
+        {"kind": "emphasis", "text": "care"},
+        {"kind": "text", "text": "; read "},
+        {"kind": "link", "text": "the guide", "url": "https://example.com/guide"},
+        {"kind": "text", "text": "."},
+    ]
+    assert "unsafe" not in plain_text("Safe<script>alert('unsafe')</script>")
+
+
 @pytest.mark.asyncio
 async def test_remote_collectors_preserve_location_and_attribution() -> None:
     def handler(request: httpx.Request) -> httpx.Response:

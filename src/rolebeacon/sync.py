@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .collectors import as_batch, create_collector, default_http_client
 from .config import Settings
@@ -52,11 +53,11 @@ class SyncService:
         self.status = SyncStatus()
         self._lock = asyncio.Lock()
 
-    async def run(self, force: bool = False) -> SyncStatus:
+    async def run(self, force: bool = False, manual: bool = False) -> SyncStatus:
         if self._lock.locked():
             return self.status
         async with self._lock:
-            if not self.settings.setup_complete or not self.settings.activated:
+            if not self.settings.setup_complete or (not manual and not self.settings.activated):
                 self.status = SyncStatus(error="setup_required")
                 return self.status
             sources = [source for source in self.settings.load_sources() if source.enabled]
@@ -109,7 +110,7 @@ class SyncService:
                         self.database.start_source(source.id)
                         since = self._since(state.get("last_successful_sync_at"))
                         try:
-                            collector = create_collector(source, client)
+                            collector = create_collector(personalize_source(source, search_profile, mobility_profile), client)
                             batch = as_batch(await collector.collect(since, state.get("cursor", "")))
                             raw_count = len(batch.jobs)
                             jobs = deduplicate_source_jobs(batch.jobs)
@@ -266,7 +267,44 @@ def engineering_job(job: CollectedJob, search_profile: dict[str, Any]) -> bool:
     if any(company.casefold() == job.company.casefold() for company in watchlist):
         return True
     categories = " ".join(map(str, job.metadata.get("categories", [])))
-    return bool(ENGINEERING_TERMS.search(f"{job.title} {categories}"))
+    searchable = f"{job.title} {categories}"
+    if not ENGINEERING_TERMS.search(searchable):
+        return False
+    role_terms = {
+        token.casefold()
+        for role in search_profile.get("target_roles", [])
+        for token in re.findall(r"[A-Za-z][A-Za-z+#.-]{2,}", str(role))
+        if token.casefold() not in {"senior", "staff", "lead", "principal", "engineer", "developer", "software"}
+    }
+    return not role_terms or any(term in searchable.casefold() for term in role_terms)
+
+
+def personalize_source(source: Any, search_profile: dict[str, Any], mobility_profile: dict[str, Any]) -> Any:
+    """Apply the user's roles and relocation choices to providers that support query filters."""
+    roles = [str(value).strip() for value in search_profile.get("target_roles", []) if str(value).strip()]
+    targets = mobility_profile.get("relocation_targets", [])
+    location = next(
+        (
+            str(item.get("country_name", "")).strip()
+            for item in targets
+            if str(item.get("country_code", "")).upper() != "EUROPE" and str(item.get("country_name", "")).strip()
+        ),
+        "",
+    )
+    if source.kind not in {"google_careers", "amazon_jobs"} or not source.url:
+        return source
+    parts = urlsplit(source.url)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    role_query = " OR ".join(roles[:5]) or "Software Engineer"
+    if source.kind == "google_careers":
+        query["q"] = role_query
+        if location:
+            query["location"] = location
+    else:
+        query["base_query"] = role_query
+        if location:
+            query["loc_query"] = location
+    return replace(source, url=urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment)))
 
 
 class Scheduler:

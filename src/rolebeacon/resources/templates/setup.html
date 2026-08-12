@@ -5,33 +5,24 @@
 <section class="page-heading"><div><p class="eyebrow">{{ 'PREFERENCES' if editing else 'FIRST-RUN SETUP' }}</p><h1>{{ 'Edit your RoleBeacon preferences' if editing else 'Make RoleBeacon yours' }}</h1><p>{% if editing %}Every setup value is editable here. Saving preserves the page state and does not contact any job source by itself.{% else %}Rules-only scoring works without a model. No job source is contacted until you activate setup.{% endif %}</p></div></section>
 <div id="setup-message" class="toast" role="status" aria-live="polite" hidden></div>
 <form id="setup-form" class="form-stack" data-complete-url="/api/setup/complete{% if editing %}?return_to=/settings{% endif %}">
-  <section class="panel">
-    <h2>Candidate profile</h2>
+  <nav class="settings-tabs" aria-label="Preference sections">
+    <button class="button settings-tab" type="button" data-settings-tab="search" aria-selected="true">Job search</button>
+    <button class="button settings-tab" type="button" data-settings-tab="application" aria-selected="false">CV & applications</button>
+  </nav>
+  <section class="panel settings-tab-panel" data-settings-panel="search">
+    <h2>Search profile</h2>
+    <p class="muted">Only information that affects discovery, eligibility, and job matching belongs here.</p>
     <div class="form-grid">
-      <label>Full name {{ tip("Used only in your locally stored candidate profile and application materials.") }}<input id="name" required></label>
+      <label>Full name {{ tip("Identifies the locally stored profile. It is also reused in application materials.") }}<input id="name" required></label>
       <label>Headline {{ tip("A concise professional title used to describe your target profile.") }}<input id="headline" placeholder="Backend and distributed-systems engineer"></label>
-      <label>Email {{ tip("Used only when you prepare an application. It is never sent until you submit yourself.") }}<input id="email" type="email"></label>
-      <label>Phone {{ tip("Optional contact detail for application preparation.") }}<input id="phone"></label>
       <label>Country code {{ tip("Your current country as a two-letter ISO 3166-1 code. Use TR for Türkiye.") }}<input id="country-code" value="TR" maxlength="2" required></label>
       <label>Country name {{ tip("Human-readable name for your current country. It is displayed as Türkiye for TR.") }}<input id="country-name" value="Türkiye" required></label>
-      <label>City {{ tip("Optional current city. Leave blank when you prefer not to use a city in matching.") }}<input id="city"></label>
-      <label>Website {{ tip("Optional portfolio or personal website to include in application materials.") }}<input id="website" type="url"></label>
     </div>
     <label>Summary {{ tip("A factual professional summary used only for matching and generated materials.") }}<textarea id="summary" rows="4"></textarea></label>
     <label>Skills, one per line {{ tip("Each line becomes a matching signal. Prefer specific technologies and domains.") }}<textarea id="skills" rows="5"></textarea></label>
-    <details><summary>Import CandidateProfileV1 JSON</summary>
-      <p>Use this for experience, projects, education, language proficiency, and detailed contact links. Imported JSON overrides the basic fields above.</p>
-      <textarea id="candidate-json" rows="14" placeholder="Paste CandidateProfileV1 JSON"></textarea>
-      <p><button id="import-candidate" class="button button-primary" type="button">Import and validate JSON</button> <button id="copy-prompt" class="button" type="button">Copy CV conversion prompt</button> <a href="/api/schemas/candidate-profile" target="_blank">View JSON Schema</a></p>
-    </details>
-    <details><summary>Import complete SetupPayloadV1 JSON</summary>
-      <p>Use this when your JSON includes the candidate profile, mobility, search preferences, selected sources, and model configuration. It fills the entire setup form for review; saving remains your decision.</p>
-      <textarea id="setup-json" rows="14" placeholder="Paste complete SetupPayloadV1 JSON"></textarea>
-      <p><button id="import-setup" class="button button-primary" type="button">Import and validate setup JSON</button> <a href="/api/schemas/candidate-profile" target="_blank">View SetupPayloadV1 Schema</a></p>
-    </details>
   </section>
 
-  <section class="panel">
+  <section class="panel settings-tab-panel" data-settings-panel="search">
     <h2>Mobility and search</h2>
     <div class="form-grid">
       <label>Target roles, one per line {{ tip("Job titles you actively want. These create search strategies and influence ranking.") }}<textarea id="target-roles" rows="5" required></textarea></label>
@@ -60,21 +51,24 @@
     </details>
   </section>
 
-  <section class="panel">
+  <section class="panel settings-tab-panel" data-settings-panel="search">
     <h2>Job sources</h2>
     <p>Selected sources are saved now and contacted only after activation.</p>
     <div class="checkbox-row">
       {% for source in sources %}
         {% if source.kind not in ['adzuna', 'jooble', 'serpapi', 'gmail_linkedin'] %}
-        <label title="{% if source.id == 'arbeitnow' %}Public Europe-focused jobs feed, useful for Germany and relocation opportunities.{% elif source.id == 'jobicy' %}Public remote jobs API filtered to engineering roles.{% elif source.id == 'remotive' %}Public remote software-development feed.{% elif source.id == 'remoteok' %}Remote job board feed; country eligibility is checked after collection.{% elif source.id == 'himalayas' %}Remote job board API; country eligibility is checked after collection.{% elif source.id == 'wwr' %}We Work Remotely programming feed; country eligibility is checked after collection.{% else %}A public source that is contacted only after setup is activated.{% endif %}"><input class="source-choice" type="checkbox" value="{{ source.id }}"> {{ source.name }} {{ tip("Hover the source name for its coverage. You can start with all six public sources; RoleBeacon deduplicates overlaps.") }}</label>
+        {% set source_help = "Public Europe-focused jobs feed, useful for relocation opportunities." if source.id == 'arbeitnow' else "Arbeitnow roles that explicitly advertise visa sponsorship." if source.id == 'arbeitnow-sponsored' else "Public remote engineering jobs feed; target roles are applied during ingestion." if source.kind == 'jobicy' else "Remote software-development feed; your target roles filter collected jobs." if source.kind == 'remotive' else "Remote job board feed; country eligibility and target roles are checked after collection." if source.kind == 'remoteok' else "Remote job board API; country eligibility and target roles are checked after collection." if source.kind == 'himalayas' else "Programming feed; your target roles filter collected jobs after collection." if source.kind == 'wwr' else "Official careers search personalized from your target roles and relocation preferences when the provider supports it." if source.kind in ['google_careers', 'amazon_jobs'] else "A public source contacted only after setup is activated." %}
+        {% set source_label = "Google Careers" if source.kind == 'google_careers' else "Amazon Jobs" if source.kind == 'amazon_jobs' else source.name %}
+        <label title="{{ source_help }}"><input class="source-choice" type="checkbox" value="{{ source.id }}"> {{ source_label }} {{ tip(source_help) }}{% if source.kind in ['google_careers', 'amazon_jobs'] %}<span class="source-choice-note">Uses your target roles and relocation targets at sync time.</span>{% endif %}</label>
         {% endif %}
       {% endfor %}
     </div>
   </section>
 
-  <section class="panel">
+  <section class="panel settings-tab-panel" data-settings-panel="search">
     <h2>Scoring engine</h2>
     <label>Mode {{ tip("Rules-only works without a model. Ollama and custom endpoints add written evidence and richer fit analysis.") }}<select id="llm-mode"><option value="rules">Rules only — no model required</option><option value="ollama">Ollama on this computer or LAN</option><option value="custom">Custom OpenAI-compatible endpoint</option></select></label>
+    <div id="model-details" class="model-details">
     <div class="form-grid">
       <label>Endpoint {{ tip("Local Ollama normally uses http://127.0.0.1:11434/v1. A LAN or compatible endpoint can be used instead.") }}<input id="llm-base-url" value="http://127.0.0.1:11434/v1"></label>
       <label>Model {{ tip("The model identifier at the selected endpoint. qwen3:8b is a practical local default.") }}<input id="llm-model" value="qwen3:8b"></label>
@@ -83,6 +77,42 @@
     <p><button id="discover-model" class="button" type="button">Detect Ollama</button> <button id="start-model" class="button" type="button">Start Ollama</button> <button id="pull-model" class="button" type="button">Pull selected model</button> <button id="test-model" class="button" type="button">Test endpoint</button></p>
     <div id="model-connection" class="model-health model-health-rules">Rules-only scoring is selected until you choose and test an LLM endpoint.</div>
     <p class="safety-note">Starting Ollama or downloading a model happens only when you click the corresponding button. The recommended model is qwen3:8b; qwen3:14b offers higher quality on hardware with enough memory.</p>
+    </div>
+  </section>
+
+  <section class="panel settings-tab-panel" data-settings-panel="search">
+    <h2>Company research</h2>
+    <p>RoleBeacon includes {{ company_search.registry_count if company_search else 'a built-in' }} seeded company entries and uses Wikidata plus official company pages without an API key. A Brave Search key improves official-page discovery for unfamiliar companies.</p>
+    <div class="model-health {{ 'model-health-success' if company_search and company_search.configured else 'model-health-rules' }}" id="company-search-status">
+      {% if company_search and company_search.configured %}Brave Search enrichment is configured. Search results only discover official pages; claims still require fetched source evidence.{% else %}No search key configured. No-key registry and direct official-site research remain active.{% endif %}
+    </div>
+    <details>
+      <summary>Optional Brave Search enrichment</summary>
+      <p class="muted">Brave currently includes monthly free credits but may require a payment card for anti-fraud verification. The key stays in the local secrets file and is never returned to the browser.</p>
+      <label>Brave Search API key {{ tip("Optional. Leave blank and save to disable Brave Search while retaining no-key company research.") }}<input id="company-search-api-key" type="password" autocomplete="off"></label>
+      <p><button id="save-company-search" class="button" type="button">Save search configuration</button> <a href="https://brave.com/search/api/" target="_blank" rel="noopener">Brave Search API ↗</a></p>
+    </details>
+  </section>
+
+  <section class="panel settings-tab-panel" data-settings-panel="application" hidden>
+    <h2>CV & application profile</h2>
+    <p class="muted">These fields do not influence job discovery. They are used only when RoleBeacon generates a résumé or prepares an application.</p>
+    <div class="form-grid">
+      <label>Email {{ tip("Optional contact detail included in generated application materials. RoleBeacon never submits it automatically.") }}<input id="email" type="email"></label>
+      <label>Phone {{ tip("Optional contact detail included in generated application materials.") }}<input id="phone"></label>
+      <label>City {{ tip("Optional résumé location. It does not affect job matching; country eligibility is configured under Job search.") }}<input id="city"></label>
+      <label>Website {{ tip("Optional portfolio URL included in generated application materials.") }}<input id="website" type="url"></label>
+    </div>
+    <details><summary>Detailed candidate JSON</summary>
+      <p>Experience, projects, education, language proficiency, and detailed contact links are stored in CandidateProfileV1.</p>
+      <textarea id="candidate-json" rows="14" placeholder="Paste CandidateProfileV1 JSON"></textarea>
+      <p><button id="import-candidate" class="button button-primary" type="button">Import and validate JSON</button> <button id="copy-prompt" class="button" type="button">Copy CV conversion prompt</button> <a href="/api/schemas/candidate-profile" target="_blank">View JSON Schema</a></p>
+    </details>
+    <details><summary>Import complete SetupPayloadV1 JSON</summary>
+      <p>This fills both tabs, source choices, and scoring configuration for review.</p>
+      <textarea id="setup-json" rows="14" placeholder="Paste complete SetupPayloadV1 JSON"></textarea>
+      <p><button id="import-setup" class="button button-primary" type="button">Import and validate setup JSON</button> <a href="/api/schemas/candidate-profile" target="_blank">View SetupPayloadV1 Schema</a></p>
+    </details>
   </section>
 
   <div class="setup-actions">
@@ -178,12 +208,12 @@
   });
   const candidate = () => {
     const imported = document.getElementById("candidate-json").value.trim();
-    if (imported) return JSON.parse(imported);
+    const detailed = imported ? JSON.parse(imported) : {};
     const optionalUrl = id => document.getElementById(id).value.trim() || null;
-    return {schema_version: "1.0", name: document.getElementById("name").value, headline: document.getElementById("headline").value, summary: document.getElementById("summary").value,
-      contact: {email: document.getElementById("email").value, phone: document.getElementById("phone").value, website: optionalUrl("website"), github: null, linkedin: null},
+    return {...detailed, schema_version: "1.0", name: document.getElementById("name").value, headline: document.getElementById("headline").value, summary: document.getElementById("summary").value,
+      contact: {...(detailed.contact || {}), email: document.getElementById("email").value, phone: document.getElementById("phone").value, website: optionalUrl("website")},
       location: {country_code: countryCode(document.getElementById("country-code").value, "Country code"), country_name: document.getElementById("country-name").value, city: document.getElementById("city").value},
-      skills: {Skills: lines("skills")}, experience: [], projects: [], education: [], languages: []};
+      skills: detailed.skills || {Skills: lines("skills")}, experience: detailed.experience || [], projects: detailed.projects || [], education: detailed.education || [], languages: detailed.languages || []};
   };
   const payload = () => ({candidate: candidate(), mobility: {schema_version: "1.0", current_country_code: countryCode(document.getElementById("country-code").value, "Country code"),
     work_authorizations: lines("authorizations").map(value => countryCode(value, "Authorized country code")), relocation_targets: relocationTargets(),
@@ -276,6 +306,9 @@
     }
   });
   const modelConnection = document.getElementById("model-connection");
+  const modelDetails = document.getElementById("model-details");
+  const updateModelVisibility = () => { modelDetails.hidden = document.getElementById("llm-mode").value === "rules"; };
+  document.getElementById("llm-mode").addEventListener("change", updateModelVisibility);
   const showModelConnection = (text, kind = "rules") => { modelConnection.className = `model-health model-health-${kind}`; modelConnection.textContent = text; };
   const modelConfig = () => payload().llm;
   document.getElementById("plan-with-llm").addEventListener("click", async () => {
@@ -294,6 +327,16 @@
   document.getElementById("start-model").addEventListener("click", async () => { try { const value = await post("/api/setup/model/start"); message(`Ollama started as process ${value.pid}.`, true); } catch (error) { message(error.message); } });
   document.getElementById("pull-model").addEventListener("click", async () => { try { message("Downloading the model. Keep this page open…"); const value = await post("/api/setup/model/pull", {model: document.getElementById("llm-model").value}); message(`Downloaded ${value.model}.`, true); } catch (error) { message(error.message); } });
   document.getElementById("test-model").addEventListener("click", async () => { try { const data = modelConfig(); const value = await post("/api/setup/model/test", data); const text = value.ok ? `Connected to ${data.base_url}. ${value.model_found ? `Model ${data.model} is ready.` : `The endpoint did not list ${data.model}.`}` : value.error; showModelConnection(text, value.ok && value.model_found ? "success" : "warning"); message(text, value.ok && value.model_found); } catch (error) { showModelConnection(error.message, "warning"); message(error.message); } });
-  document.getElementById("setup-form").addEventListener("submit", async event => { event.preventDefault(); try { const value = await post(event.currentTarget.dataset.completeUrl || "/api/setup/complete", payload()); window.location.assign(value.redirect); } catch (error) { message(error.message); } });
+  document.getElementById("save-company-search").addEventListener("click", async () => { try { const value = await post("/api/setup/company-search", {api_key: document.getElementById("company-search-api-key").value}); const status = document.getElementById("company-search-status"); status.className = `model-health ${value.configured ? "model-health-success" : "model-health-rules"}`; status.textContent = value.configured ? "Brave Search enrichment is configured." : "Brave Search disabled; no-key company research remains active."; document.getElementById("company-search-api-key").value = ""; message("Company research configuration saved.", true); } catch (error) { message(error.message); } });
+  document.querySelectorAll(".settings-tab").forEach(tab => tab.addEventListener("click", () => {
+    document.querySelectorAll(".settings-tab").forEach(item => item.setAttribute("aria-selected", String(item === tab)));
+    document.querySelectorAll(".settings-tab-panel").forEach(panel => { panel.hidden = panel.dataset.settingsPanel !== tab.dataset.settingsTab; });
+  }));
+  document.querySelectorAll(".help-tip").forEach(tip => {
+    const position = () => { const rect = tip.getBoundingClientRect(); tip.style.setProperty("--tooltip-x", `${rect.left}px`); tip.style.setProperty("--tooltip-y", `${rect.top}px`); };
+    tip.addEventListener("mouseenter", position); tip.addEventListener("focus", position);
+  });
+  document.getElementById("setup-form").addEventListener("submit", async event => { event.preventDefault(); try { const value = await post(event.currentTarget.dataset.completeUrl || "/api/setup/complete", payload()); {% if editing %}message("Preferences saved.", true);{% else %}window.location.assign(value.redirect);{% endif %} } catch (error) { message(error.message); } });
+  updateModelVisibility();
 </script>
 {% endblock %}

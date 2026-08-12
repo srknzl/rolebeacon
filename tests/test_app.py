@@ -65,6 +65,34 @@ def test_incomplete_setup_redirects_and_sync_is_blocked(tmp_path) -> None:
     assert sync.status_code == 409
 
 
+def test_idle_refresh_panel_stays_hidden_until_user_starts_refresh(tmp_path) -> None:
+    app = create_app(configured_settings(tmp_path))
+
+    with TestClient(app) as client:
+        page = client.get("/jobs")
+
+    assert 'state.phase === "idle" || !state.started_at' in page.text
+    assert "syncPanel.hidden = true" in page.text
+
+
+def test_manual_refresh_is_allowed_when_only_scheduled_collection_is_disabled(tmp_path, monkeypatch) -> None:
+    payload = setup_payload()
+    payload["activate"] = False
+    app = create_app(SetupService(Settings.load(tmp_path)).complete(payload))
+    calls: list[tuple[bool, bool]] = []
+
+    async def run(force: bool = False, manual: bool = False):
+        calls.append((force, manual))
+        return app.state.sync_service.status
+
+    monkeypatch.setattr(app.state.sync_service, "run", run)
+    with TestClient(app) as client:
+        response = client.post("/api/sync")
+
+    assert response.status_code == 202
+    assert calls == [(False, True)]
+
+
 def test_setup_schema_validation_and_completion(tmp_path) -> None:
     app = create_app(Settings.load(tmp_path))
 
@@ -80,6 +108,19 @@ def test_setup_schema_validation_and_completion(tmp_path) -> None:
     assert setup_validation.json()["valid"] is True
     assert "api_key" not in setup_validation.json()["payload"]["llm"]
     assert completion.json()["completed"] is True
+
+
+def test_optional_company_search_key_is_stored_only_in_private_secrets(tmp_path) -> None:
+    app = create_app(configured_settings(tmp_path))
+
+    with TestClient(app) as client:
+        saved = client.post("/api/setup/company-search", json={"api_key": "brave-secret"})
+        page = client.get("/settings")
+
+    assert saved.json() == {"configured": True, "provider": "brave"}
+    assert "brave-secret" not in page.text
+    secrets = json.loads(app.state.settings.secrets_path.read_text(encoding="utf-8"))
+    assert secrets["brave_search_api_key"] == "brave-secret"
     assert app.state.settings.secrets_path.read_text(encoding="utf-8").find("candidate@example.com") == -1
 
 
@@ -107,6 +148,21 @@ def test_llm_client_does_not_send_an_empty_bearer_token(tmp_path) -> None:
     client = LlmClient(Settings.load(tmp_path))
 
     assert client._headers() == {"Content-Type": "application/json"}
+
+
+def test_switching_to_rules_refreshes_every_runtime_service(tmp_path) -> None:
+    initial = setup_payload()
+    initial["llm"] = {"mode": "custom", "base_url": "http://127.0.0.1:9/v1", "model": "missing-model"}
+    app = create_app(SetupService(Settings.load(tmp_path)).complete(initial))
+
+    with TestClient(app) as client:
+        completion = client.post("/api/setup/complete?return_to=/settings", json=setup_payload())
+
+    assert completion.status_code == 200
+    assert app.state.settings.llm_enabled is False
+    assert app.state.sync_service.settings.llm_enabled is False
+    assert app.state.sync_service.llm.settings.llm_enabled is False
+    assert app.state.setup_service.settings.llm_mode == "rules"
 
 
 def test_llm_score_total_is_derived_from_dimensions(tmp_path) -> None:
@@ -386,6 +442,77 @@ def test_invalid_feedback_is_rejected(tmp_path) -> None:
     assert response.status_code == 422
 
 
+def test_preferences_separate_search_from_application_and_hide_rules_details(tmp_path) -> None:
+    app = create_app(configured_settings(tmp_path))
+
+    with TestClient(app) as client:
+        page = client.get("/settings")
+
+    assert page.status_code == 200
+    assert 'data-settings-tab="search"' in page.text
+    assert 'data-settings-tab="application"' in page.text
+    assert "These fields do not influence job discovery" in page.text
+    assert 'id="model-details"' in page.text
+    assert 'modelDetails.hidden = document.getElementById("llm-mode").value === "rules"' in page.text
+    assert 'message("Preferences saved.", true)' in page.text
+    assert "Arbeitnow roles that explicitly advertise visa sponsorship" in page.text
+    assert "Uses your target roles and relocation targets at sync time" in page.text
+
+
+def test_realistic_job_detail_with_llm_evidence_renders_without_500(tmp_path) -> None:
+    from rolebeacon.domain import ScoreResult
+
+    app = create_app(configured_settings(tmp_path))
+    job_id, _ = app.state.database.upsert_job(
+        CollectedJob(
+            source="remoteok", source_job_id="162", title="Senior React Full stack Developer",
+            company="Lemon.io", location="Remote Worldwide", description="Build software worldwide.",
+            url="https://example.test/jobs/162",
+        )
+    )
+    eligibility = EligibilityResult(
+        status=EligibilityStatus.ELIGIBLE, route="remote-tr", sponsorship="unknown", relocation="unknown",
+        location_fit="worldwide", reasons=["Worldwide remote"], risks=[],
+    )
+    app.state.database.save_evaluation(
+        job_id, eligibility,
+        ScoreResult(
+            total=70, dimensions={}, confidence=0.8, verdict="review",
+            evidence=[{"requirement": "Relevant skills", "profile_evidence": "Go, Java, Python"}], gaps=[],
+            provider="openai-compatible", model="qwen3:14b", prompt_version="test",
+        ), "scored",
+    )
+
+    with TestClient(app) as client:
+        response = client.get(f"/jobs/{job_id}")
+
+    assert response.status_code == 200
+    assert "Senior React Full stack Developer" in response.text
+    assert "Why it matches" in response.text
+
+
+def test_job_detail_decisions_are_in_place_and_cover_letter_requires_llm(tmp_path) -> None:
+    app = create_app(configured_settings(tmp_path))
+    job_id, _ = app.state.database.upsert_job(
+        CollectedJob(
+            source="manual", source_job_id="decision", title="Backend Engineer", company="Example",
+            location="Remote", description="Build backend systems.", url="https://example.test/decision",
+        )
+    )
+
+    with TestClient(app) as client:
+        page = client.get(f"/jobs/{job_id}")
+        decision = client.post(f"/api/jobs/{job_id}/feedback", json={"status": "interested"})
+
+    assert page.status_code == 200
+    assert "data-decision-form" in page.text
+    assert "event.preventDefault()" in page.text
+    assert "The tailored résumé uses only your locally stored candidate profile" in page.text
+    assert "Cover letter requires an LLM" in page.text
+    assert decision.status_code == 200
+    assert app.state.database.get_job(job_id)["status"] == "interested"
+
+
 def test_manual_import_does_not_fetch_and_creates_job(tmp_path) -> None:
     app = create_app(configured_settings(tmp_path))
 
@@ -405,7 +532,7 @@ def test_manual_import_does_not_fetch_and_creates_job(tmp_path) -> None:
     assert app.state.database.get_job(response.json()["job_id"])["company"] == "Example"
 
 
-def test_company_research_can_be_refreshed_from_the_company_profile(tmp_path) -> None:
+def test_company_research_can_be_refreshed_from_the_company_profile(tmp_path, monkeypatch) -> None:
     app = create_app(configured_settings(tmp_path))
     job_id, _ = app.state.database.upsert_job(
         CollectedJob(
@@ -419,6 +546,9 @@ def test_company_research_can_be_refreshed_from_the_company_profile(tmp_path) ->
             published_at=datetime.now(UTC),
         )
     )
+    async def unavailable_registry(_name: str):
+        return "", []
+    monkeypatch.setattr(app.state.company_research, "_wikidata_entry", unavailable_registry)
 
     with TestClient(app) as client:
         headers = {"Accept": "text/html"}
@@ -433,7 +563,7 @@ def test_company_research_can_be_refreshed_from_the_company_profile(tmp_path) ->
     assert refreshed.headers["location"] == f"/companies/{company['id']}"
 
 
-def test_company_research_progress_endpoint_completes_without_a_raw_error_page(tmp_path) -> None:
+def test_company_research_progress_endpoint_completes_without_a_raw_error_page(tmp_path, monkeypatch) -> None:
     app = create_app(configured_settings(tmp_path))
     job_id, _ = app.state.database.upsert_job(
         CollectedJob(
@@ -442,6 +572,9 @@ def test_company_research_progress_endpoint_completes_without_a_raw_error_page(t
             url="https://example.test/jobs/company-progress", published_at=datetime.now(UTC),
         )
     )
+    async def unavailable_registry(_name: str):
+        return "", []
+    monkeypatch.setattr(app.state.company_research, "_wikidata_entry", unavailable_registry)
 
     with TestClient(app) as client:
         started = client.post(f"/api/jobs/{job_id}/research-company/start")

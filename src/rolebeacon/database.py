@@ -973,6 +973,7 @@ class Database:
                 ),
             )
             company_id = int(connection.execute("SELECT id FROM companies WHERE normalized_name = ?", (key,)).fetchone()["id"])
+            connection.execute("DELETE FROM company_evidence WHERE company_id = ?", (company_id,))
             for item in evidence:
                 excerpt = item.get("excerpt", "")
                 connection.execute(
@@ -1040,6 +1041,23 @@ class Database:
                     (result["normalized_name"],),
                 ).fetchall()
             ]
+            official_types = {
+                item["source_type"]
+                for item in result["evidence"]
+                if item["source_type"] not in {"current_job_posting", "public_registry"}
+            }
+            official_count = sum(
+                item["source_type"] not in {"current_job_posting", "public_registry"}
+                for item in result["evidence"]
+            )
+            registry_count = sum(item["source_type"] == "public_registry" for item in result["evidence"])
+            result["coverage_label"] = (
+                "strong" if len(official_types) >= 2 else "moderate" if official_types
+                else "limited" if registry_count or len(result["evidence"]) >= 2 else "low"
+            )
+            result["official_evidence_type_count"] = len(official_types)
+            result["official_evidence_count"] = official_count
+            result["evidence_count"] = len(result["evidence"])
             return result
 
     def list_companies(self) -> list[dict[str, Any]]:
@@ -1049,6 +1067,7 @@ class Database:
                 for row in connection.execute(
                     """
                     SELECT c.*, (SELECT total FROM company_scores WHERE company_id = c.id ORDER BY created_at DESC, id DESC LIMIT 1) AS score,
+                           (SELECT COUNT(*) FROM company_evidence WHERE company_id = c.id) AS evidence_count,
                            (SELECT COUNT(*) FROM jobs WHERE company_key = c.normalized_name AND active = 1) AS job_count
                     FROM companies c ORDER BY score DESC, name
                     """

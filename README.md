@@ -181,6 +181,33 @@ Remote wording such as “EMEA” or “within your country of employment” is 
 Unknown eligibility remains visible as a risk. Explicit no-sponsorship, clearance, blocklist, and
 geographic restrictions cannot be overridden by company reputation or a high skills score.
 
+### What the optional LLM adds
+
+RoleBeacon remains useful without an LLM. Rules-only mode applies the same eligibility gates and
+produces deterministic dimension scores quickly, privately, and with exact repeatability. It is the
+right default when hardware is limited or when collecting a large new source pack for the first time.
+
+An LLM is an enhancement for interpreting unstructured job descriptions, not an eligibility oracle.
+After deterministic authorization and geography checks, it adds:
+
+- semantic matching when equivalent experience uses different wording, such as data-platform work
+  versus storage infrastructure;
+- requirement extraction from long prose, including exact missing technologies and qualifications;
+- concrete “Why it matches” evidence tied to verified candidate-profile facts;
+- clearer gap and risk explanations than keyword overlap alone;
+- better recognition of transferable experience for broad software-engineering and big-tech roles.
+
+The LLM cannot invent work authorization, sponsorship, salary, skills, experience, or candidate facts.
+It cannot override a deterministic blocker. RoleBeacon calculates totals from bounded dimensions,
+rejects generic or duplicate gaps and negative statements disguised as positive evidence, and asks the
+model for one corrected response. If that response still fails validation, refresh reports an LLM error;
+it does not silently accept the answer or switch scoring modes.
+
+The tradeoffs are model memory, latency, and an extra inference call when repair is required. For large
+source packs, add the sources disabled, enable only the useful boards, and run the first collection in
+rules-only mode before turning on LLM scoring. Use Ollama mode for local or LAN Ollama because it supports
+the native JSON-schema and `think: false` controls used by RoleBeacon.
+
 ## Sources
 
 Built-in source adapters include:
@@ -204,10 +231,36 @@ an allow-listed provider endpoint, previews sample jobs, and saves the source af
 Careers uses server-rendered public job pages; Amazon Jobs uses its public site JSON response. These
 first-party contracts are health-checked and isolated because they are not documented public APIs.
 
+The same page includes a versioned source catalog and curated packs such as Big tech and frontier AI,
+Developer infrastructure, High-growth AI and SaaS, and Remote-friendly engineering. Packs are shortcuts
+over official public board URLs, not bundled job data. **Add pack** stores boards without contacting them;
+**Add & enable** explicitly schedules them for the next refresh. Installing the same pack again is
+idempotent and preserves sources the user already enabled. The complete catalog can also be searched by
+company or connector and each board can be added separately. Catalog entries include a verification date,
+but upstream ATS ownership can still change, so failures remain isolated per source.
+
 Job descriptions are normalized without an LLM. The ingestion layer repairs common encoding damage,
 preserves paragraphs and source lists, removes non-content script/style markup, and the detail page
 renders recognized headings, bullet groups, and bounded paragraphs. This keeps the original facts
 available to scoring while making long postings readable and avoiding model-authored rewrites.
+
+## Company research
+
+Company research is useful without a paid search API. RoleBeacon first uses its bundled company/source
+registry, then uses Wikidata only to discover a matching official domain, and finally fetches conventional
+official pages such as careers and engineering. Collected job postings remain supporting evidence. A
+registry outage never blocks research, and missing facts remain unknown.
+
+An optional Brave Search API key can improve official-page discovery for companies absent from the
+registry. Search results are discovery hints only: RoleBeacon does not score snippets or third-party
+profiles. A claim enters an assessment only after the corresponding official page is fetched. The key is
+stored in the local permission-restricted secrets file and never returned to the browser. Self-hosted
+SearXNG is a possible future provider; scraping consumer search-result pages is intentionally unsupported.
+
+The UI reports evidence coverage rather than presenting a model confidence percentage. Duplicate job
+postings are collapsed, and strong coverage requires more than one distinct official source type. Employer
+assessment focuses on hiring-relevant signals—remote policy, sponsorship, relocation, engineering
+environment, compensation, and sourced risks—not generic catalog fields such as headquarters or size.
 
 ## Résumés and cover letters
 

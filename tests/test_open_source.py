@@ -54,6 +54,14 @@ def test_default_registries_include_first_party_and_budgeted_sources(tmp_path) -
     assert {"Google", "Microsoft", "Cloudflare", "GitLab", "SAP", "Zalando"} <= company_names
 
 
+def test_source_pack_catalog_is_included_in_package_resources(tmp_path) -> None:
+    settings = Settings.load(tmp_path)
+    catalog = settings.resource_dir / "config" / "source-packs.json"
+
+    assert catalog.exists()
+    assert '"tech-company-catalog"' in catalog.read_text(encoding="utf-8")
+
+
 def test_builtin_resume_uses_only_profile_facts() -> None:
     profile = {
         "name": "Example Candidate",

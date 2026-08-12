@@ -74,6 +74,8 @@ class Settings:
     llm_model: str
     llm_api_key: str
     llm_timeout_seconds: float
+    company_search_provider: str
+    company_search_api_key: str
     resume_renderer: str
     external_resume_command: tuple[str, ...]
 
@@ -94,6 +96,9 @@ class Settings:
         llm = setup.get("llm", {}) if isinstance(setup.get("llm"), dict) else {}
         mode = os.getenv("ROLEBEACON_LLM_MODE", str(llm.get("mode", "rules")))
         api_key = os.getenv("ROLEBEACON_LLM_API_KEY", str(secrets.get("llm_api_key", "")))
+        company_search_api_key = os.getenv(
+            "ROLEBEACON_BRAVE_SEARCH_API_KEY", str(secrets.get("brave_search_api_key", ""))
+        )
         return cls(
             root=project_root,
             resource_dir=package_dir / "resources",
@@ -123,6 +128,8 @@ class Settings:
             llm_model=os.getenv("ROLEBEACON_LLM_MODEL", str(llm.get("model", "qwen3:8b"))),
             llm_api_key=api_key,
             llm_timeout_seconds=float(os.getenv("ROLEBEACON_LLM_TIMEOUT_SECONDS", "120")),
+            company_search_provider="brave" if company_search_api_key else "none",
+            company_search_api_key=company_search_api_key,
             resume_renderer=str(setup.get("resume_renderer", "builtin")),
             external_resume_command=tuple(setup.get("external_resume_command", [])),
         )
@@ -175,6 +182,41 @@ class Settings:
         _write_private_json(self.source_config_path, [item.to_dict() for item in sources])
         return source, True
 
+    def save_sources(self, candidates: list[SourceConfig]) -> tuple[list[SourceConfig], int]:
+        """Atomically add or update source instances while preserving existing enablement."""
+        from .source_discovery import same_source
+
+        self.ensure_directories()
+        sources = self.load_sources()
+        existing_ids = {source.id for source in sources}
+        saved: list[SourceConfig] = []
+        added = 0
+        for candidate in candidates:
+            current_index = next(
+                (index for index, current in enumerate(sources) if same_source(current, candidate)),
+                None,
+            )
+            if current_index is not None:
+                current = sources[current_index]
+                candidate.id = current.id
+                candidate.name = current.name or candidate.name
+                candidate.enabled = current.enabled or candidate.enabled
+                candidate.options = {**current.options, **candidate.options}
+                sources[current_index] = candidate
+                saved.append(candidate)
+                continue
+            base_id = candidate.id
+            suffix = 2
+            while candidate.id in existing_ids:
+                candidate.id = f"{base_id[:94]}-{suffix}"
+                suffix += 1
+            existing_ids.add(candidate.id)
+            sources.append(candidate)
+            saved.append(candidate)
+            added += 1
+        _write_private_json(self.source_config_path, [source.to_dict() for source in sources])
+        return saved, added
+
     def set_source_enabled(self, source_id: str, enabled: bool) -> SourceConfig:
         sources = self.load_sources()
         for source in sources:
@@ -201,10 +243,29 @@ class Settings:
         return _read_json(self.strategies_path, [])
 
     def load_company_registry(self) -> list[dict[str, Any]]:
-        path = self.data_dir / "companies.json"
-        if not path.exists():
-            path = self.resource_dir / "config" / "companies.json"
-        return _read_json(path, [])
+        shipped = _read_json(self.resource_dir / "config" / "companies.json", [])
+        local = _read_json(self.data_dir / "companies.json", [])
+        by_name = {str(item["name"]).casefold(): item for item in shipped}
+        for item in local:
+            by_name[str(item["name"]).casefold()] = {**by_name.get(str(item["name"]).casefold(), {}), **item}
+        catalog = _read_json(self.resource_dir / "config" / "source-packs.json", {})
+        for source in catalog.get("sources", []):
+            key = str(source["company"]).casefold()
+            entry = by_name.setdefault(key, {"name": source["company"], "domain": "", "sources": []})
+            boards = entry.setdefault("job_boards", [])
+            if source["url"] not in boards:
+                boards.append(source["url"])
+        return sorted(by_name.values(), key=lambda item: str(item["name"]).casefold())
+
+    def save_company_search_key(self, api_key: str) -> Settings:
+        secrets = _read_json(self.secrets_path, {})
+        secrets["brave_search_api_key"] = api_key.strip()
+        _write_private_json(self.secrets_path, secrets)
+        return replace(
+            self,
+            company_search_provider="brave" if api_key.strip() else "none",
+            company_search_api_key=api_key.strip(),
+        )
 
     def save_setup(
         self,
@@ -238,7 +299,9 @@ class Settings:
                 "resume_renderer": "builtin",
             },
         )
-        _write_private_json(self.secrets_path, {"llm_api_key": llm.get("api_key", "")})
+        secrets = _read_json(self.secrets_path, {})
+        secrets["llm_api_key"] = llm.get("api_key", "")
+        _write_private_json(self.secrets_path, secrets)
         return replace(
             self,
             setup_complete=True,
