@@ -3,8 +3,8 @@ from __future__ import annotations
 import sqlite3
 from datetime import UTC, datetime
 
-from rolebeacon.database import Database, canonicalize_url
-from rolebeacon.domain import CollectedJob, EligibilityResult, EligibilityStatus, ScoreResult
+from rolebeacon.database import Database, JobFilters, canonicalize_url
+from rolebeacon.domain import CollectedJob, EligibilityResult, EligibilityStatus, JobStatus, ScoreResult
 
 
 def sample_job(source: str = "source-a", description: str = "Java backend role") -> CollectedJob:
@@ -48,7 +48,7 @@ def test_full_text_search_returns_matching_job(tmp_path) -> None:
     database.initialize()
     database.upsert_job(sample_job(description="Built distributed systems with Kafka"))
 
-    jobs = database.list_jobs(query="Kafka")
+    jobs = database.list_jobs(JobFilters(query="Kafka"))
 
     assert len(jobs) == 1
     assert jobs[0]["company"] == "Example"
@@ -176,3 +176,110 @@ def test_v1_database_is_migrated_in_place(tmp_path) -> None:
     assert {"primary_source_id", "merged_into_job_id", "normalized_title"} <= job_columns
     assert {"source_priority", "metadata_json", "content_hash"} <= source_columns
     assert version["version"] == 2
+
+
+def _score(database: Database, job_id: int, total: int, role_domain: int, stack: int) -> None:
+    database.save_evaluation(
+        job_id,
+        EligibilityResult(
+            status=EligibilityStatus.ELIGIBLE,
+            route="remote-from-tr",
+            sponsorship="unknown",
+            relocation="unknown",
+            location_fit="worldwide",
+            reasons=[],
+            risks=[],
+        ),
+        ScoreResult(
+            total=total,
+            dimensions={
+                "role_domain": role_domain,
+                "stack": stack,
+                "domain_experience": 0,
+                "seniority": 0,
+                "location_authorization": 0,
+                "salary_employment": 0,
+            },
+            confidence=0.7,
+            verdict="review",
+            evidence=[],
+            gaps=[],
+            provider="rules",
+            model="test",
+            prompt_version="job-fit-v1:rules",
+        ),
+        "scored",
+    )
+
+
+def _two_scored_jobs(tmp_path) -> tuple[Database, int, int]:
+    """A high-scoring generalist and a lower-scoring specialist, so each sort key orders them differently."""
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    generalist = sample_job()
+    generalist_id, _ = database.upsert_job(generalist)
+    specialist = sample_job(source="source-b")
+    specialist.source_job_id = "job-2"
+    specialist.title = "Staff Platform Engineer"
+    specialist.url = "https://example.com/jobs/2"
+    specialist_id, _ = database.upsert_job(specialist)
+    _score(database, generalist_id, total=80, role_domain=10, stack=18)
+    _score(database, specialist_id, total=60, role_domain=25, stack=4)
+    return database, generalist_id, specialist_id
+
+
+def test_each_sort_key_orders_the_same_result_set_differently(tmp_path) -> None:
+    database, generalist_id, specialist_id = _two_scored_jobs(tmp_path)
+
+    def order(sort: str) -> list[int]:
+        return [job["id"] for job in database.list_jobs(sort=sort)]
+
+    assert order("opportunity") == [generalist_id, specialist_id]
+    assert order("job_fit") == [generalist_id, specialist_id]
+    assert order("stack_match") == [generalist_id, specialist_id]
+    assert order("title_match") == [specialist_id, generalist_id]
+
+
+def test_an_unknown_sort_key_falls_back_instead_of_reaching_the_query(tmp_path) -> None:
+    database, generalist_id, specialist_id = _two_scored_jobs(tmp_path)
+
+    jobs = database.list_jobs(sort="total; DROP TABLE jobs")
+
+    assert [job["id"] for job in jobs] == [generalist_id, specialist_id]
+
+
+def test_filters_narrow_the_set_and_the_count_agrees_with_the_page(tmp_path) -> None:
+    database, _, specialist_id = _two_scored_jobs(tmp_path)
+    filters = JobFilters(title="platform")
+
+    assert database.count_jobs(filters) == 1
+    assert [job["id"] for job in database.list_jobs(filters)] == [specialist_id]
+    assert database.count_jobs(JobFilters(min_title_match=20)) == 1
+    assert database.count_jobs(JobFilters()) == 2
+
+
+def test_regenerating_an_artifact_cannot_rewind_a_prepared_application(tmp_path) -> None:
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    job_id, _ = database.upsert_job(sample_job())
+    database.save_application(job_id, status="preparing", resume_path="resume.pdf")
+    database.save_application(job_id, status="ready", packet_path="packet.json")
+
+    database.save_application(job_id, status="preparing", resume_path="resume-2.pdf")
+
+    application = database.list_applications()[0]
+    assert application["status"] == "ready"
+    assert application["resume_path"] == "resume-2.pdf"
+
+
+def test_recording_an_outcome_puts_a_job_on_the_pipeline_board(tmp_path) -> None:
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    job_id, _ = database.upsert_job(sample_job())
+
+    database.save_feedback(job_id, JobStatus.APPLIED)
+
+    application = database.list_applications()[0]
+    assert application["job_id"] == job_id
+    assert application["job_status"] == "applied"
+    assert application["status"] == "saved"

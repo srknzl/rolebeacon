@@ -107,6 +107,41 @@ REMOTE_REGIONAL_PATTERNS = (
 )
 
 
+SPONSORSHIP_ABSENT_PHRASES = (
+    "no sponsorship", "without sponsorship", "do not sponsor", "does not offer visa sponsorship",
+    "doesn't offer visa sponsorship", "not offer visa sponsorship", "unable to sponsor",
+)
+SPONSORSHIP_PRESENT_PHRASES = ("visa sponsorship", "blue card", "we sponsor", "sponsor visas")
+RELOCATION_PHRASES = ("relocation support", "relocation package", "relocation assistance", "relocation allowance")
+# Brand pages and registry stubs describe the company. They never state hiring terms, so they are
+# excluded from every fit signal — reading them is what let marketing copy score as engineering.
+NON_HIRING_SOURCE_TYPES = {"about", "public_registry"}
+# Used only when the profile configures no preferred skills, so the dimension still means something.
+ENGINEERING_FALLBACK_TERMS = ("distributed", "backend", "platform", "cloud", "open source", "engineering")
+# Sentences without one of these words describe the brand, not the terms of being hired.
+HIRING_EXCERPT_TERMS = (
+    "remote", "hybrid", "on-site", "onsite", "office", "work from", "relocat", "visa", "sponsor",
+    "salary", "compensation", "pay", "benefit", "engineer", "developer", "hiring", "candidate",
+    "applicant", "interview", "team", "role", "position",
+)
+# A quote exists to be read beside the claim. Job descriptions run whole sections together without
+# a full stop, so an untrimmed "sentence" can be the entire posting, and a navigation label like
+# "Remote work" is a match that proves nothing.
+QUOTE_MAX_CHARS = 240
+QUOTE_MIN_CHARS = 25
+# A page that returns 200 with this wording is a soft 404 and must not count as a fetched source.
+SOFT_404_TITLE_PHRASES = ("404", "not found", "page unavailable")
+SOFT_404_BODY_PHRASES = ("page not found", "page you requested", "page does not exist", "page doesn't exist")
+
+REMOTE_POLICY_WORDING = {
+    "worldwide": "described as worldwide",
+    "regional": "described as regional, so it does not by itself establish eligibility from your country",
+    "hybrid": "described as hybrid",
+    "onsite": "described as on-site",
+    "unknown": "not stated in the fetched sources",
+}
+
+
 @dataclass(slots=True)
 class CompanyResearchStatus:
     running: bool = False
@@ -135,6 +170,9 @@ class CompanyResearchService:
         registry = self._registry_entry(name)
         jobs = self.database.company_jobs(name)
         evidence = self._job_evidence(jobs)
+        # A refresh re-reads the same handful of pages. Sending back what was stored lets the
+        # server answer 304 instead of shipping the whole page again.
+        cache = self.database.company_evidence_cache(name)
         domain = registry.get("domain", "") if registry else ""
         if not domain:
             report("official_sources", "Checking the public company registry", 24)
@@ -142,21 +180,23 @@ class CompanyResearchService:
             evidence.extend(registry_evidence)
         if registry:
             report("official_sources", "Fetching configured official sources", 32)
-            evidence.extend(await self._fetch_official_sources(registry.get("sources", [])))
+            evidence.extend(await self._fetch_official_sources(registry.get("sources", []), cache))
         if domain:
-            evidence.extend(await self._fetch_official_sources(self._conventional_official_sources(domain)))
+            evidence.extend(
+                await self._fetch_official_sources(self._conventional_official_sources(domain), cache)
+            )
         if self.settings.company_search_api_key:
             report("official_sources", "Discovering current official company pages", 42)
             discovered_domain, discovered_sources = await self._discover_official_sources(name, domain)
             domain = domain or discovered_domain
-            evidence.extend(await self._fetch_official_sources(discovered_sources))
+            evidence.extend(await self._fetch_official_sources(discovered_sources, cache))
         evidence = self._deduplicate_evidence(evidence)
         if not evidence:
             raise ValueError("No configured official sources or collected jobs are available for this company")
 
         search_profile = self.settings.load_search_profile()
         provider = "rules"
-        model = "company-rules-v1"
+        model = "company-rules-v2"
         if self.settings.llm_enabled:
             if not await self.llm.available():
                 health = await self.llm.health()
@@ -186,9 +226,8 @@ class CompanyResearchService:
                 )
         else:
             profile, score = self._deterministic_research(name, evidence, jobs, search_profile)
-        coverage, coverage_label, coverage_score = self._evidence_coverage(evidence)
+        coverage, coverage_score = self._fact_coverage(profile, jobs)
         profile["confidence"] = coverage
-        profile["coverage_label"] = coverage_label
         score["dimensions"]["evidence_confidence"] = coverage_score
         score["total"] = sum(int(value) for value in score["dimensions"].values())
         report("saving", "Saving the evidence-backed company profile", 92)
@@ -288,13 +327,16 @@ class CompanyResearchService:
 
     @staticmethod
     def _conventional_official_sources(domain: str) -> list[dict[str, str]]:
+        # Pages where an employer states hiring terms. About and company pages are deliberately
+        # absent: they carry brand copy, and reading them inflated the term-hit scores below
+        # without ever establishing remote policy, sponsorship, or relocation.
         origin = f"https://{domain}"
         return [
-            {"url": f"{origin}/about", "type": "about"},
-            {"url": f"{origin}/company", "type": "about"},
             {"url": f"{origin}/careers", "type": "careers"},
             {"url": f"{origin}/jobs", "type": "careers"},
+            {"url": f"{origin}/careers/benefits", "type": "careers"},
             {"url": f"{origin}/engineering", "type": "engineering"},
+            {"url": f"{origin}/blog/engineering", "type": "engineering"},
         ]
 
     @staticmethod
@@ -322,7 +364,12 @@ class CompanyResearchService:
             return "about"
         return "official"
 
-    async def _fetch_official_sources(self, sources: list[dict[str, str]]) -> list[dict[str, str]]:
+    async def _fetch_official_sources(
+        self,
+        sources: list[dict[str, str]],
+        cache: dict[str, dict[str, Any]] | None = None,
+    ) -> list[dict[str, str]]:
+        stored = cache or {}
         evidence = []
         robots_cache: dict[str, RobotFileParser] = {}
         async with default_http_client() as client:
@@ -330,8 +377,26 @@ class CompanyResearchService:
                 url = source["url"]
                 if not await self._allowed(client, url, robots_cache):
                     continue
+                previous = stored.get(url, {})
+                headers = {}
+                if previous.get("etag"):
+                    headers["If-None-Match"] = str(previous["etag"])
+                if previous.get("last_modified"):
+                    headers["If-Modified-Since"] = str(previous["last_modified"])
                 try:
-                    response = await client.get(url)
+                    response = await client.get(url, headers=headers)
+                    if response.status_code == 304:
+                        evidence.append(
+                            {
+                                "source_url": url,
+                                "source_type": source.get("type", str(previous["source_type"])),
+                                "title": str(previous["title"]),
+                                "excerpt": str(previous["excerpt"]),
+                                "etag": str(previous.get("etag") or ""),
+                                "last_modified": str(previous.get("last_modified") or ""),
+                            }
+                        )
+                        continue
                     response.raise_for_status()
                     content_type = response.headers.get("content-type", "")
                     if "html" not in content_type and "text" not in content_type:
@@ -340,17 +405,29 @@ class CompanyResearchService:
                     if len(text) < 100:
                         continue
                     title_match = re.search(r"<title[^>]*>(.*?)</title>", response.text, re.IGNORECASE | re.DOTALL)
+                    title = plain_text(title_match.group(1)) if title_match else "Official company page"
+                    if self._soft_404(title, text):
+                        continue
                     evidence.append(
                         {
                             "source_url": str(response.url),
                             "source_type": source.get("type", "official"),
-                            "title": plain_text(title_match.group(1)) if title_match else "Official company page",
+                            "title": title,
                             "excerpt": text,
+                            "etag": response.headers.get("etag", ""),
+                            "last_modified": response.headers.get("last-modified", ""),
                         }
                     )
                 except httpx.HTTPError:
                     continue
         return evidence
+
+    @staticmethod
+    def _soft_404(title: str, text: str) -> bool:
+        """Some sites answer 200 for a missing page. Counting it as a source would fake coverage."""
+        return any(phrase in title.casefold() for phrase in SOFT_404_TITLE_PHRASES) or any(
+            phrase in text[:600].casefold() for phrase in SOFT_404_BODY_PHRASES
+        )
 
     async def _allowed(
         self,
@@ -399,22 +476,22 @@ class CompanyResearchService:
         return list(unique.values())
 
     @staticmethod
-    def _evidence_coverage(evidence: list[dict[str, str]]) -> tuple[float, str, int]:
-        official = [
-            item for item in evidence
-            if item.get("source_type") not in {"current_job_posting", "public_registry"}
-        ]
-        official_types = {item.get("source_type", "official") for item in official}
-        job_items = [item for item in evidence if item.get("source_type") == "current_job_posting"]
-        if len(official_types) >= 2:
-            return 0.9, "strong", 10
-        if official:
-            return 0.75, "moderate", 8
-        if any(item.get("source_type") == "public_registry" for item in evidence):
-            return 0.55, "limited", 6
-        if len(job_items) >= 2:
-            return 0.45, "limited", 5
-        return 0.25, "low", 3
+    def _fact_coverage(profile: dict[str, Any], jobs: list[dict[str, Any]]) -> tuple[float, int]:
+        """Count the hiring facts the sources established, not how many URLs answered 200.
+
+        Fetching five brand pages proves nothing about whether this employer sponsors a visa,
+        so the old source count read as confidence while measuring effort.
+        """
+        known = sum(
+            (
+                profile.get("remote_policy", "unknown") != "unknown",
+                profile.get("sponsorship", "unknown") != "unknown",
+                profile.get("relocation", "unknown") != "unknown",
+                any(job.get("salary_min") or job.get("salary_max") for job in jobs),
+                bool(profile.get("engineering_signals")),
+            )
+        )
+        return round(0.2 + 0.14 * known, 2), 2 * known
 
     async def _llm_research(
         self,
@@ -423,7 +500,11 @@ class CompanyResearchService:
         search_profile: dict[str, Any],
     ) -> dict[str, Any]:
         compact = [
-            {"source_url": item["source_url"], "source_type": item["source_type"], "content": item["excerpt"][:10000]}
+            {
+                "source_url": item["source_url"],
+                "source_type": item["source_type"],
+                "content": self._hiring_excerpt(item["excerpt"]),
+            }
             for item in evidence
         ]
         prompt = (
@@ -450,35 +531,24 @@ class CompanyResearchService:
         jobs: list[dict[str, Any]],
         search_profile: dict[str, Any],
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        text = " ".join(item["excerpt"] for item in evidence).casefold()
+        hiring = [item for item in evidence if item["source_type"] not in NON_HIRING_SOURCE_TYPES]
+        text = " ".join(item["excerpt"] for item in hiring).casefold()
         domains = search_profile.get("preferred_domains", [])
         domain_hits = [item for item in domains if item.casefold() in text]
-        engineering_terms = [term for term in ("distributed", "backend", "platform", "cloud", "open source", "engineering") if term in text]
-        remote_policy, remote_source = self._infer_remote_policy(evidence)
-        no_sponsor_sources = self._matching_evidence(
-            evidence,
-            "no sponsorship",
-            "without sponsorship",
-            "do not sponsor",
-            "does not offer visa sponsorship",
-            "doesn't offer visa sponsorship",
-            "not offer visa sponsorship",
-            "unable to sponsor",
-        )
-        sponsor_sources = [
-            item
-            for item in self._matching_evidence(evidence, "visa sponsorship", "blue card", "we sponsor")
-            if item not in no_sponsor_sources
+        skills = [str(value) for value in search_profile.get("preferred_skills", [])]
+        stack_hits = [item for item in (skills or ENGINEERING_FALLBACK_TERMS) if item.casefold() in text]
+        remote_policy, remote_source, remote_quote = self._infer_remote_policy(hiring)
+        no_sponsor_found = self._locate(hiring, SPONSORSHIP_ABSENT_PHRASES)
+        sponsor_found = [
+            pair
+            for pair in self._locate(hiring, SPONSORSHIP_PRESENT_PHRASES)
+            if not any(phrase in pair[1].casefold() for phrase in SPONSORSHIP_ABSENT_PHRASES)
         ]
-        relocation_sources = self._matching_evidence(
-            evidence,
-            "relocation support",
-            "relocation package",
-            "relocation assistance",
-        )
-        official_no_sponsor = any(item["source_type"] != "current_job_posting" for item in no_sponsor_sources)
-        sponsor = bool(sponsor_sources)
-        relocation = bool(relocation_sources)
+        relocation_found = self._locate(hiring, RELOCATION_PHRASES)
+        # A single posting states one role's terms. Company-wide claims need an official page or agreement.
+        official_no_sponsor = self._company_level(no_sponsor_found)
+        sponsor = self._company_level(sponsor_found)
+        relocation = self._company_level(relocation_found)
         salary_known = any(job.get("salary_min") or job.get("salary_max") for job in jobs)
         target = name in search_profile.get("priority_companies", []) or name in search_profile.get("company_watchlist", [])
         mobility_score = {
@@ -490,132 +560,221 @@ class CompanyResearchService:
         }[remote_policy]
         if sponsor or relocation:
             mobility_score = max(mobility_score, 15)
-        coverage, coverage_label, coverage_score = self._evidence_coverage(evidence)
         dimensions = {
             "domain_alignment": min(25, 8 + 5 * len(domain_hits)),
-            "engineering_environment": min(20, 4 + 3 * len(engineering_terms)),
+            "engineering_environment": min(20, 4 + 4 * len(stack_hits)),
             "location_mobility": mobility_score,
             "compensation": 10 if salary_known else 5,
             "company_quality": 8 if target else 5,
-            "evidence_confidence": coverage_score,
+            # research() replaces this once the profile exists, because coverage counts
+            # established facts and none of them are known yet here.
+            "evidence_confidence": 0,
         }
-        def source_for(*terms: str) -> str:
-            return next(
-                (
-                    item["source_url"]
-                    for item in evidence
-                    if any(term.casefold() in item["excerpt"].casefold() for term in terms)
-                ),
-                evidence[0]["source_url"],
-            )
-
+        domain_found = self._locate(hiring, tuple(item.casefold() for item in domain_hits))
+        stack_found = self._locate(hiring, tuple(item.casefold() for item in stack_hits))
         reasons = []
-        if domain_hits:
+        # No fallback source: a claim citing a page that does not contain the term is worse than an
+        # uncited claim, because the "Source" link then looks like verification.
+        if domain_found:
             reasons.append(
-                {
-                    "claim": f"Evidence mentions preferred domains: {', '.join(domain_hits)}",
-                    "source_url": source_for(*domain_hits),
-                }
+                self._claim(f"Evidence mentions preferred domains: {', '.join(domain_hits)}", domain_found[0])
             )
-        if engineering_terms:
+        if stack_found:
             reasons.append(
-                {
-                    "claim": f"Engineering signals include: {', '.join(engineering_terms)}",
-                    "source_url": source_for(*engineering_terms),
-                }
+                self._claim(f"Engineering signals include: {', '.join(stack_hits)}", stack_found[0])
             )
         if remote_policy == "worldwide" and remote_source:
             reasons.append(
                 {
                     "claim": "A source explicitly describes worldwide remote work",
                     "source_url": remote_source["source_url"],
+                    "quote": remote_quote,
                 }
             )
+        if sponsor and sponsor_found:
+            reasons.append(self._claim("A source states that visa sponsorship is offered", sponsor_found[0]))
+        if relocation and relocation_found:
+            reasons.append(self._claim("A source states that relocation support is offered", relocation_found[0]))
         risks = []
-        if no_sponsor_sources:
+        if no_sponsor_found:
             risks.append(
-                {
-                    "claim": "At least one source states that sponsorship is unavailable for the company or a role",
-                    "source_url": no_sponsor_sources[0]["source_url"],
-                }
+                self._claim(
+                    "At least one source states that sponsorship is unavailable for the company or a role",
+                    no_sponsor_found[0],
+                )
             )
         if remote_policy in {"regional", "hybrid"} and remote_source:
             risks.append(
                 {
                     "claim": "Remote availability appears geographically scoped and does not establish eligibility from the candidate's configured country",
                     "source_url": remote_source["source_url"],
+                    "quote": remote_quote,
                 }
             )
         if not sponsor and not relocation:
+            # An absence is established by no single page, so this claim deliberately cites none.
             risks.append(
-                {
-                    "claim": "Sponsorship and relocation support could not be confirmed",
-                    "source_url": evidence[0]["source_url"],
-                }
+                {"claim": "Sponsorship and relocation support could not be confirmed", "source_url": "", "quote": ""}
             )
-        summary_source = next(
-            (item for item in evidence if item["source_type"] == "about"),
-            next((item for item in evidence if item["source_type"] == "careers"), evidence[0]),
-        )
+        sponsorship_state = "unavailable" if official_no_sponsor else "available" if sponsor else "unknown"
+        relocation_state = "available" if relocation else "unknown"
         profile = {
-            "summary": self._summary_from_evidence(summary_source["excerpt"]),
+            "summary": self._factual_summary(
+                remote_policy, sponsorship_state, relocation_state, jobs, domain_hits
+            ),
             "remote_policy": remote_policy,
-            "sponsorship": "unavailable" if official_no_sponsor else "available" if sponsor else "unknown",
-            "relocation": "available" if relocation else "unknown",
+            "sponsorship": sponsorship_state,
+            "relocation": relocation_state,
             "engineering_signals": reasons,
             "risks": risks,
-            "confidence": coverage,
-            "coverage_label": coverage_label,
         }
         score = {"total": sum(dimensions.values()), "dimensions": dimensions, "reasons": reasons, "risks": risks}
         return profile, score
 
     @staticmethod
-    def _summary_from_evidence(value: str) -> str:
-        """Keep a readable, complete-sentence preview rather than cutting an assessment mid-word."""
-        normalized = " ".join(value.split())
-        sentences = re.split(r"(?<=[.!?])\s+", normalized)
-        complete = " ".join(sentences[:4]).strip()
-        return complete or normalized
+    def _factual_summary(
+        remote_policy: str,
+        sponsorship: str,
+        relocation: str,
+        jobs: list[dict[str, Any]],
+        domain_hits: list[str],
+    ) -> str:
+        """State what the evidence established. Quoting the employer's own description assessed nothing."""
+        def stated(value: str) -> str:
+            return "not stated in the fetched sources" if value == "unknown" else f"stated as {value}"
 
-    @staticmethod
-    def _matching_evidence(evidence: list[dict[str, str]], *terms: str) -> list[dict[str, str]]:
-        return [
-            item
-            for item in evidence
-            if any(term.casefold() in item["excerpt"].casefold() for term in terms)
+        parts = [
+            f"Remote work is {REMOTE_POLICY_WORDING[remote_policy]}.",
+            f"Visa sponsorship is {stated(sponsorship)}.",
+            f"Relocation support is {stated(relocation)}.",
         ]
+        if jobs:
+            parts.append(f"{len(jobs)} collected job posting{'' if len(jobs) == 1 else 's'} informed this assessment.")
+        if domain_hits:
+            parts.append(f"Sources mention your preferred domains: {', '.join(domain_hits)}.")
+        return " ".join(parts)
 
     @staticmethod
-    def _remote_policy_for_text(value: str) -> str:
+    def _sentences(value: str) -> list[str]:
+        return [part.strip() for part in re.split(r"(?<=[.!?])\s+|\n+", value) if part.strip()]
+
+    @classmethod
+    def _locate(
+        cls,
+        evidence: list[dict[str, str]],
+        patterns: tuple[str, ...],
+    ) -> list[tuple[dict[str, str], str]]:
+        """Every (source, sentence) pair where a source actually states the fact, so a claim can quote it.
+
+        Matching the whole page told us a word appeared somewhere on it. Matching a sentence tells
+        us what the employer said, which is the only thing worth showing next to a Source link.
+        """
+        found = []
+        for item in evidence:
+            matches = []
+            for sentence in cls._sentences(item["excerpt"]):
+                hits = [index for index in (sentence.casefold().find(p) for p in patterns) if index >= 0]
+                if hits:
+                    matches.append((item, cls._window(sentence, min(hits))))
+            if matches:
+                found.append(cls._preferred(matches))  # one quoted sentence per source is enough
+        return found
+
+    @staticmethod
+    def _preferred(pairs: list[tuple[dict[str, str], str]]) -> tuple[dict[str, str], str]:
+        """Prefer a sentence long enough to read over a navigation label, then an official page.
+
+        A two-word heading like "Remote work" is a real match and a useless quote, so readability
+        outranks provenance here. Which sources may establish the claim is decided elsewhere.
+        """
+        return min(
+            pairs,
+            key=lambda pair: (
+                len(pair[1]) < QUOTE_MIN_CHARS,
+                pair[0]["source_type"] == "current_job_posting",
+            ),
+        )
+
+    @staticmethod
+    def _window(sentence: str, index: int) -> str:
+        """Quote around the wording that matched.
+
+        Job descriptions run whole sections together without a full stop, so trimming from the
+        start of the "sentence" reliably cuts off the words the claim is actually about.
+        """
+        if len(sentence) <= QUOTE_MAX_CHARS:
+            return sentence
+        start = max(0, index - 60)
+        window = sentence[start : start + QUOTE_MAX_CHARS]
+        if start:
+            window = "…" + window.split(" ", 1)[-1]
+        if start + QUOTE_MAX_CHARS < len(sentence):
+            window = window.rsplit(" ", 1)[0] + "…"
+        return window
+
+    @staticmethod
+    def _company_level(found: list[tuple[dict[str, str], str]]) -> bool:
+        """An official page states company policy. A job posting states one role's terms.
+
+        So a claim carried only by postings needs two of them agreeing before it is company-wide.
+        """
+        if any(pair[0]["source_type"] != "current_job_posting" for pair in found):
+            return True
+        return len({pair[0]["source_url"] for pair in found}) >= 2
+
+    @staticmethod
+    def _claim(claim: str, found: tuple[dict[str, str], str]) -> dict[str, str]:
+        return {"claim": claim, "source_url": found[0]["source_url"], "quote": found[1]}
+
+    @classmethod
+    def _hiring_excerpt(cls, excerpt: str, limit: int = 4000) -> str:
+        """Send the model the sentences that state hiring terms rather than a whole marketing page."""
+        kept = " ".join(
+            sentence
+            for sentence in cls._sentences(excerpt)
+            if any(term in sentence.casefold() for term in HIRING_EXCERPT_TERMS)
+        )
+        return (kept or excerpt)[:limit]
+
+    @staticmethod
+    def _remote_policy_for_text(value: str) -> tuple[str, int]:
+        """The policy this wording states, and where it says so, so the claim can quote that part."""
         text = value.casefold()
-        if any(re.search(pattern, text) for pattern in REMOTE_SCOPED_PATTERNS):
-            return "regional"
-        if any(re.search(pattern, text) for pattern in REMOTE_WORLDWIDE_PATTERNS):
-            return "worldwide"
-        if re.search(r"\bhybrid(?:[- ]work|\s+role|\s+position|\s+team)?\b", text):
-            return "hybrid"
-        if any(re.search(pattern, text) for pattern in REMOTE_REGIONAL_PATTERNS):
-            return "regional"
-        if re.search(r"\b(?:on[- ]?site|in[- ]office)\b", text):
-            return "onsite"
-        return "unknown"
+        for policy, patterns in (
+            ("regional", REMOTE_SCOPED_PATTERNS),
+            ("worldwide", REMOTE_WORLDWIDE_PATTERNS),
+            ("hybrid", (r"\bhybrid(?:[- ]work|\s+role|\s+position|\s+team)?\b",)),
+            ("regional", REMOTE_REGIONAL_PATTERNS),
+            ("onsite", (r"\b(?:on[- ]?site|in[- ]office)\b",)),
+        ):
+            match = next((found for found in (re.search(item, text) for item in patterns) if found), None)
+            if match:
+                return policy, match.start()
+        return "unknown", 0
 
     @classmethod
     def _infer_remote_policy(
         cls,
         evidence: list[dict[str, str]],
-    ) -> tuple[str, dict[str, str] | None]:
-        classified = [(item, cls._remote_policy_for_text(item["excerpt"])) for item in evidence]
-        policy_sources = [pair for pair in classified if pair[0]["source_type"] != "current_job_posting"]
-        candidates = [pair for pair in policy_sources if pair[1] != "unknown"]
-        if not candidates:
-            candidates = [pair for pair in classified if pair[1] != "unknown"]
+    ) -> tuple[str, dict[str, str] | None, str]:
+        found: dict[str, list[tuple[dict[str, str], str]]] = {}
+        for item in evidence:
+            for sentence in cls._sentences(item["excerpt"]):
+                policy, index = cls._remote_policy_for_text(sentence)
+                if policy != "unknown":
+                    found.setdefault(policy, []).append((item, cls._window(sentence, index)))
         for policy in ("worldwide", "regional", "hybrid", "onsite"):
-            match = next((item for item, value in candidates if value == policy), None)
-            if match:
-                return policy, match
-        return "unknown", None
+            pairs = found.get(policy, [])
+            if not pairs:
+                continue
+            # Only the permissive reading needs corroboration. "Worldwide" from a single posting
+            # would overstate where the candidate may actually be hired from; a restrictive
+            # wording grants nothing, so one source stating it is enough to record the risk.
+            if policy == "worldwide" and not cls._company_level(pairs):
+                continue
+            pair = cls._preferred(pairs)
+            return policy, pair[0], pair[1]
+        return "unknown", None, ""
 
     @staticmethod
     def _validate_score(score: dict[str, Any]) -> None:

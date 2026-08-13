@@ -1,6 +1,6 @@
 <article class="job-card">
   {% set display_score = job.opportunity_score or job.score or 0 %}
-  <div class="score score-{{ 'high' if display_score >= 80 else 'mid' if display_score >= 65 else 'low' }}" title="Overall opportunity score from 0 to 100 after eligibility checks.">
+  <div class="score score-{{ 'high' if display_score >= 80 else 'mid' if display_score >= 65 else 'low' }}" title="Overall opportunity score from 0 to 100. It blends job fit (80%) with company fit (20%) after eligibility has been checked.">
     {{ display_score or '—' }}
   </div>
   <div class="job-card-main">
@@ -9,13 +9,18 @@
         <a href="/jobs/{{ job.id }}" class="job-title">{{ job.title }}</a>
         <div class="company">{{ job.company }}</div>
       </div>
-      <span class="status status-{{ job.status }}" title="Your personal pipeline decision for this job.">{{ job.status }}</span>
+      <div class="job-card-badges">
+        <span class="status status-{{ job.eligibility_status or 'unknown' }}" title="Eligibility is checked before fit and cannot be overridden by a high score.">{{ job.eligibility_status or 'eligibility unknown' }}</span>
+        <span class="status status-{{ job.status }}" title="Your own pipeline decision for this job.">{{ job.status }}</span>
+      </div>
     </div>
     <div class="meta-row">
       <span>{{ job.location or 'Location unknown' }}</span>
       <span>{{ job.route or 'Unclassified' }}</span>
       <span>{{ job.sponsorship or 'sponsorship unknown' }}</span>
       {% if job.company_score %}<span>company {{ job.company_score }}</span>{% endif %}
+      {% set age = job.published_at or job.first_seen_at %}
+      {% if age %}<span title="{{ 'Posted ' + job.published_at if job.published_at else 'First collected ' + job.first_seen_at }}">{{ age[:10] }}</span>{% endif %}
     </div>
     {% if job.risks %}<div class="risk">{{ job.risks[0] }}</div>{% endif %}
   </div>

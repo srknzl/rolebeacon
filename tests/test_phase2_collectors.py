@@ -55,6 +55,49 @@ def test_plain_text_preserves_job_description_structure_without_scripts() -> Non
     )
 
 
+def test_plain_text_drops_page_chrome_from_full_html_documents() -> None:
+    value = """
+    <html><head><title>Trusted open source | Canonical</title></head><body>
+    <a href="#main">Skip to main content</a>
+    <nav><ul><li>Products</li></ul></nav>
+    <div aria-hidden="true"><p>Your submission was sent successfully!</p><button>Close</button></div>
+    <main><p>Canonical publishes Ubuntu.</p></main>
+    <footer><p>All rights reserved.</p></footer>
+    </body></html>
+    """
+
+    text = plain_text(value)
+
+    assert "Canonical publishes Ubuntu." in text
+    for chrome in ("Trusted open source", "Products", "submission was sent", "Close", "rights reserved"):
+        assert chrome not in text
+
+
+def test_plain_text_drops_popups_and_banners_hidden_by_css_class_rather_than_markup() -> None:
+    value = """
+    <body>
+    <a href="#main-content" class="u-off-screen">Skip to main content</a>
+    <div id="newsletter-signup" class="p-popup-notification"><p>Thank you for signing up for our
+    newsletter! In these regular emails you will find the latest updates from Canonical.</p></div>
+    <div class="cookie-policy"><p>We use cookies to improve your experience.</p></div>
+    <div role="navigation"><p>Products</p></div>
+    <main><p>Canonical publishes Ubuntu.</p></main>
+    </body>
+    """
+
+    text = plain_text(value)
+
+    assert "Canonical publishes Ubuntu." in text
+    for chrome in ("Skip to main", "regular emails", "cookies", "Products"):
+        assert chrome not in text
+
+
+def test_plain_text_keeps_content_after_an_unclosed_option_inside_a_skipped_select() -> None:
+    value = "<select><option>A<option>B</select><p>Real content.</p>"
+
+    assert plain_text(value) == "Real content."
+
+
 def test_description_blocks_create_safe_headings_lists_and_readable_paragraphs() -> None:
     value = (
         "About the role: Build reliable systems. "

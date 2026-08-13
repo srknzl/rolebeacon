@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "rolebeacon",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "rolebeacon", "serve", "--port", "8765"],
+      "port": 8765
+    }
+  ]
+}

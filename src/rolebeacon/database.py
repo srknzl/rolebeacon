@@ -6,6 +6,7 @@ import re
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -13,6 +14,48 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .domain import CollectedJob, EligibilityResult, JobStatus, ScoreResult
+
+
+@dataclass(slots=True)
+class JobFilters:
+    """Every way the job list can be narrowed. Filters narrow the set; `sort` only reorders it."""
+
+    query: str = ""
+    title: str = ""
+    technologies: tuple[str, ...] = ()
+    route: str = ""
+    status: str = ""
+    source: str = ""
+    company: str = ""
+    eligibility: str = ""
+    sponsorship: str = ""
+    relocation: str = ""
+    work_model: str = ""
+    seniority: str = ""
+    provider: str = ""
+    posted_within_days: int = 0
+    min_score: int = 0
+    min_title_match: int = 0
+    min_stack_match: int = 0
+    salary_floor: float = 0
+    has_salary: bool = False
+    exclude_ineligible: bool = False
+
+
+# Artifact preparation stages, in the only order they may advance.
+ARTIFACT_STAGES = ("saved", "preparing", "ready")
+# Outcomes the user records on the job itself. They own the pipeline column once set.
+APPLICATION_OUTCOMES = ("applied", "interview", "offer", "rejected")
+
+# Sort keys are a fixed allow-list because they are interpolated into ORDER BY.
+JOB_SORTS: dict[str, str] = {
+    "opportunity": "COALESCE(opportunity_score, ms.total, 0) DESC",
+    "job_fit": "COALESCE(ms.total, 0) DESC",
+    "title_match": "COALESCE(json_extract(ms.dimensions_json, '$.role_domain'), 0) DESC",
+    "stack_match": "COALESCE(json_extract(ms.dimensions_json, '$.stack'), 0) DESC",
+    "company_fit": "COALESCE(cs.total, 0) DESC",
+    "newest": "COALESCE(j.published_at, j.first_seen_at) DESC",
+}
 
 SCHEMA = """
 PRAGMA journal_mode = WAL;
@@ -199,6 +242,8 @@ CREATE TABLE IF NOT EXISTS company_evidence (
     excerpt TEXT NOT NULL DEFAULT '',
     content_hash TEXT NOT NULL,
     fetched_at TEXT NOT NULL,
+    etag TEXT NOT NULL DEFAULT '',
+    last_modified TEXT NOT NULL DEFAULT '',
     UNIQUE(company_id, source_url)
 );
 
@@ -350,6 +395,8 @@ class Database:
                 self._ensure_column(connection, "job_sources", name, definition)
             self._ensure_column(connection, "source_state", "next_eligible_sync_at", "TEXT")
             self._ensure_column(connection, "source_state", "last_skipped_reason", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(connection, "company_evidence", "etag", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(connection, "company_evidence", "last_modified", "TEXT NOT NULL DEFAULT ''")
             for row in connection.execute("SELECT id, company, title, location FROM jobs").fetchall():
                 connection.execute(
                     "UPDATE jobs SET company_key = ?, normalized_title = ?, location_bucket = ? WHERE id = ?",
@@ -534,11 +581,11 @@ class Database:
                        e.location_fit, e.reasons_json, e.risks_json,
                        ms.total AS score, ms.dimensions_json, ms.confidence, ms.verdict,
                        ms.evidence_json, ms.gaps_json, ms.provider, ms.model,
-                       c.id AS company_id, c.summary AS company_summary, c.remote_policy AS company_remote_policy,
+                       c.id AS company_id, c.remote_policy AS company_remote_policy,
                        c.sponsorship AS company_sponsorship, c.relocation AS company_relocation,
                        cs.total AS company_score,
                        CASE WHEN ms.total IS NULL THEN NULL WHEN cs.total IS NULL THEN ms.total
-                            ELSE ROUND(ms.total * 0.8 + cs.total * 0.2) END AS opportunity_score
+                            ELSE CAST(ROUND(ms.total * 0.8 + cs.total * 0.2) AS INTEGER) END AS opportunity_score
                 FROM jobs j
                 LEFT JOIN eligibility e ON e.job_id = j.id
                 LEFT JOIN match_scores ms ON ms.id = (
@@ -579,47 +626,111 @@ class Database:
             strong = self._strong_identity_match(connection, job)
             return int(strong["id"]) if strong else None
 
+    @staticmethod
+    def _job_filters(filters: JobFilters) -> tuple[list[str], list[Any], str]:
+        """Build the shared WHERE clauses so the list and its total count can never disagree."""
+        clauses = ["j.active = 1", "j.merged_into_job_id IS NULL", "COALESCE(ms.total, 0) >= ?"]
+        params: list[Any] = [filters.min_score]
+        if filters.route:
+            clauses.append("e.route = ?")
+            params.append(filters.route)
+        if filters.status:
+            clauses.append("j.status = ?")
+            params.append(filters.status)
+        if filters.source:
+            clauses.append("EXISTS (SELECT 1 FROM job_sources js WHERE js.job_id = j.id AND js.source_id = ?)")
+            params.append(filters.source)
+        if filters.exclude_ineligible:
+            clauses.append("COALESCE(e.status, 'unknown') <> 'ineligible'")
+        if filters.eligibility:
+            clauses.append("COALESCE(e.status, 'unknown') = ?")
+            params.append(filters.eligibility)
+        if filters.sponsorship:
+            clauses.append("COALESCE(e.sponsorship, 'unknown') = ?")
+            params.append(filters.sponsorship)
+        if filters.relocation:
+            clauses.append("COALESCE(e.relocation, 'unknown') = ?")
+            params.append(filters.relocation)
+        if filters.work_model == "remote_worldwide":
+            clauses.append("j.location_bucket = 'remote:worldwide'")
+        elif filters.work_model == "remote":
+            clauses.append("j.location_bucket LIKE 'remote:%'")
+        elif filters.work_model == "onsite":
+            clauses.append("j.location_bucket NOT LIKE 'remote:%'")
+        if filters.seniority:
+            clauses.append("j.normalized_title LIKE ?")
+            params.append(f"%{filters.seniority}%")
+        if filters.title:
+            clauses.append("j.normalized_title LIKE ?")
+            params.append(f"%{filters.title.casefold()}%")
+        for technology in filters.technologies:
+            clauses.append("(j.title LIKE ? OR j.description LIKE ?)")
+            params.extend([f"%{technology}%", f"%{technology}%"])
+        if filters.company:
+            clauses.append("j.company_key = ?")
+            params.append(company_key(filters.company))
+        if filters.posted_within_days > 0:
+            clauses.append(
+                "julianday(COALESCE(j.published_at, j.first_seen_at)) >= julianday('now', ?)"
+            )
+            params.append(f"-{int(filters.posted_within_days)} days")
+        if filters.has_salary:
+            clauses.append("(j.salary_min IS NOT NULL OR j.salary_max IS NOT NULL)")
+        if filters.salary_floor > 0:
+            clauses.append("COALESCE(j.salary_max, j.salary_min, 0) >= ?")
+            params.append(filters.salary_floor)
+        if filters.min_title_match > 0:
+            clauses.append("COALESCE(json_extract(ms.dimensions_json, '$.role_domain'), 0) >= ?")
+            params.append(filters.min_title_match)
+        if filters.min_stack_match > 0:
+            clauses.append("COALESCE(json_extract(ms.dimensions_json, '$.stack'), 0) >= ?")
+            params.append(filters.min_stack_match)
+        if filters.provider:
+            clauses.append("COALESCE(ms.provider, '') = ?")
+            params.append(filters.provider)
+        join_fts = ""
+        if filters.query:
+            join_fts = "JOIN jobs_fts f ON f.rowid = j.id"
+            clauses.append("jobs_fts MATCH ?")
+            params.append(filters.query)
+        return clauses, params, join_fts
+
+    def count_jobs(self, filters: JobFilters | None = None) -> int:
+        """Total matches ignoring limit/offset, so the UI can show a real count instead of a cap."""
+        clauses, params, join_fts = self._job_filters(filters or JobFilters())
+        sql = f"""
+            SELECT COUNT(*) AS total
+            FROM jobs j
+            {join_fts}
+            LEFT JOIN eligibility e ON e.job_id = j.id
+            LEFT JOIN match_scores ms ON ms.id = (
+                SELECT id FROM match_scores WHERE job_id = j.id ORDER BY created_at DESC, id DESC LIMIT 1
+            )
+            WHERE {' AND '.join(clauses)}
+        """
+        with self.connect() as connection:
+            return int(connection.execute(sql, params).fetchone()["total"])
+
     def list_jobs(
         self,
+        filters: JobFilters | None = None,
         *,
-        route: str = "",
-        status: str = "",
-        source: str = "",
-        query: str = "",
-        min_score: int = 0,
-        exclude_ineligible: bool = False,
+        sort: str = "opportunity",
         limit: int = 100,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
-        clauses = ["j.active = 1", "j.merged_into_job_id IS NULL", "COALESCE(ms.total, 0) >= ?"]
-        params: list[Any] = [min_score]
-        if route:
-            clauses.append("e.route = ?")
-            params.append(route)
-        if status:
-            clauses.append("j.status = ?")
-            params.append(status)
-        if source:
-            clauses.append("EXISTS (SELECT 1 FROM job_sources js WHERE js.job_id = j.id AND js.source_id = ?)")
-            params.append(source)
-        if exclude_ineligible:
-            clauses.append("COALESCE(e.status, 'unknown') <> 'ineligible'")
-        join_fts = ""
-        if query:
-            join_fts = "JOIN jobs_fts f ON f.rowid = j.id"
-            clauses.append("jobs_fts MATCH ?")
-            params.append(query)
+        clauses, params, join_fts = self._job_filters(filters or JobFilters())
         params.extend((limit, offset))
         sql = f"""
             SELECT j.*, e.status AS eligibility_status, e.route, e.sponsorship, e.relocation,
                    e.location_fit, e.reasons_json, e.risks_json,
                    ms.total AS score, ms.dimensions_json, ms.confidence, ms.verdict,
                    ms.evidence_json, ms.gaps_json, ms.provider, ms.model,
-                   c.id AS company_id, c.summary AS company_summary, c.remote_policy AS company_remote_policy,
+                   c.id AS company_id, c.remote_policy AS company_remote_policy,
                    c.sponsorship AS company_sponsorship, c.relocation AS company_relocation,
                    cs.total AS company_score,
                    CASE WHEN ms.total IS NULL THEN NULL WHEN cs.total IS NULL THEN ms.total
-                        ELSE ROUND(ms.total * 0.8 + cs.total * 0.2) END AS opportunity_score
+                        ELSE CAST(ROUND(ms.total * 0.8 + cs.total * 0.2) AS INTEGER) END AS opportunity_score
             FROM jobs j
             {join_fts}
             LEFT JOIN eligibility e ON e.job_id = j.id
@@ -631,7 +742,9 @@ class Database:
                 SELECT id FROM company_scores WHERE company_id = c.id ORDER BY created_at DESC, id DESC LIMIT 1
             )
             WHERE {' AND '.join(clauses)}
-            ORDER BY COALESCE(opportunity_score, ms.total, 0) DESC, COALESCE(j.published_at, j.first_seen_at) DESC
+            ORDER BY {JOB_SORTS.get(sort) or JOB_SORTS["opportunity"]},
+                     COALESCE(opportunity_score, ms.total, 0) DESC,
+                     COALESCE(j.published_at, j.first_seen_at) DESC
             LIMIT ? OFFSET ?
         """
         with self.connect() as connection:
@@ -707,6 +820,25 @@ class Database:
                 "INSERT INTO feedback (job_id, status, reason, created_at) VALUES (?, ?, ?, ?)",
                 (job_id, status.value, reason.strip(), now),
             )
+            if status.value in APPLICATION_OUTCOMES:
+                # An outcome can be recorded on a job that was applied to without RoleBeacon preparing
+                # anything. Without a row here the pipeline board would never show it.
+                connection.execute(
+                    """
+                    INSERT INTO applications (job_id, status, created_at, updated_at)
+                    VALUES (?, 'saved', ?, ?)
+                    ON CONFLICT(job_id) DO UPDATE SET updated_at = excluded.updated_at
+                    """,
+                    (job_id, now, now),
+                )
+
+    @staticmethod
+    def _artifact_stage(column: str) -> str:
+        """Artifact preparation only moves forward, so regenerating a resume cannot undo a prepared packet."""
+        cases = " ".join(
+            f"WHEN {column} = '{stage}' THEN {index}" for index, stage in enumerate(ARTIFACT_STAGES)
+        )
+        return f"(CASE {cases} ELSE 0 END)"
 
     def save_application(
         self,
@@ -721,12 +853,14 @@ class Database:
         now = _iso()
         with self.connect() as connection:
             connection.execute(
-                """
+                f"""
                 INSERT INTO applications (
                     job_id, status, resume_path, cover_letter_path, packet_path, notes, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(job_id) DO UPDATE SET
-                    status = excluded.status,
+                    status = CASE
+                        WHEN {self._artifact_stage('excluded.status')} > {self._artifact_stage('applications.status')}
+                        THEN excluded.status ELSE applications.status END,
                     resume_path = CASE WHEN excluded.resume_path <> '' THEN excluded.resume_path ELSE applications.resume_path END,
                     cover_letter_path = CASE WHEN excluded.cover_letter_path <> '' THEN excluded.cover_letter_path ELSE applications.cover_letter_path END,
                     packet_path = CASE WHEN excluded.packet_path <> '' THEN excluded.packet_path ELSE applications.packet_path END,
@@ -742,7 +876,7 @@ class Database:
                 dict(row)
                 for row in connection.execute(
                     """
-                    SELECT a.*, j.title, j.company, j.canonical_url, e.route,
+                    SELECT a.*, j.title, j.company, j.canonical_url, j.status AS job_status, e.route,
                            (SELECT total FROM match_scores WHERE job_id = j.id ORDER BY created_at DESC, id DESC LIMIT 1) AS score
                     FROM applications a
                     JOIN jobs j ON j.id = a.job_id
@@ -935,6 +1069,22 @@ class Database:
                 ).fetchall()
             ]
 
+    def company_evidence_cache(self, name: str) -> dict[str, dict[str, Any]]:
+        """What was stored for each official page last time, so a refresh can revalidate it."""
+        with self.connect() as connection:
+            return {
+                row["source_url"]: dict(row)
+                for row in connection.execute(
+                    """
+                    SELECT e.source_url, e.source_type, e.title, e.excerpt, e.etag, e.last_modified
+                    FROM company_evidence e
+                    JOIN companies c ON c.id = e.company_id
+                    WHERE c.normalized_name = ?
+                    """,
+                    (company_key(name),),
+                ).fetchall()
+            }
+
     def save_company_research(
         self,
         *,
@@ -979,17 +1129,20 @@ class Database:
                 connection.execute(
                     """
                     INSERT INTO company_evidence (
-                        company_id, source_url, source_type, title, excerpt, content_hash, fetched_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        company_id, source_url, source_type, title, excerpt, content_hash, fetched_at,
+                        etag, last_modified
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(company_id, source_url) DO UPDATE SET
                         source_type = excluded.source_type, title = excluded.title,
                         excerpt = excluded.excerpt, content_hash = excluded.content_hash,
-                        fetched_at = excluded.fetched_at
+                        fetched_at = excluded.fetched_at, etag = excluded.etag,
+                        last_modified = excluded.last_modified
                     """,
                     (
                         company_id, item["source_url"], item.get("source_type", "official"),
                         item.get("title", ""), excerpt,
                         hashlib.sha256(excerpt.encode()).hexdigest(), now,
+                        item.get("etag", ""), item.get("last_modified", ""),
                     ),
                 )
             connection.execute(

@@ -16,6 +16,7 @@
   <div class="detail-main">
     <div class="panel">
       <div class="panel-heading"><h2>Why it matches</h2><span>{{ job.provider or 'not scored' }} · {{ job.model or '' }}</span></div>
+      <p class="mode-note">{% if llm_enabled %}{{ llm_model }} wrote this evidence from your profile and the posting below. A re-score can word it differently and RoleBeacon never invents experience you did not record.{% else %}Rules-only scoring matched your profile against the posting below. The same profile and posting always produce the same score, and nothing here is written by a model.{% endif %}</p>
       {% if job.evidence %}<ul class="evidence-list">{% for item in job.evidence %}<li><strong>{{ item.requirement }}</strong><span>{{ item.profile_evidence }}</span></li>{% endfor %}</ul>{% else %}<p class="muted">No evidence recorded yet.</p>{% endif %}
     </div>
     <div class="panel">
@@ -42,6 +43,12 @@
         <button name="status" value="maybe" class="button" title="Keep this job visible without committing it to your shortlist.">Maybe</button>
         <button name="status" value="rejected" class="button button-quiet" title="Hide this job from recommendations. The original posting is not changed.">Reject</button>
       </form>
+      <p class="safety-note">Record where this application stands. RoleBeacon cannot see the employer's system, so these are your own notes.</p>
+      <form action="/api/jobs/{{ job.id }}/feedback" method="post" class="decision-grid" data-decision-form>
+        <button name="status" value="applied" class="button" title="You submitted this application yourself. It moves to Applied on the pipeline board.">I applied</button>
+        <button name="status" value="interview" class="button" title="You were invited to interview for this role.">Interview</button>
+        <button name="status" value="offer" class="button" title="You received an offer for this role.">Offer</button>
+      </form>
       <hr>
       <h2>Company intelligence</h2>
       {% if job.company_id %}
@@ -56,24 +63,51 @@
       {% if application and application.resume_path %}<a class="artifact-link" href="/artifacts/{{ job.id }}/resume.pdf" title="Open the locally generated resume PDF for review.">Open tailored resume</a>{% else %}<form action="/api/jobs/{{ job.id }}/resume" method="post"><button class="button wide" title="Create a factual resume draft using only verified profile evidence.">Generate tailored resume</button></form>{% endif %}
       <div class="recommendation {% if cover_letter_recommended %}recommended{% endif %}"><strong>{{ 'Recommended' if cover_letter_recommended else 'Optional' }} cover letter</strong><p>{{ cover_letter_reason }}</p></div>
       {% if application and application.cover_letter_path %}<a class="artifact-link" href="/artifacts/{{ job.id }}/cover-letter.txt" title="Open the locally generated cover letter for review.">Open cover letter</a>{% elif llm_enabled %}<form action="/api/jobs/{{ job.id }}/cover-letter" method="post"><button class="button wide" title="Create an on-demand factual cover letter. You must review it before use.">Generate cover letter</button></form>{% else %}<button class="button wide" disabled title="Choose and test an LLM in Settings to generate a cover letter.">Cover letter requires an LLM</button>{% endif %}
-      <form action="/api/jobs/{{ job.id }}/prepare-application" method="post"><button class="button button-primary wide" title="Prepare supported form fields in a browser. RoleBeacon never submits an application.">Prepare application</button></form>
+      {% if application and application.packet_path %}<a class="artifact-link" data-packet-link href="/artifacts/{{ job.id }}/application-packet.json" title="Open the prepared answers RoleBeacon assembled for this application.">Open prepared application packet</a>{% endif %}
+      <form action="/api/jobs/{{ job.id }}/prepare-application" method="post" data-prepare-form><button class="button button-primary wide" title="Assemble your saved answers into a reviewable packet. RoleBeacon never submits an application.">Prepare application</button></form>
       <a class="button button-quiet wide" href="{{ job.apply_url or job.canonical_url }}" target="_blank" rel="noopener" title="Open the original posting in a new tab for your review and final submission.">Open original posting ↗</a>
       <p class="safety-note">RoleBeacon never submits the application. Review every answer and press Submit yourself.</p>
     </div>
   </aside>
 </section>
 <script>
-  const decisionForm = document.querySelector("[data-decision-form]");
   const jobMessage = document.getElementById("job-message");
-  const showJobMessage = text => { jobMessage.textContent = text; jobMessage.className = "toast alert-success"; jobMessage.hidden = false; setTimeout(() => { jobMessage.hidden = true; }, 4000); };
-  decisionForm?.addEventListener("submit", async event => {
+  const showJobMessage = (text, ok = true) => { jobMessage.textContent = text; jobMessage.className = ok ? "toast alert-success" : "toast"; jobMessage.hidden = false; setTimeout(() => { jobMessage.hidden = true; }, 6000); };
+  const jobStatuses = ["new", "interested", "maybe", "rejected", "applied", "interview", "offer"];
+  document.querySelectorAll("[data-decision-form]").forEach(decisionForm => decisionForm.addEventListener("submit", async event => {
     event.preventDefault();
     const submitter = event.submitter;
     if (!submitter) return;
     const response = await fetch(decisionForm.action, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({status: submitter.value})});
-    if (!response.ok) { showJobMessage("Could not save this decision."); return; }
-    document.querySelectorAll(".detail-header .status").forEach(item => { if (["new", "interested", "maybe", "rejected"].some(value => item.classList.contains(`status-${value}`))) { item.className = `status status-${submitter.value}`; item.textContent = submitter.value; } });
+    if (!response.ok) { showJobMessage("Could not save this decision.", false); return; }
+    document.querySelectorAll(".detail-header .status").forEach(item => { if (jobStatuses.some(value => item.classList.contains(`status-${value}`))) { item.className = `status status-${submitter.value}`; item.textContent = submitter.value; } });
     showJobMessage(`Marked as ${submitter.value}.`);
+  }));
+  const prepareForm = document.querySelector("[data-prepare-form]");
+  prepareForm?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const button = prepareForm.querySelector("button");
+    button.disabled = true;
+    try {
+      const response = await fetch(prepareForm.action, {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail?.message || result.detail || "The application packet could not be prepared.");
+      if (!document.querySelector("[data-packet-link]")) {
+        const link = document.createElement("a");
+        link.className = "artifact-link";
+        link.setAttribute("data-packet-link", "");
+        link.href = `/artifacts/{{ job.id }}/application-packet.json`;
+        link.title = "Open the prepared answers RoleBeacon assembled for this application.";
+        link.textContent = "Open prepared application packet";
+        prepareForm.parentElement.insertBefore(link, prepareForm);
+      }
+      showJobMessage(result.browser_opened
+        ? "Packet prepared. A browser window is opening with the supported fields filled in — review every answer and submit it yourself."
+        : "Packet prepared. Open it below to review your answers, then apply on the original posting yourself.");
+    } catch (error) {
+      showJobMessage(error.message, false);
+    }
+    button.disabled = false;
   });
 </script>
 {% endblock %}

@@ -33,22 +33,73 @@ MOJIBAKE_REPLACEMENTS = {
 }
 
 
+# Site chrome that carries no employer information. Skipping it at extraction time keeps
+# navigation, cookie banners, and hidden modals out of job descriptions and company evidence alike.
+NON_CONTENT_TAGS = {
+    "script", "style", "noscript", "svg", "template", "head", "nav", "footer",
+    "aside", "dialog", "form", "button", "select", "iframe",
+}
+VOID_TAGS = {
+    "area", "base", "br", "col", "embed", "hr", "img", "input",
+    "link", "meta", "param", "source", "track", "wbr",
+}
+# Landmarks and widgets that hold site chrome rather than employer or role information.
+NON_CONTENT_ROLES = {
+    "navigation", "banner", "contentinfo", "dialog", "alertdialog", "alert",
+    "menu", "menubar", "search", "complementary", "tablist", "toolbar",
+}
+# Popups, cookie bars, and screen-reader-only links are hidden with CSS classes rather than the
+# hidden attribute, so structure alone cannot find them. Matching class and id substrings does.
+# ponytail: substring list, not a CSS engine — dropping one real paragraph costs less than
+# feeding a newsletter modal into scoring as if it were employer evidence.
+NON_CONTENT_CLASS_HINTS = (
+    "cookie", "popup", "modal", "lightbox", "toast", "notification", "newsletter",
+    "skip-link", "skiplink", "breadcrumb", "sr-only", "screen-reader", "screenreader",
+    "visually-hidden", "visuallyhidden", "off-screen", "offscreen", "u-hide", "is-hidden",
+)
+
+
 class _TextExtractor(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
         self.parts: list[str] = []
-        self.skipped_depth = 0
+        # Skipping tracks nesting of the skipped tag only, so sloppy markup inside it
+        # (an unclosed <option>, a stray </div>) cannot end the skip early or late.
+        self._skip_tag = ""
+        self._skip_depth = 0
+
+    @property
+    def skipping(self) -> bool:
+        return bool(self._skip_tag)
 
     def _break(self) -> None:
         if self.parts and self.parts[-1] != "\n":
             self.parts.append("\n")
 
+    @staticmethod
+    def _is_chrome(attrs: list[tuple[str, str | None]]) -> bool:
+        for raw_name, raw_value in attrs:
+            name = raw_name.casefold()
+            value = str(raw_value or "").casefold()
+            if name == "hidden":
+                return True
+            if name == "aria-hidden" and value == "true":
+                return True
+            if name == "role" and value in NON_CONTENT_ROLES:
+                return True
+            if name in {"class", "id"} and any(hint in value for hint in NON_CONTENT_CLASS_HINTS):
+                return True
+        return False
+
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         normalized = tag.casefold()
-        if normalized in {"script", "style", "noscript", "svg", "template"}:
-            self.skipped_depth += 1
+        if self.skipping:
+            if normalized == self._skip_tag:
+                self._skip_depth += 1
             return
-        if self.skipped_depth:
+        if normalized not in VOID_TAGS and (normalized in NON_CONTENT_TAGS or self._is_chrome(attrs)):
+            self._skip_tag = normalized
+            self._skip_depth = 1
             return
         if normalized == "li":
             self._break()
@@ -58,16 +109,17 @@ class _TextExtractor(HTMLParser):
 
     def handle_endtag(self, tag: str) -> None:
         normalized = tag.casefold()
-        if normalized in {"script", "style", "noscript", "svg", "template"} and self.skipped_depth:
-            self.skipped_depth -= 1
+        if self.skipping:
+            if normalized == self._skip_tag:
+                self._skip_depth -= 1
+                if self._skip_depth <= 0:
+                    self._skip_tag = ""
             return
-        if not self.skipped_depth and normalized in {
-            "li", "p", "div", "section", "article", "h1", "h2", "h3", "h4", "h5", "h6",
-        }:
+        if normalized in {"li", "p", "div", "section", "article", "h1", "h2", "h3", "h4", "h5", "h6"}:
             self._break()
 
     def handle_data(self, data: str) -> None:
-        if self.skipped_depth:
+        if self.skipping:
             return
         value = re.sub(r"\s+", " ", data).strip()
         if value:

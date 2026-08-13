@@ -67,7 +67,7 @@
 
   <section class="panel settings-tab-panel" data-settings-panel="search">
     <h2>Scoring engine</h2>
-    <label>Mode {{ tip("Rules-only works without a model. Ollama and custom endpoints add written evidence and richer fit analysis.") }}<select id="llm-mode"><option value="rules">Rules only — no model required</option><option value="ollama">Ollama on this computer or LAN</option><option value="custom">Custom OpenAI-compatible endpoint</option></select></label>
+    <label>Mode {{ tip("Rules only is a complete mode: collection, eligibility, scoring, and company research all run on deterministic local rules, so the same input always gives the same result, and every claim quotes the source sentence it came from. Cover letters are the one feature it cannot do. An endpoint adds written evidence, written company assessments, and cover letters, but its wording varies between runs. If the endpoint is unreachable RoleBeacon stops and tells you, rather than quietly scoring with rules.") }}<select id="llm-mode"><option value="rules">Rules only — no model required</option><option value="ollama">Ollama on this computer or LAN</option><option value="custom">Custom OpenAI-compatible endpoint</option></select></label>
     <div id="model-details" class="model-details">
     <div class="form-grid">
       <label>Endpoint {{ tip("Local Ollama normally uses http://127.0.0.1:11434/v1. A LAN or compatible endpoint can be used instead.") }}<input id="llm-base-url" value="http://127.0.0.1:11434/v1"></label>
@@ -99,7 +99,7 @@
     <p class="muted">These fields do not influence job discovery. They are used only when RoleBeacon generates a résumé or prepares an application.</p>
     <div class="form-grid">
       <label>Email {{ tip("Optional contact detail included in generated application materials. RoleBeacon never submits it automatically.") }}<input id="email" type="email"></label>
-      <label>Phone {{ tip("Optional contact detail included in generated application materials.") }}<input id="phone"></label>
+      <label>Phone {{ tip("Optional contact detail included in generated application materials. RoleBeacon never submits it automatically.") }}<input id="phone"></label>
       <label>City {{ tip("Optional résumé location. It does not affect job matching; country eligibility is configured under Job search.") }}<input id="city"></label>
       <label>Website {{ tip("Optional portfolio URL included in generated application materials.") }}<input id="website" type="url"></label>
     </div>
@@ -332,10 +332,6 @@
     document.querySelectorAll(".settings-tab").forEach(item => item.setAttribute("aria-selected", String(item === tab)));
     document.querySelectorAll(".settings-tab-panel").forEach(panel => { panel.hidden = panel.dataset.settingsPanel !== tab.dataset.settingsTab; });
   }));
-  document.querySelectorAll(".help-tip").forEach(tip => {
-    const position = () => { const rect = tip.getBoundingClientRect(); tip.style.setProperty("--tooltip-x", `${rect.left}px`); tip.style.setProperty("--tooltip-y", `${rect.top}px`); };
-    tip.addEventListener("mouseenter", position); tip.addEventListener("focus", position);
-  });
   document.getElementById("setup-form").addEventListener("submit", async event => { event.preventDefault(); try { const value = await post(event.currentTarget.dataset.completeUrl || "/api/setup/complete", payload()); {% if editing %}message("Preferences saved.", true);{% else %}window.location.assign(value.redirect);{% endif %} } catch (error) { message(error.message); } });
   updateModelVisibility();
 </script>

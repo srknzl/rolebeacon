@@ -6,7 +6,6 @@
     <title>{% block title %}RoleBeacon{% endblock %}</title>
     <link rel="icon" href="{{ url_for('static', path='favicon.svg') }}" type="image/svg+xml">
     <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
-    <script src="https://unpkg.com/htmx.org@2.0.8" defer></script>
   </head>
   <body>
     <header class="topbar">
@@ -25,6 +24,7 @@
         <a href="/imports" title="Add a job manually without RoleBeacon fetching the URL">Import</a>
         <a href="/settings" title="Update saved search preferences">Settings</a>
       </nav>
+      <a class="mode-badge {% if llm_enabled %}is-llm{% endif %}" href="/settings" title="{% if llm_enabled %}LLM mode: {{ llm_model }} writes scoring evidence, company assessments, and cover letters. Answers can differ between runs, and if the endpoint is unreachable RoleBeacon stops instead of silently scoring with rules.{% else %}Rules only: collection, eligibility, scoring, and company research run on deterministic local rules, so the same input always gives the same result. Claims quote a matched sentence from a source. Cover letters need an LLM and stay disabled.{% endif %}">{{ llm_model if llm_enabled else 'Rules only' }}</a>
       {% if setup_complete %}<button id="sync-button" class="button button-primary" type="button" title="Collect new and updated jobs from activated sources">Refresh now</button>{% endif %}
     </header>
     <div class="sync-strip {% if sync.running %}is-running{% endif %}" id="sync-strip">
@@ -72,6 +72,18 @@
         primaryNav.classList.remove("is-open");
         navToggle.setAttribute("aria-expanded", "false");
         navToggle.textContent = "Menu";
+      });
+      // Tooltips open beside their trigger, never below it, and flip left only when the right edge has no room.
+      document.querySelectorAll(".help-tip").forEach(tip => {
+        const position = () => {
+          const rect = tip.getBoundingClientRect();
+          const flip = rect.right + 316 > window.innerWidth;
+          tip.dataset.side = flip ? "left" : "right";
+          tip.style.setProperty("--tooltip-x", `${flip ? rect.left - 8 : rect.right + 8}px`);
+          tip.style.setProperty("--tooltip-y", `${rect.top + rect.height / 2}px`);
+        };
+        tip.addEventListener("mouseenter", position);
+        tip.addEventListener("focus", position);
       });
       const syncButton = document.getElementById("sync-button");
       const syncStrip = document.getElementById("sync-strip");

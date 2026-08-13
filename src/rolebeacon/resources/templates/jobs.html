@@ -1,17 +1,90 @@
 {% extends "base.html" %}
 {% from "_help.html" import tip %}
 {% block title %}Jobs · RoleBeacon{% endblock %}
+{% macro option_list(name, label, choices, hint) %}
+<label>{{ label }} {{ tip(hint) }}<select name="{{ name }}">{% for value, text in choices %}<option value="{{ value }}" {% if selected.get(name, '') == value %}selected{% endif %}>{{ text }}</option>{% endfor %}</select></label>
+{% endmacro %}
 {% block content %}
-<section class="page-heading"><div><p class="eyebrow">DISCOVERY</p><h1>Jobs</h1></div><span>{{ jobs|length }} results</span></section>
+<section class="page-heading">
+  <div><p class="eyebrow">DISCOVERY</p><h1>Jobs</h1></div>
+  <span>{% if total %}{{ jobs|length }} of {{ total }} matches{% else %}No matches{% endif %}</span>
+</section>
+
 <form class="filters" method="get">
-  <label>Search {{ tip("Matches job title, company, location, and description.") }}<input name="q" value="{{ filters.q }}" placeholder="Java distributed systems"></label>
-  <label>Strategy {{ tip("A search route generated from your role, work-authorisation, relocation, and remote preferences.") }}<select name="route"><option value="">All strategies</option>{% for route in routes %}<option value="{{ route.id }}" {% if filters.route == route.id %}selected{% endif %}>{{ route.label }}</option>{% endfor %}</select></label>
-  <label>Status {{ tip("Your personal pipeline decision. It never changes the original job posting.") }}<select name="job_status"><option value="">All statuses</option>{% for value in ['new','interested','maybe','rejected','applied','interview','offer'] %}<option {% if filters.status == value %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
-  <label>Minimum score {{ tip("The overall opportunity score from 0 to 100 after eligibility checks.") }}<input type="number" min="0" max="100" name="min_score" value="{{ filters.min_score }}"></label>
-  <button class="button" type="submit">Apply filters</button>
+  <div class="filters-primary">
+    <label class="filters-search">Search {{ tip("Full-text search over the title, company, location, and description. Several words must all appear. Use quotes for an exact phrase (\"event driven\"), OR for alternatives (kafka OR pulsar), and NOT to exclude (java NOT android).") }}<input name="q" value="{{ selected.get('q', '') }}" placeholder="java AND (kafka OR kubernetes)"></label>
+    {{ option_list("eligibility", "Eligibility", [("", "Any eligibility"), ("eligible", "Eligible"), ("unknown", "Unknown"), ("ineligible", "Ineligible")], "Whether you can actually take the job. Checked before fit, and a high score can never override it.") }}
+    {{ option_list("work_model", "Work model", [("", "Any work model"), ("remote_worldwide", "Remote worldwide"), ("remote", "Any remote"), ("onsite", "On-site or hybrid")], "Derived from the posting's own location wording. Country-scoped remote counts as regional, never worldwide.") }}
+    {{ option_list("posted_within", "Posted within", [("", "Any age"), ("1", "Last 24 hours"), ("7", "Last 7 days"), ("30", "Last 30 days"), ("90", "Last 90 days")], "Uses the posting date when the source publishes one, otherwise the date RoleBeacon first collected it.") }}
+    {{ option_list("sort", "Sort by", sort_options, "Reorders the results without changing which jobs match. Title match and technology match rank on one part of the score, so a lower-scoring job can lead when it matches that part best.") }}
+    <button class="button button-primary" type="submit">Apply</button>
+  </div>
+
+  <details class="filters-more" {% if active_chips|length > 1 %}open{% endif %}>
+    <summary>More filters</summary>
+    <div class="filters-grid">
+      <fieldset>
+        <legend>Role</legend>
+        <label>Title contains {{ tip("Matches the job title only. Use this when a technology is mentioned once in the body but you want it to be the actual role.") }}<input name="title" value="{{ selected.get('title', '') }}" placeholder="backend"></label>
+        {{ option_list("seniority", "Seniority", [("", "Any level"), ("junior", "Junior"), ("senior", "Senior"), ("staff", "Staff"), ("principal", "Principal"), ("lead", "Lead"), ("manager", "Manager")], "Read from wording in the job title. Postings that state no level are excluded when you pick one.") }}
+        <label>Minimum title match {{ tip("The title-match part of the score, 0 to 25. Higher values keep only roles whose title closely matches your target roles.") }}<input type="number" min="0" max="25" name="min_title_match" value="{{ selected.get('min_title_match', '') }}"></label>
+        <label>Minimum technology match {{ tip("The technology part of the score, 0 to 20. Higher values keep only roles overlapping the skills in your profile.") }}<input type="number" min="0" max="20" name="min_stack_match" value="{{ selected.get('min_stack_match', '') }}"></label>
+      </fieldset>
+
+      {% if technology_options %}
+      <fieldset>
+        <legend>Technology</legend>
+        <p class="fieldset-note">All selected must appear {{ tip("Each selected technology must appear in the job title or description. Selecting several narrows to jobs mentioning all of them, not any of them.") }}</p>
+        <div class="checkbox-grid">
+          {% for skill in technology_options %}<label class="checkbox"><input type="checkbox" name="tech" value="{{ skill }}" {% if skill in filters.technologies %}checked{% endif %}>{{ skill }}</label>{% endfor %}
+        </div>
+      </fieldset>
+      {% endif %}
+
+      <fieldset>
+        <legend>Eligibility and location</legend>
+        {{ option_list("sponsorship", "Sponsorship", [("", "Any"), ("available", "Stated available"), ("unavailable", "Stated unavailable"), ("unknown", "Not stated")], "What the posting itself says about visa sponsorship. When nothing is stated it stays unknown rather than being guessed.") }}
+        {{ option_list("relocation", "Relocation", [("", "Any"), ("available", "Stated available"), ("unknown", "Not stated")], "What the posting itself says about relocation support.") }}
+        <label>Strategy {{ tip("The search strategy that surfaced this job. RoleBeacon generates one per target role, work-authorization country, relocation target, and remote preference.") }}<select name="route"><option value="">All strategies</option>{% for route in routes %}<option value="{{ route.id }}" {% if selected.get('route', '') == route.id %}selected{% endif %}>{{ route.label }}</option>{% endfor %}</select></label>
+        <label>Company {{ tip("Exact employer name. Matching ignores case, punctuation, and suffixes such as Inc or GmbH.") }}<input name="company" value="{{ selected.get('company', '') }}" placeholder="Canonical"></label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Compensation</legend>
+        <label>Salary at least {{ tip("Compares against the highest salary figure the posting states. Postings without a stated salary are excluded when this is set.") }}<input type="number" min="0" step="1000" name="salary_floor" value="{{ selected.get('salary_floor', '') }}"></label>
+        <label class="checkbox"><input type="checkbox" name="has_salary" value="1" {% if selected.get('has_salary') %}checked{% endif %}>Only jobs with a stated salary</label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Pipeline and provenance</legend>
+        <label>Status {{ tip("Your own pipeline decision for the job. It is stored locally and never changes the original posting.") }}<select name="job_status"><option value="">All statuses</option>{% for value in ['new','interested','maybe','rejected','applied','interview','offer'] %}<option {% if selected.get('job_status', '') == value %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
+        <label>Source {{ tip("The collection source the job arrived from. Useful when one board is noisy or a source was just added.") }}<select name="source"><option value="">All sources</option>{% for item in sources %}<option value="{{ item.id }}" {% if selected.get('source', '') == item.id %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></label>
+        {{ option_list("provider", "Scored by", [("", "Any engine"), ("rules", "Rules only"), ("openai-compatible", "Language model")], "Which engine produced the score. Rules-only scores are deterministic; model scores add written evidence.") }}
+        <label>Minimum score {{ tip("Hides jobs whose opportunity score is below this value. The opportunity score runs from 0 to 100 and blends job fit (80%) with company fit (20%) after eligibility has been checked.") }}<input type="number" min="0" max="100" name="min_score" value="{{ selected.get('min_score', '') }}"></label>
+      </fieldset>
+    </div>
+  </details>
 </form>
-{% if query_error %}<div class="alert">Search error: {{ query_error }}</div>{% endif %}
-<div class="job-list">
-  {% for job in jobs %}{% include "_job-card.html" %}{% else %}<div class="empty-state"><h3>No jobs match these filters</h3><p>Adjust the route, status, or score threshold.</p></div>{% endfor %}
+
+{% if active_chips %}
+<div class="filter-chips">
+  <span>Filtering by</span>
+  {% for chip in active_chips %}<a class="filter-chip" href="{{ request.url.remove_query_params([chip.key, 'page']) }}" title="Remove this filter">{{ chip.label }}: {{ chip.value }} <span aria-hidden="true">×</span></a>{% endfor %}
+  <a class="filter-chip filter-chip-clear" href="/jobs">Clear all</a>
 </div>
+{% endif %}
+
+{% if query_error %}<div class="alert">Search error: {{ query_error }}. Check that any quotes in the search box are balanced.</div>{% endif %}
+
+<div class="job-list">
+  {% for job in jobs %}{% include "_job-card.html" %}{% else %}<div class="empty-state"><h3>No jobs match these filters</h3><p>{% if active_chips %}Remove a filter above to widen the search.{% else %}Run a refresh to collect jobs from your activated sources.{% endif %}</p></div>{% endfor %}
+</div>
+
+{% if page_count > 1 %}
+<nav class="pagination" aria-label="Job list pages">
+  {% if page > 1 %}<a class="button" href="{{ request.url.include_query_params(page=page - 1) }}">← Previous</a>{% endif %}
+  <span>Page {{ page }} of {{ page_count }}</span>
+  {% if page < page_count %}<a class="button" href="{{ request.url.include_query_params(page=page + 1) }}">Next →</a>{% endif %}
+</nav>
+{% endif %}
 {% endblock %}

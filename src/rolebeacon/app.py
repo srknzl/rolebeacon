@@ -14,7 +14,7 @@ from fastapi.templating import Jinja2Templates
 from .collectors import description_blocks, plain_text, repair_text
 from .company import CompanyResearchCoordinator, CompanyResearchService
 from .config import Settings
-from .database import Database
+from .database import APPLICATION_OUTCOMES, ARTIFACT_STAGES, JOB_SORTS, Database, JobFilters
 from .domain import CollectedJob, JobStatus
 from .llm import LlmClient, LlmUnavailable
 from .profile import country_catalog
@@ -86,6 +86,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "sync": sync_service.status.to_dict(),
             "routes": app_settings.load_strategies(),
             "setup_complete": app_settings.setup_complete,
+            # Every page states which engine produced what it shows, because the two modes
+            # differ in what they can produce and whether a repeat run gives the same answer.
+            "llm_enabled": app_settings.llm_enabled,
+            "llm_model": app_settings.llm_model,
             **values,
         }
 
@@ -99,24 +103,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             page_context(
                 request,
                 stats=database.dashboard_stats(),
-                jobs=database.list_jobs(min_score=65, exclude_ineligible=True, limit=15),
+                jobs=database.list_jobs(JobFilters(min_score=65, exclude_ineligible=True), limit=15),
                 sources=database.list_sources(),
             ),
         )
 
     @app.get("/jobs", response_class=HTMLResponse)
-    async def jobs_page(
-        request: Request,
-        route: str = "",
-        job_status: str = "",
-        source: str = "",
-        q: str = "",
-        min_score: int = 0,
-    ) -> HTMLResponse:
+    async def jobs_page(request: Request) -> HTMLResponse:
+        values = dict(request.query_params)
+        filters = _job_filters_from_query(request.query_params)
+        sort = values.get("sort", "opportunity")
+        if sort not in JOB_SORTS:
+            sort = "opportunity"
+        page_size = 50
+        page = max(1, _as_int(values.get("page"), 1))
         try:
-            jobs = database.list_jobs(route=route, status=job_status, source=source, query=q, min_score=min_score, limit=250)
+            jobs = database.list_jobs(filters, sort=sort, limit=page_size, offset=(page - 1) * page_size)
+            total = database.count_jobs(filters)
         except Exception as error:
-            jobs = []
+            jobs, total = [], 0
             query_error = str(error)
         else:
             query_error = ""
@@ -126,7 +131,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             page_context(
                 request,
                 jobs=jobs,
-                filters={"route": route, "status": job_status, "source": source, "q": q, "min_score": min_score},
+                filters=filters,
+                selected=values,
+                sort=sort,
+                total=total,
+                page=page,
+                page_size=page_size,
+                page_count=max(1, -(-total // page_size)),
+                active_chips=_active_filter_chips(request.query_params),
+                sort_options=JOB_SORT_LABELS,
+                technology_options=app_settings.load_search_profile().get("preferred_skills", []),
+                sources=app_settings.load_sources(),
                 query_error=query_error,
             ),
         )
@@ -147,18 +162,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 application=application,
                 cover_letter_recommended=recommended,
                 cover_letter_reason=recommendation_reason,
-                llm_enabled=app_settings.llm_enabled,
             ),
         )
 
     @app.get("/applications", response_class=HTMLResponse)
     async def applications_page(request: Request) -> HTMLResponse:
-        applications = database.list_applications()
         columns: dict[str, list[dict[str, Any]]] = {
-            key: [] for key in ("saved", "preparing", "ready", "applied", "interview", "rejected", "offer")
+            key: [] for key in (*ARTIFACT_STAGES, *APPLICATION_OUTCOMES)
         }
-        for application in applications:
-            columns.setdefault(application["status"], []).append(application)
+        for application in database.list_applications():
+            # The artifact stage only describes preparation. Once the user records an outcome on the
+            # job itself, that outcome is where the application actually stands.
+            outcome = application["job_status"] if application["job_status"] in APPLICATION_OUTCOMES else ""
+            columns.setdefault(outcome or application["status"], []).append(application)
         return templates.TemplateResponse(
             request,
             "applications.html",
@@ -364,14 +380,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         source: str = "",
         q: str = "",
         min_score: int = 0,
+        sort: str = "opportunity",
         limit: int = Query(100, ge=1, le=500),
         offset: int = Query(0, ge=0),
     ) -> dict[str, Any]:
+        if sort not in JOB_SORTS:
+            raise HTTPException(status_code=422, detail=f"sort must be one of: {', '.join(JOB_SORTS)}")
+        filters = JobFilters(
+            route=route, status=job_status, source=source, query=q, min_score=min_score
+        )
         return {
-            "jobs": database.list_jobs(
-                route=route, status=job_status, source=source, query=q,
-                min_score=min_score, limit=limit, offset=offset,
-            )
+            "jobs": database.list_jobs(filters, sort=sort, limit=limit, offset=offset),
+            "total": database.count_jobs(filters),
         }
 
     @app.post("/api/jobs/{job_id}/feedback")
@@ -628,6 +648,96 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return FileResponse(path)
 
     return app
+
+
+JOB_SORT_LABELS: tuple[tuple[str, str], ...] = (
+    ("opportunity", "Opportunity score"),
+    ("job_fit", "Job fit only"),
+    ("title_match", "Title match"),
+    ("stack_match", "Technology match"),
+    ("company_fit", "Company fit"),
+    ("newest", "Newest first"),
+)
+
+# Label shown on a removable chip for each filter that is currently narrowing the list.
+FILTER_CHIP_LABELS: dict[str, str] = {
+    "q": "Search",
+    "title": "Title",
+    "tech": "Technology",
+    "route": "Strategy",
+    "job_status": "Status",
+    "source": "Source",
+    "company": "Company",
+    "eligibility": "Eligibility",
+    "sponsorship": "Sponsorship",
+    "relocation": "Relocation",
+    "work_model": "Work model",
+    "seniority": "Seniority",
+    "provider": "Scored by",
+    "posted_within": "Posted within",
+    "min_score": "Min score",
+    "min_title_match": "Min title match",
+    "min_stack_match": "Min technology match",
+    "salary_floor": "Salary at least",
+    "has_salary": "Has stated salary",
+}
+
+
+def _as_int(value: str | None, default: int = 0) -> int:
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_float(value: str | None, default: float = 0) -> float:
+    try:
+        return float(str(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _job_filters_from_query(params: Any) -> JobFilters:
+    values = dict(params)
+    technologies = tuple(item for item in params.getlist("tech") if item.strip())
+    return JobFilters(
+        query=values.get("q", "").strip(),
+        title=values.get("title", "").strip(),
+        technologies=technologies,
+        route=values.get("route", ""),
+        status=values.get("job_status", ""),
+        source=values.get("source", ""),
+        company=values.get("company", "").strip(),
+        eligibility=values.get("eligibility", ""),
+        sponsorship=values.get("sponsorship", ""),
+        relocation=values.get("relocation", ""),
+        work_model=values.get("work_model", ""),
+        seniority=values.get("seniority", ""),
+        provider=values.get("provider", ""),
+        posted_within_days=_as_int(values.get("posted_within")),
+        min_score=_as_int(values.get("min_score")),
+        min_title_match=_as_int(values.get("min_title_match")),
+        min_stack_match=_as_int(values.get("min_stack_match")),
+        salary_floor=_as_float(values.get("salary_floor")),
+        has_salary=values.get("has_salary", "") in {"1", "true", "on"},
+    )
+
+
+def _active_filter_chips(params: Any) -> list[dict[str, str]]:
+    """One removable chip per active filter, so an empty result set is always explainable."""
+    values = dict(params)
+    chips = []
+    for key, label in FILTER_CHIP_LABELS.items():
+        if key == "tech":
+            selected = [item for item in params.getlist("tech") if item.strip()]
+            if selected:
+                chips.append({"key": key, "label": label, "value": ", ".join(selected)})
+            continue
+        value = str(values.get(key, "")).strip()
+        if not value or value in {"0", "0.0"}:
+            continue
+        chips.append({"key": key, "label": label, "value": "yes" if key == "has_salary" else value})
+    return chips
 
 
 async def _payload(request: Request) -> dict[str, Any]:

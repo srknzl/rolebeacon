@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 
+import httpx
 import pytest
 
 from rolebeacon.company import CompanyResearchService
@@ -39,27 +41,183 @@ def test_deterministic_company_fit_uses_only_evidence(tmp_path) -> None:
     assert score["reasons"][0]["source_url"] == "https://example.com/careers"
 
 
-def test_company_summary_uses_complete_sentences_instead_of_character_truncation(tmp_path) -> None:
+def test_company_summary_states_extracted_facts_rather_than_quoting_employer_marketing() -> None:
     settings = Settings.load()
-    database = Database(tmp_path / "jobs.sqlite3")
-    database.initialize()
-    service = CompanyResearchService(settings, database, LlmClient(settings))
+    service = CompanyResearchService(settings, Database(Path(":memory:")), LlmClient(settings))
+    evidence = [{
+        "source_url": "https://canonical.com/careers",
+        "source_type": "careers",
+        "title": "Careers",
+        "excerpt": (
+            "Canonical is the publisher of Ubuntu, the leading operating system for cloud computing. "
+            "We are a remote-first company and hire from anywhere in the world. "
+            "We offer a relocation package for roles based in an office."
+        ),
+    }]
+
+    profile, _ = service._deterministic_research(
+        "Canonical", evidence, [], {"preferred_domains": [], "priority_companies": [], "company_watchlist": []}
+    )
+
+    assert profile["summary"] == (
+        "Remote work is described as worldwide. Visa sponsorship is not stated in the fetched sources. "
+        "Relocation support is stated as available."
+    )
+    assert "publisher of Ubuntu" not in profile["summary"]
+
+
+def test_a_reason_is_dropped_rather_than_citing_a_source_that_does_not_support_it() -> None:
+    settings = Settings.load()
+    service = CompanyResearchService(settings, Database(Path(":memory:")), LlmClient(settings))
+    evidence = [{
+        "source_url": "https://example.com/careers",
+        "source_type": "careers",
+        "title": "Careers",
+        "excerpt": "We hire engineers in Berlin. Interviews are held on-site.",
+    }]
+
+    profile, score = service._deterministic_research(
+        "Example", evidence, [], {"preferred_domains": ["payments"], "priority_companies": [], "company_watchlist": []}
+    )
+
+    assert all(item["source_url"] for item in score["reasons"])
+    assert not any("payments" in item["claim"] for item in score["reasons"])
+    assert any(item["source_url"] == "" for item in profile["risks"])
+
+
+def test_a_fact_is_matched_inside_one_sentence_so_the_claim_can_quote_it() -> None:
+    settings = Settings.load()
+    service = CompanyResearchService(settings, Database(Path(":memory:")), LlmClient(settings))
+    evidence = [{
+        "source_url": "https://example.com/careers",
+        "source_type": "careers",
+        "title": "Careers",
+        "excerpt": (
+            "We build payments infrastructure for banks. "
+            "Our teams work remotely within the European Union. "
+            "This role does not offer visa sponsorship."
+        ),
+    }]
+
+    profile, score = service._deterministic_research(
+        "Example", evidence, [], {"preferred_domains": ["payments"], "priority_companies": [], "company_watchlist": []}
+    )
+
+    domain_reason = next(item for item in score["reasons"] if "payments" in item["claim"])
+    assert domain_reason["quote"] == "We build payments infrastructure for banks."
+    assert profile["sponsorship"] == "unavailable"
+    sponsorship_risk = next(item for item in profile["risks"] if "sponsorship is unavailable" in item["claim"])
+    assert sponsorship_risk["quote"] == "This role does not offer visa sponsorship."
+
+
+def test_one_job_posting_cannot_establish_worldwide_remote_work_on_its_own() -> None:
+    settings = Settings.load()
+    service = CompanyResearchService(settings, Database(Path(":memory:")), LlmClient(settings))
+    posting = {
+        "source_url": "https://board.example/jobs/1",
+        "source_type": "current_job_posting",
+        "title": "Backend Engineer",
+        "excerpt": "Backend Engineer. You can work from anywhere in the world.",
+    }
+    search_profile = {"preferred_domains": [], "priority_companies": [], "company_watchlist": []}
+
+    alone, _ = service._deterministic_research("Example", [posting], [], search_profile)
+    assert alone["remote_policy"] == "unknown"
+
+    agreeing = {**posting, "source_url": "https://board.example/jobs/2"}
+    corroborated, _ = service._deterministic_research("Example", [posting, agreeing], [], search_profile)
+    assert corroborated["remote_policy"] == "worldwide"
+
+    official = {**posting, "source_url": "https://example.com/careers", "source_type": "careers"}
+    stated, _ = service._deterministic_research("Example", [official], [], search_profile)
+    assert stated["remote_policy"] == "worldwide"
+
+
+def test_brand_pages_are_excluded_from_every_hiring_signal() -> None:
+    settings = Settings.load()
+    service = CompanyResearchService(settings, Database(Path(":memory:")), LlmClient(settings))
     evidence = [{
         "source_url": "https://example.com/about",
         "source_type": "about",
         "title": "About",
-        "excerpt": "First complete sentence. " + "Second sentence with useful detail. " * 50,
+        "excerpt": "We are a distributed cloud platform company offering relocation to a better future.",
     }]
 
-    profile, _ = service._deterministic_research(
-        "Example", evidence, [], {"preferred_domains": [], "priority_companies": [], "company_watchlist": []}
+    profile, score = service._deterministic_research(
+        "Example", evidence, [], {"preferred_domains": ["cloud"], "priority_companies": [], "company_watchlist": []}
     )
 
-    assert profile["summary"].endswith("detail.")
-    assert not profile["summary"].endswith("…")
+    assert profile["relocation"] == "unknown"
+    assert score["reasons"] == []
 
 
-def test_company_evidence_is_deduplicated_and_coverage_uses_distinct_official_types(tmp_path) -> None:
+async def test_a_refresh_revalidates_a_stored_page_instead_of_downloading_it_again(tmp_path, monkeypatch) -> None:
+    settings = Settings.load(tmp_path)
+    service = CompanyResearchService(settings, Database(tmp_path / "jobs.sqlite3"), LlmClient(settings))
+    seen: list[dict[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/robots.txt":
+            return httpx.Response(404)
+        seen.append(dict(request.headers))
+        return httpx.Response(304)
+
+    monkeypatch.setattr(
+        "rolebeacon.company.default_http_client",
+        lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    cache = {
+        "https://example.com/careers": {
+            "source_type": "careers", "title": "Careers", "excerpt": "We hire engineers remotely.",
+            "etag": 'W/"abc"', "last_modified": "Wed, 21 Oct 2026 07:28:00 GMT",
+        }
+    }
+
+    evidence = await service._fetch_official_sources(
+        [{"url": "https://example.com/careers", "type": "careers"}], cache
+    )
+
+    assert seen[0]["if-none-match"] == 'W/"abc"'
+    assert seen[0]["if-modified-since"] == "Wed, 21 Oct 2026 07:28:00 GMT"
+    assert evidence == [{
+        "source_url": "https://example.com/careers", "source_type": "careers", "title": "Careers",
+        "excerpt": "We hire engineers remotely.", "etag": 'W/"abc"',
+        "last_modified": "Wed, 21 Oct 2026 07:28:00 GMT",
+    }]
+
+
+def test_a_page_that_answers_200_with_not_found_is_not_a_source() -> None:
+    assert CompanyResearchService._soft_404("Page not found · Example", "Try the home page instead.")
+    assert CompanyResearchService._soft_404("Example", "The page you requested no longer exists.")
+    assert not CompanyResearchService._soft_404("Careers", "We hire engineers across our platform teams.")
+
+
+def test_conventional_official_sources_skip_brand_pages_for_hiring_pages() -> None:
+    urls = [item["url"] for item in CompanyResearchService._conventional_official_sources("example.com")]
+
+    assert not any(url.endswith(("/about", "/company")) for url in urls)
+    assert "https://example.com/careers" in urls
+
+
+def test_coverage_counts_established_facts_rather_than_fetched_pages() -> None:
+    jobs = [{"salary_min": 90000, "salary_max": 120000}]
+    nothing_established = {
+        "remote_policy": "unknown", "sponsorship": "unknown", "relocation": "unknown",
+        "engineering_signals": [],
+    }
+
+    assert CompanyResearchService._fact_coverage(nothing_established, []) == (0.2, 0)
+    # Five pages fetched but no fact stated must not score above one page that states three.
+    assert CompanyResearchService._fact_coverage(
+        {
+            "remote_policy": "regional", "sponsorship": "unavailable", "relocation": "unknown",
+            "engineering_signals": [{"claim": "Kafka", "source_url": "https://example.com/careers"}],
+        },
+        jobs,
+    ) == (0.76, 8)
+
+
+def test_company_evidence_is_deduplicated_across_mirrored_postings(tmp_path) -> None:
     settings = Settings.load(tmp_path)
     database = Database(tmp_path / "jobs.sqlite3")
     database.initialize()
@@ -88,14 +246,7 @@ def test_company_evidence_is_deduplicated_and_coverage_uses_distinct_official_ty
     ])
 
     assert len(evidence) == 3
-    assert service._evidence_coverage(evidence) == (0.75, "moderate", 8)
-    evidence.append({
-        "source_url": "https://example.com/engineering",
-        "source_type": "engineering",
-        "title": "Engineering",
-        "excerpt": "How our engineering teams build and operate services.",
-    })
-    assert service._evidence_coverage(evidence) == (0.9, "strong", 10)
+    assert [item["source_url"] for item in evidence].count("https://board.example/jobs/1") == 1
 
 
 async def test_no_key_registry_failure_does_not_break_company_research(tmp_path, monkeypatch) -> None:
@@ -165,7 +316,7 @@ def test_company_profile_hides_catalog_fields_and_explains_coverage(tmp_path) ->
         response = client.get(f"/companies/{company_id}")
 
     assert response.status_code == 200
-    assert "source quality 8/10" in response.text
+    assert "fact coverage 8/10" in response.text
     assert "1 unique sources · 1 official page types" in response.text
     assert "Industry unknown" not in response.text
     assert "Headquarters unknown" not in response.text
@@ -304,6 +455,8 @@ def test_opportunity_score_combines_job_and_company_fit(tmp_path) -> None:
 
     assert job["company_score"] == 60
     assert job["opportunity_score"] == 76
+    # SQLite ROUND() returns a REAL, which the templates would render as "76.0".
+    assert isinstance(job["opportunity_score"], int)
 
 
 async def test_configured_llm_company_research_never_silently_falls_back_to_rules(tmp_path, monkeypatch) -> None:
