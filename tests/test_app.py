@@ -456,7 +456,7 @@ def test_preferences_separate_search_from_application_and_hide_rules_details(tmp
     assert 'modelDetails.hidden = document.getElementById("llm-mode").value === "rules"' in page.text
     assert 'message("Preferences saved.", true)' in page.text
     assert "Arbeitnow roles that explicitly advertise visa sponsorship" in page.text
-    assert "Uses your target roles and relocation targets at sync time" in page.text
+    assert "Searches every relocation-target country or continent you've added" in page.text
 
 
 def test_realistic_job_detail_with_llm_evidence_renders_without_500(tmp_path) -> None:

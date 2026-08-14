@@ -13,6 +13,7 @@ from .config import Settings
 from .database import Database
 from .domain import CollectedJob, EligibilityStatus
 from .llm import LlmClient, LlmUnavailable
+from .profile import RELOCATION_REGION_CODES
 from .scoring import SCORING_PROMPT_VERSION, evaluate_eligibility, rule_score
 
 
@@ -282,12 +283,14 @@ def engineering_job(job: CollectedJob, search_profile: dict[str, Any]) -> bool:
 def personalize_source(source: Any, search_profile: dict[str, Any], mobility_profile: dict[str, Any]) -> Any:
     """Apply the user's roles and relocation choices to providers that support query filters."""
     roles = [str(value).strip() for value in search_profile.get("target_roles", []) if str(value).strip()]
+    role_query = " OR ".join(roles[:5])
     targets = mobility_profile.get("relocation_targets", [])
     location = next(
         (
             str(item.get("country_name", "")).strip()
             for item in targets
-            if str(item.get("country_code", "")).upper() != "EUROPE" and str(item.get("country_name", "")).strip()
+            if str(item.get("country_code", "")).upper() not in RELOCATION_REGION_CODES
+            and str(item.get("country_name", "")).strip()
         ),
         "",
     )
@@ -295,13 +298,14 @@ def personalize_source(source: Any, search_profile: dict[str, Any], mobility_pro
         return source
     parts = urlsplit(source.url)
     query = dict(parse_qsl(parts.query, keep_blank_values=True))
-    role_query = " OR ".join(roles[:5]) or "Software Engineer"
     if source.kind == "google_careers":
-        query["q"] = role_query
+        if role_query:
+            query["q"] = role_query
         if location:
             query["location"] = location
     else:
-        query["base_query"] = role_query
+        if role_query:
+            query["base_query"] = role_query
         if location:
             query["loc_query"] = location
     return replace(source, url=urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment)))

@@ -5,7 +5,7 @@ from typing import Any
 
 from .domain import EligibilityResult, EligibilityStatus, ScoreResult
 
-SCORING_PROMPT_VERSION = "job-fit-v4"
+SCORING_PROMPT_VERSION = "job-fit-v5"
 
 # A title's head noun is the job. "Engineering Manager", "Sales Engineer", and
 # "Customer Engineer (Pre-Sales)" all contain an engineering word while being a different
@@ -84,7 +84,13 @@ def _country_match(location: str, strategy: dict[str, Any]) -> bool:
     if strategy.get("country_code") == "EUROPE":
         text = location.casefold()
         return any(re.search(rf"\b{re.escape(term)}\b", text) for term in EUROPE_LOCATION_TERMS)
-    terms = [strategy.get("country_name", ""), strategy.get("country_code", ""), *strategy.get("cities", [])]
+    code = str(strategy.get("country_code", "")).strip()
+    # A short ISO code is only trustworthy as an exact-case token (e.g. "Berlin, DE"). Casefolding it
+    # like the name/city terms below produces false positives, e.g. "de" inside "Île-de-France" matching
+    # country_code "DE" (Germany) for an unrelated French location.
+    if code and re.search(rf"\b{re.escape(code)}\b", location):
+        return True
+    terms = [strategy.get("country_name", ""), *strategy.get("cities", [])]
     text = location.casefold()
     return any(re.search(rf"\b{re.escape(str(term).casefold())}\b", text) for term in terms if term)
 

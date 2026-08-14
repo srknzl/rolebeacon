@@ -230,9 +230,20 @@ def same_source(left: SourceConfig, right: SourceConfig) -> bool:
     )
 
 
+_ROLE_QUERY_KEYS = {"q", "base_query"}
+
+
 def _canonical_url(value: str) -> str:
     parts = urlsplit(value)
-    query = urlencode(sorted(parse_qsl(parts.query, keep_blank_values=True)), doseq=True)
+    # Role-text params are always overwritten by personalize_source() at sync time, so they
+    # must not affect source identity - otherwise a stale/legacy "q=" makes two rows that
+    # target the same provider+location look like different sources (and vice versa).
+    pairs = [
+        pair
+        for pair in parse_qsl(parts.query, keep_blank_values=True)
+        if pair[0] not in _ROLE_QUERY_KEYS
+    ]
+    query = urlencode(sorted(pairs), doseq=True)
     return urlunsplit((parts.scheme.casefold(), parts.netloc.casefold(), parts.path.rstrip("/"), query, ""))
 
 
@@ -257,6 +268,32 @@ def _source_id(kind: str, company: str, identifier: str) -> str:
     material = f"{kind}-{company}-{identifier}".casefold()
     value = re.sub(r"[^a-z0-9]+", "-", material).strip("-")
     return value[:100]
+
+
+def relocation_source_candidates(countries: list[dict[str, str]]) -> list[SourceConfig]:
+    """Build one generated Google Careers and one generated Amazon Jobs source per target country.
+
+    No role text is included in the URL - personalize_source() injects the candidate's real
+    target_roles at every sync, so a placeholder here would never actually reach either provider.
+    """
+    candidates: list[SourceConfig] = []
+    for country in countries:
+        code, name = country["code"], country["name"]
+        candidates.append(SourceConfig.from_dict({
+            "id": _source_id("google-careers", "", name), "kind": "google_careers", "name": "Google Careers",
+            "company": "Google", "enabled": False, "min_sync_interval_seconds": 14400, "trust_priority": 100,
+            "max_pages": 1,  # generated rows: keep per-sync request volume bounded across many countries
+            "ingestion_filter": True, "official_first_party": True,
+            "url": f"https://www.google.com/about/careers/applications/jobs/results/?{urlencode({'location': name})}",
+        }))
+        candidates.append(SourceConfig.from_dict({
+            "id": _source_id("amazon-jobs", "", name), "kind": "amazon_jobs", "name": "Amazon Jobs",
+            "company": "Amazon", "enabled": False, "min_sync_interval_seconds": 14400, "trust_priority": 100,
+            "max_pages": 2, "location_filter_code": code, "location_filter_text": name,
+            "ingestion_filter": True, "official_first_party": True,
+            "url": f"https://www.amazon.jobs/en/search?{urlencode({'loc_query': name})}",
+        }))
+    return candidates
 
 
 def _http_client() -> httpx.AsyncClient:

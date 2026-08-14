@@ -7,6 +7,7 @@ from rolebeacon.config import Settings
 from rolebeacon.database import Database
 from rolebeacon.domain import CollectedJob
 from rolebeacon.llm import LlmClient
+from rolebeacon.source_discovery import relocation_source_candidates
 from rolebeacon.sync import SyncService, deduplicate_source_jobs, personalize_source
 
 
@@ -68,6 +69,32 @@ def test_first_party_sources_use_saved_roles_and_relocation_targets(tmp_path) ->
     assert "location=Germany" in personalized_google.url
     assert "base_query=Backend+Engineer+OR+Platform+Engineer" in personalized_amazon.url
     assert "loc_query=Germany" in personalized_amazon.url
+
+
+def test_first_party_sources_never_fall_back_to_a_hardcoded_title() -> None:
+    generated = relocation_source_candidates([{"code": "DE", "name": "Germany"}])
+    google = next(source for source in generated if source.kind == "google_careers")
+    amazon = next(source for source in generated if source.kind == "amazon_jobs")
+    mobility = {"relocation_targets": [{"country_code": "DE", "country_name": "Germany"}]}
+
+    personalized_google = personalize_source(google, {"target_roles": []}, mobility)
+    personalized_amazon = personalize_source(amazon, {"target_roles": []}, mobility)
+
+    assert "q=" not in personalized_google.url
+    assert "base_query=" not in personalized_amazon.url
+
+
+def test_first_party_sources_skip_any_continent_pseudo_code_as_a_location(tmp_path) -> None:
+    settings = Settings.load(tmp_path)
+    google = next(source for source in settings.load_sources() if source.kind == "google_careers")
+    amazon = next(source for source in settings.load_sources() if source.kind == "amazon_jobs")
+    mobility = {"relocation_targets": [{"country_code": "AFRICA", "country_name": "Africa"}]}
+
+    personalized_google = personalize_source(google, {"target_roles": ["Backend Engineer"]}, mobility)
+    personalized_amazon = personalize_source(amazon, {"target_roles": ["Backend Engineer"]}, mobility)
+
+    assert "location=Africa" not in personalized_google.url
+    assert "loc_query=Africa" not in personalized_amazon.url
 
 
 async def test_unavailable_selected_llm_stops_refresh_before_collection_or_rules_fallback(tmp_path, monkeypatch) -> None:

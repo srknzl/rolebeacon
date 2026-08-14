@@ -30,7 +30,7 @@
       <label>Preferred domains {{ tip("Problem domains you enjoy, such as distributed systems, developer tools, or fintech.") }}<textarea id="preferred-domains" rows="5"></textarea></label>
       <label>Preferred seniority {{ tip("Seniority terms you want to see, for example senior, staff, or lead.") }}<textarea id="preferred-seniority" rows="5" placeholder="senior&#10;staff"></textarea></label>
       <div class="country-field"><span class="field-label">Authorized countries {{ tip("Countries where you can work now without employer sponsorship. Do not add Germany or the United States unless you already have that work right.") }}</span><div class="country-picker" data-country-field="authorizations" data-country-kind="authorization"><input class="country-search" type="search" placeholder="Search countries or ISO codes" autocomplete="off" aria-label="Search authorized countries"><div class="country-chips" aria-live="polite"></div><div class="country-options" role="listbox" hidden>{% for country in countries %}<button type="button" role="option" class="country-option" data-country-code="{{ country.code }}" data-country-name="{{ country.name }}"><span>{{ country.name }}</span><code>{{ country.code }}</code></button>{% endfor %}</div><textarea id="authorizations" class="country-value" rows="1">TR</textarea></div></div>
-      <div class="country-field"><span class="field-label">Relocation targets {{ tip("Countries, or the Europe region, where you are willing to move if the employer supports the required visa or relocation. Selecting a target never claims existing work authorization.") }}</span><div class="country-picker" data-country-field="relocation-targets" data-country-kind="relocation"><input class="country-search" type="search" placeholder="Type to filter countries, or choose Europe" autocomplete="off" aria-label="Search relocation targets"><div class="country-chips" aria-live="polite"></div><div class="country-options" role="listbox" hidden><button type="button" role="option" class="country-option country-region-option" data-country-code="EUROPE" data-country-name="Europe"><span>Europe</span><code>REGION</code></button>{% for country in countries %}<button type="button" role="option" class="country-option" data-country-code="{{ country.code }}" data-country-name="{{ country.name }}"><span>{{ country.name }}</span><code>{{ country.code }}</code></button>{% endfor %}<p class="country-empty" hidden>No country or region matches this search.</p></div><textarea id="relocation-targets" class="country-value" rows="1"></textarea></div></div>
+      <div class="country-field"><span class="field-label">Relocation targets {{ tip("Countries, or an entire continent, where you are willing to move if the employer supports the required visa or relocation. Choosing a continent adds each of its countries individually. Selecting a target never claims existing work authorization.") }}</span><div class="country-picker" data-country-field="relocation-targets" data-country-kind="relocation"><input class="country-search" type="search" placeholder="Type to filter countries, or choose a continent" autocomplete="off" aria-label="Search relocation targets"><div class="country-chips" aria-live="polite"></div><div class="country-options" role="listbox" hidden>{% for region in region_options %}<button type="button" role="option" class="country-option country-region-option" data-country-code="{{ region.code }}" data-country-name="{{ region.name }}" data-region-codes="{{ region.codes }}"><span>{{ region.name }}</span><code>REGION</code></button>{% endfor %}{% for country in countries %}<button type="button" role="option" class="country-option" data-country-code="{{ country.code }}" data-country-name="{{ country.name }}"><span>{{ country.name }}</span><code>{{ country.code }}</code></button>{% endfor %}<p class="country-empty" hidden>No country or region matches this search.</p></div><textarea id="relocation-targets" class="country-value" rows="1"></textarea></div></div>
       <label>Priority companies {{ tip("Companies that deserve a dedicated search strategy even when stack fit is imperfect.") }}<textarea id="priority-companies" rows="5"></textarea></label>
       <label>Company watchlist {{ tip("Companies to surface more prominently without creating a dedicated strategy.") }}<textarea id="company-watchlist" rows="5"></textarea></label>
       <label>Company blocklist {{ tip("Companies whose roles should be excluded from recommendations.") }}<textarea id="company-blocklist" rows="5"></textarea></label>
@@ -56,12 +56,19 @@
     <p>Selected sources are saved now and contacted only after activation.</p>
     <div class="checkbox-row">
       {% for source in sources %}
-        {% if source.kind not in ['adzuna', 'jooble', 'serpapi', 'gmail_linkedin'] %}
-        {% set source_help = "Public Europe-focused jobs feed, useful for relocation opportunities." if source.id == 'arbeitnow' else "Arbeitnow roles that explicitly advertise visa sponsorship." if source.id == 'arbeitnow-sponsored' else "Public remote engineering jobs feed; target roles are applied during ingestion." if source.kind == 'jobicy' else "Remote software-development feed; your target roles filter collected jobs." if source.kind == 'remotive' else "Remote job board feed; country eligibility and target roles are checked after collection." if source.kind == 'remoteok' else "Remote job board API; country eligibility and target roles are checked after collection." if source.kind == 'himalayas' else "Programming feed; your target roles filter collected jobs after collection." if source.kind == 'wwr' else "Official careers search personalized from your target roles and relocation preferences when the provider supports it." if source.kind in ['google_careers', 'amazon_jobs'] else "A public source contacted only after setup is activated." %}
-        {% set source_label = "Google Careers" if source.kind == 'google_careers' else "Amazon Jobs" if source.kind == 'amazon_jobs' else source.name %}
-        <label title="{{ source_help }}"><input class="source-choice" type="checkbox" value="{{ source.id }}"> {{ source_label }} {{ tip(source_help) }}{% if source.kind in ['google_careers', 'amazon_jobs'] %}<span class="source-choice-note">Uses your target roles and relocation targets at sync time.</span>{% endif %}</label>
+        {% if source.kind not in ['adzuna', 'jooble', 'serpapi', 'gmail_linkedin', 'google_careers', 'amazon_jobs'] %}
+        {% set source_help = "Public Europe-focused jobs feed, useful for relocation opportunities." if source.id == 'arbeitnow' else "Arbeitnow roles that explicitly advertise visa sponsorship." if source.id == 'arbeitnow-sponsored' else "Public remote engineering jobs feed; target roles are applied during ingestion." if source.kind == 'jobicy' else "Remote software-development feed; your target roles filter collected jobs." if source.kind == 'remotive' else "Remote job board feed; country eligibility and target roles are checked after collection." if source.kind == 'remoteok' else "Remote job board API; country eligibility and target roles are checked after collection." if source.kind == 'himalayas' else "Programming feed; your target roles filter collected jobs after collection." if source.kind == 'wwr' else "A public source contacted only after setup is activated." %}
+        <label title="{{ source_help }}"><input class="source-choice" type="checkbox" value="{{ source.id }}"> {{ source.name }} {{ tip(source_help) }}</label>
         {% endif %}
       {% endfor %}
+      {% set google_help = "Official Google careers search personalized from your target roles and relocation targets at sync time." %}
+      {% set google_ids = sources|selectattr('kind', 'equalto', 'google_careers')|map(attribute='id')|join(',') %}
+      <label title="{{ google_help }}"><input class="source-choice" type="checkbox" value="__google_careers__" data-source-ids="{{ google_ids }}"
+        {% if sources|selectattr('kind', 'equalto', 'google_careers')|selectattr('enabled')|list %}checked{% endif %}> Google Careers {{ tip(google_help) }}<span class="source-choice-note">Searches every relocation-target country or continent you've added.</span></label>
+      {% set amazon_help = "Official Amazon careers search personalized from your target roles and relocation targets at sync time." %}
+      {% set amazon_ids = sources|selectattr('kind', 'equalto', 'amazon_jobs')|map(attribute='id')|join(',') %}
+      <label title="{{ amazon_help }}"><input class="source-choice" type="checkbox" value="__amazon_jobs__" data-source-ids="{{ amazon_ids }}"
+        {% if sources|selectattr('kind', 'equalto', 'amazon_jobs')|selectattr('enabled')|list %}checked{% endif %}> Amazon Jobs {{ tip(amazon_help) }}<span class="source-choice-note">Searches every relocation-target country or continent you've added.</span></label>
     </div>
   </section>
 
@@ -137,11 +144,14 @@
     if (!/^[A-Z]{2}$/.test(code)) throw new Error(`${label} must use a two-letter ISO country code, such as TR or DE.`);
     return code;
   };
+  const regionCodes = () => [...document.querySelectorAll(".country-region-option")].map(option => option.dataset.countryCode);
   const relocationTargets = () => lines("relocation-targets").map(value => {
-    const match = /^([A-Za-z]{2}|EUROPE):([^:]+)$/i.exec(value);
-    if (!match) throw new Error(`Relocation target "${value}" must use CODE:Country, for example DE:Germany or EUROPE:Europe.`);
-    const code = match[1].toUpperCase();
-    return {country_code: code === "EUROPE" ? code : countryCode(code, "Relocation country code"), country_name: match[2].trim(), cities: []};
+    const match = /^([A-Za-z]{2}|[A-Za-z_]+):([^:]+)$/.exec(value);
+    const code = match ? match[1].toUpperCase() : "";
+    if (!match || !(regionCodes().includes(code) || /^[A-Z]{2}$/.test(code))) {
+      throw new Error(`Relocation target "${value}" must use CODE:Country, for example DE:Germany or EUROPE:Europe.`);
+    }
+    return {country_code: regionCodes().includes(code) ? code : countryCode(code, "Relocation country code"), country_name: match[2].trim(), cities: []};
   });
   const countryPickers = [...document.querySelectorAll(".country-picker")];
   const pickerEntries = picker => {
@@ -197,10 +207,13 @@
     search.addEventListener("blur", () => setTimeout(() => { options.hidden = true; }, 150));
     picker.querySelectorAll(".country-option").forEach(option => option.addEventListener("click", () => {
       const entries = pickerEntries(picker);
-      if (!entries.some(item => item.code === option.dataset.countryCode)) {
-        entries.push({code: option.dataset.countryCode, name: option.dataset.countryName});
-        writePickerEntries(picker, entries);
-      }
+      const present = new Set(entries.map(item => item.code));
+      const additions = option.dataset.regionCodes
+        ? option.dataset.regionCodes.split(",").filter(code => !present.has(code)).map(code => ({
+            code, name: picker.querySelector(`.country-option[data-country-code="${code}"]`)?.dataset.countryName || code,
+          }))
+        : present.has(option.dataset.countryCode) ? [] : [{code: option.dataset.countryCode, name: option.dataset.countryName}];
+      if (additions.length) writePickerEntries(picker, [...entries, ...additions]);
       search.value = "";
       options.hidden = true;
       renderPicker(picker);
@@ -255,7 +268,10 @@
     setLines("company-watchlist", setup.preferences.company_watchlist);
     setLines("company-blocklist", setup.preferences.company_blocklist);
     setLines("exclude-phrases", setup.preferences.exclude_phrases);
-    document.querySelectorAll(".source-choice").forEach(item => { item.checked = (setup.enabled_source_ids || []).includes(item.value); });
+    document.querySelectorAll(".source-choice").forEach(item => {
+      const ids = item.dataset.sourceIds ? item.dataset.sourceIds.split(",").filter(Boolean) : [item.value];
+      item.checked = ids.some(id => (setup.enabled_source_ids || []).includes(id));
+    });
     document.getElementById("llm-mode").value = setup.llm?.mode || "rules";
     document.getElementById("llm-base-url").value = setup.llm?.base_url || "http://127.0.0.1:11434/v1";
     document.getElementById("llm-model").value = setup.llm?.model || "qwen3:8b";

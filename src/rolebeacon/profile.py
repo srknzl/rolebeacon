@@ -8,7 +8,43 @@ import pycountry
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
 COUNTRY_NAME_OVERRIDES = {"TR": "Türkiye"}
-RELOCATION_REGION_CODES = {"EUROPE": "Europe"}
+RELOCATION_REGION_CODES = {
+    "EUROPE": "Europe",
+    "ASIA": "Asia",
+    "AFRICA": "Africa",
+    "NORTH_AMERICA": "North America",
+    "SOUTH_AMERICA": "South America",
+    "OCEANIA": "Oceania",
+}
+# ISO 3166-1 alpha-2 members of each region above, used to expand a one-click continent
+# selection into real per-country relocation targets and source coverage. Antarctica and
+# non-sovereign territories/dependencies are excluded. Europe intentionally matches
+# scoring.EUROPE_LOCATION_TERMS (so it excludes Belarus and Vatican City, same as that list).
+CONTINENT_COUNTRY_CODES: dict[str, tuple[str, ...]] = {
+    "EUROPE": (
+        "AL", "AD", "AT", "BE", "BA", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR",
+        "HU", "IS", "IE", "IT", "LV", "LI", "LT", "LU", "MT", "MD", "MC", "ME", "NL", "MK", "NO",
+        "PL", "PT", "RO", "SM", "RS", "SK", "SI", "ES", "SE", "CH", "UA", "GB",
+    ),
+    "ASIA": (
+        "AE", "AF", "AM", "AZ", "BD", "BH", "BN", "BT", "CN", "GE", "HK", "ID", "IL", "IN", "IQ",
+        "IR", "JO", "JP", "KG", "KH", "KP", "KR", "KW", "KZ", "LA", "LB", "LK", "MM", "MN", "MO",
+        "MV", "MY", "NP", "OM", "PH", "PK", "PS", "QA", "RU", "SA", "SG", "SY", "TH", "TJ", "TL",
+        "TM", "TR", "TW", "UZ", "VN", "YE",
+    ),
+    "AFRICA": (
+        "DZ", "AO", "BJ", "BW", "BF", "BI", "CV", "CM", "CF", "TD", "KM", "CG", "CD", "CI", "DJ",
+        "EG", "GQ", "ER", "SZ", "ET", "GA", "GM", "GH", "GN", "GW", "KE", "LS", "LR", "LY", "MG",
+        "MW", "ML", "MR", "MU", "MA", "MZ", "NA", "NE", "NG", "RW", "ST", "SN", "SC", "SL", "SO",
+        "ZA", "SS", "SD", "TZ", "TG", "TN", "UG", "ZM", "ZW",
+    ),
+    "NORTH_AMERICA": (
+        "AG", "BS", "BB", "BZ", "CA", "CR", "CU", "DM", "DO", "SV", "GD", "GT", "HT", "HN", "JM",
+        "MX", "NI", "PA", "KN", "LC", "VC", "TT", "US",
+    ),
+    "SOUTH_AMERICA": ("AR", "BO", "BR", "CL", "CO", "EC", "GY", "PY", "PE", "SR", "UY", "VE"),
+    "OCEANIA": ("AU", "FJ", "KI", "MH", "FM", "NR", "NZ", "PW", "PG", "WS", "SB", "TO", "TV", "VU"),
+}
 
 
 @lru_cache
@@ -39,6 +75,28 @@ def normalize_relocation_target_code(value: str) -> str:
     if code in RELOCATION_REGION_CODES:
         return code
     return normalize_iso_country_code(code)
+
+
+def relocation_countries(relocation_targets: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Expand relocation targets into concrete {code, name} entries, expanding continents and deduplicating."""
+    names = country_names_by_code()
+    result: dict[str, str] = {}
+    for item in relocation_targets:
+        code = str(item.get("country_code", "")).upper()
+        if code in CONTINENT_COUNTRY_CODES:
+            for member in CONTINENT_COUNTRY_CODES[code]:
+                result.setdefault(member, names[member])
+        elif code in names:
+            result.setdefault(code, str(item.get("country_name") or names[code]))
+    return [{"code": code, "name": name} for code, name in result.items()]
+
+
+def relocation_region_options() -> tuple[dict[str, str], ...]:
+    """One entry per continent picker button: code, display name, and its member ISO codes."""
+    return tuple(
+        {"code": code, "name": name, "codes": ",".join(CONTINENT_COUNTRY_CODES[code])}
+        for code, name in RELOCATION_REGION_CODES.items()
+    )
 
 
 class StrictModel(BaseModel):

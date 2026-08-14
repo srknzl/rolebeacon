@@ -17,7 +17,7 @@ from .config import Settings
 from .database import APPLICATION_OUTCOMES, ARTIFACT_STAGES, JOB_SORTS, Database, JobFilters
 from .domain import CollectedJob, JobStatus
 from .llm import LlmClient, LlmUnavailable
-from .profile import country_catalog
+from .profile import country_catalog, relocation_region_options
 from .services import ArtifactService, ProfileValidationError, cover_letter_recommendation
 from .setup import LocalModelService, SetupService
 from .source_catalog import SourceCatalog, SourceCatalogError
@@ -243,6 +243,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 schemas=setup_service.schemas(),
                 sources=app_settings.load_sources(),
                 countries=country_catalog(),
+                region_options=relocation_region_options(),
                 editing=True,
                 saved=bool(saved),
                 company_search={
@@ -265,6 +266,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 schemas=setup_service.schemas(),
                 sources=app_settings.load_sources(),
                 countries=country_catalog(),
+                region_options=relocation_region_options(),
             ),
         )
 

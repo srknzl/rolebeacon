@@ -10,12 +10,14 @@ from rolebeacon.app import create_app
 from rolebeacon.collectors import AmazonJobsCollector, GoogleCareersCollector
 from rolebeacon.config import Settings
 from rolebeacon.domain import SourceConfig
+from rolebeacon.profile import CONTINENT_COUNTRY_CODES, RELOCATION_REGION_CODES, relocation_countries
 from rolebeacon.setup import SetupService
 from rolebeacon.source_discovery import (
     SourceDiscoveryError,
     SourceDiscoveryService,
     amazon_search_params,
     detect_source,
+    relocation_source_candidates,
     same_source,
 )
 
@@ -365,3 +367,86 @@ def test_amazon_search_params_does_not_override_a_country_already_in_the_url() -
     )
 
     assert params["country"] == "USA"
+
+
+def test_relocation_region_codes_and_continent_country_codes_stay_in_sync() -> None:
+    # Guards against the two maps silently drifting apart as continents are added or renamed.
+    assert set(RELOCATION_REGION_CODES) == set(CONTINENT_COUNTRY_CODES)
+
+
+def test_relocation_countries_expands_a_continent_and_dedupes_an_explicit_member() -> None:
+    countries = relocation_countries([
+        {"country_code": "OCEANIA", "country_name": "Oceania", "cities": []},
+        {"country_code": "AU", "country_name": "Australia", "cities": []},
+    ])
+
+    codes = [item["code"] for item in countries]
+    assert set(codes) == set(CONTINENT_COUNTRY_CODES["OCEANIA"])
+    assert codes.count("AU") == 1
+
+
+def test_relocation_source_candidates_carry_no_role_text() -> None:
+    candidates = relocation_source_candidates([{"code": "FR", "name": "France"}])
+
+    google = next(item for item in candidates if item.kind == "google_careers")
+    amazon = next(item for item in candidates if item.kind == "amazon_jobs")
+    assert "q=" not in google.url and "location=France" in google.url
+    assert "base_query=" not in amazon.url and "loc_query=France" in amazon.url
+    assert amazon.options["location_filter_code"] == "FR"
+    assert google.max_pages == 1
+    assert amazon.max_pages == 2
+
+
+def test_relocation_source_candidates_germany_entry_matches_the_shipped_default() -> None:
+    # personalize_source() overwrites q/base_query at every sync, so continuity for existing
+    # users depends only on the location half of the URL matching the shipped default's.
+    default_google = detect_source(
+        "https://www.google.com/about/careers/applications/jobs/results/?q=Software+Engineer&location=Germany",
+        "Google",
+    )
+    default_amazon = detect_source(
+        "https://www.amazon.jobs/en/search?base_query=software+engineer&loc_query=Germany", "Amazon"
+    )
+    generated = relocation_source_candidates([{"code": "DE", "name": "Germany"}])
+    generated_google = next(item for item in generated if item.kind == "google_careers")
+    generated_amazon = next(item for item in generated if item.kind == "amazon_jobs")
+
+    assert same_source(default_google, generated_google)
+    assert same_source(default_amazon, generated_amazon)
+
+
+def test_setup_complete_expands_a_continent_toggle_into_every_member_country(tmp_path) -> None:
+    settings = Settings.load(tmp_path)
+    payload = setup_payload()
+    payload["mobility"]["relocation_targets"] = [{"country_code": "OCEANIA", "country_name": "Oceania", "cities": []}]
+    payload["enabled_source_ids"] = ["__google_careers__", "__amazon_jobs__"]
+
+    updated = SetupService(settings).complete(payload)
+
+    enabled = {source.id for source in updated.load_sources() if source.enabled}
+    google_enabled = {s for s in enabled if s.startswith("google-careers-")}
+    amazon_enabled = {s for s in enabled if s.startswith("amazon-jobs-")}
+    assert len(google_enabled) == len(CONTINENT_COUNTRY_CODES["OCEANIA"])
+    assert len(amazon_enabled) == len(CONTINENT_COUNTRY_CODES["OCEANIA"])
+
+
+def test_setup_complete_disables_generated_sources_dropped_from_relocation_targets(tmp_path) -> None:
+    settings = Settings.load(tmp_path)
+    first = setup_payload()
+    first["mobility"]["relocation_targets"] = [
+        {"country_code": "DE", "country_name": "Germany", "cities": []},
+        {"country_code": "FR", "country_name": "France", "cities": []},
+    ]
+    first["enabled_source_ids"] = ["__google_careers__"]
+    settings = SetupService(settings).complete(first)
+    assert any(s.id == "google-careers-france" and s.enabled for s in settings.load_sources())
+
+    second = setup_payload()
+    second["mobility"]["relocation_targets"] = [{"country_code": "DE", "country_name": "Germany", "cities": []}]
+    second["enabled_source_ids"] = ["__google_careers__"]
+    settings = SetupService(settings).complete(second)
+
+    france = next(s for s in settings.load_sources() if s.id == "google-careers-france")
+    germany = next(s for s in settings.load_sources() if s.id == "google-careers-germany")
+    assert not france.enabled
+    assert germany.enabled

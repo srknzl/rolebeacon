@@ -22,8 +22,10 @@ from .profile import (
     SetupPayloadV1,
     candidate_schema,
     generate_strategies,
+    relocation_countries,
 )
 from .services import validate_candidate_profile
+from .source_discovery import relocation_source_candidates
 
 MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 
@@ -126,8 +128,19 @@ class SetupService:
         issues = validate_candidate_profile(profile)
         if issues:
             raise ValueError("; ".join(issues))
+
+        countries = relocation_countries(
+            [item.model_dump(mode="json") for item in payload.mobility.relocation_targets]
+        )
+        generated, _ = self.settings.save_sources(relocation_source_candidates(countries))
+        enabled_source_ids = list(payload.enabled_source_ids)
+        for sentinel, kind in (("__google_careers__", "google_careers"), ("__amazon_jobs__", "amazon_jobs")):
+            if sentinel in enabled_source_ids:
+                enabled_source_ids.remove(sentinel)
+                enabled_source_ids += [source.id for source in generated if source.kind == kind]
+
         available_sources = {source.id for source in self.settings.load_sources()}
-        unknown_sources = sorted(set(payload.enabled_source_ids) - available_sources)
+        unknown_sources = sorted(set(enabled_source_ids) - available_sources)
         if unknown_sources:
             raise ValueError(f"Unknown source IDs: {', '.join(unknown_sources)}")
         strategies = generate_strategies(payload.candidate, payload.mobility, payload.preferences)
@@ -136,7 +149,7 @@ class SetupService:
             mobility=payload.mobility.model_dump(mode="json"),
             preferences=payload.preferences.model_dump(mode="json"),
             strategies=[item.model_dump(mode="json") for item in strategies],
-            enabled_source_ids=payload.enabled_source_ids,
+            enabled_source_ids=enabled_source_ids,
             llm=payload.llm.model_dump(mode="json"),
             activate=payload.activate,
         )

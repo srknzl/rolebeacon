@@ -125,6 +125,21 @@ def test_relocation_role_is_eligible() -> None:
     assert result.status == EligibilityStatus.ELIGIBLE
 
 
+def test_a_short_country_code_does_not_match_a_substring_of_an_unrelated_place_name() -> None:
+    # "de" inside "Île-de-France" would previously match country_code "DE" case-insensitively,
+    # since hyphens count as regex word boundaries - a French posting must not pass as Germany.
+    result = evaluate(
+        job(
+            location="Île-de-France, France",
+            remote_scope="",
+            description="Relocation support and visa sponsorship are available.",
+        )
+    )
+
+    assert result.route != "relocate-de"
+    assert result.status != EligibilityStatus.ELIGIBLE
+
+
 def test_priority_company_strategy_has_score_floor() -> None:
     target = job(company="Google", location="Unknown", remote_scope="", description="General software engineering role")
     eligibility = evaluate(target)
