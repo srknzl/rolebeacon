@@ -5,7 +5,27 @@ from typing import Any
 
 from .domain import EligibilityResult, EligibilityStatus, ScoreResult
 
-SCORING_PROMPT_VERSION = "job-fit-v3"
+SCORING_PROMPT_VERSION = "job-fit-v4"
+
+# A title's head noun is the job. "Engineering Manager", "Sales Engineer", and
+# "Customer Engineer (Pre-Sales)" all contain an engineering word while being a different
+# job, so these are tested first and a match rules the engineering family out.
+OTHER_ROLE_FAMILY_TERMS = (
+    "manager", "director", "head of", "chief", "vice president", "product owner",
+    "designer", "recruiter", "recruiting", "sourcer", "sales", "account executive",
+    "customer success", "customer engineer", "solutions architect", "solutions engineer",
+    "sales engineer", "support engineer", "consultant", "analyst", "marketing",
+    "technical writer", "instructor", "teacher", "accountant", "counsel", "paralegal",
+)
+# Titles that do the work, whatever the specialism in front of them.
+ENGINEERING_ROLE_TERMS = ("engineer", "developer", "programmer", "architect", "sre", "devops")
+# Words every target role shares, so they cannot tell one target role from another.
+GENERIC_ROLE_WORDS = frozenset(
+    {
+        "engineer", "engineering", "developer", "development", "software", "programmer",
+        "senior", "staff", "principal", "lead", "junior", "mid", "level", "the", "and",
+    }
+)
 
 NO_SPONSOR_PATTERNS = (
     r"no (?:visa )?sponsorship",
@@ -193,6 +213,32 @@ def _candidate_terms(candidate_profile: dict[str, Any]) -> set[str]:
     return terms
 
 
+def _role_match(title: str, preferences: dict[str, Any]) -> tuple[int, bool]:
+    """Score the title against the roles asked for, and say whether it is the same job at all.
+
+    A different job family is not a weak match, it is the wrong job: an engineering manager,
+    a product manager, and a pre-sales engineer all mention engineering while doing none of it.
+    Inside the family the title only has to be an engineering title, because platform, backend,
+    and distributed-systems work is the same work under different names. A term the candidate
+    put in their own target roles never disqualifies anything.
+    """
+    targets = [str(role).casefold() for role in preferences.get("target_roles", []) if str(role).strip()]
+    wanted = " ".join(targets)
+    specifics = {
+        word
+        for role in targets
+        for word in re.findall(r"[a-z0-9+#.]+", role)
+        if len(word) >= 3 and word not in GENERIC_ROLE_WORDS
+    }
+    if any(term in title for term in OTHER_ROLE_FAMILY_TERMS if term not in wanted):
+        return 2, False
+    if not any(term in title for term in ENGINEERING_ROLE_TERMS) and not any(word in title for word in specifics):
+        return 5, False
+    if any(role in title for role in targets):
+        return 25, True
+    return min(25, 14 + 4 * len([word for word in specifics if word in title])), True
+
+
 def rule_score(
     job: dict[str, Any],
     eligibility: EligibilityResult,
@@ -204,14 +250,7 @@ def rule_score(
     title = str(job.get("title", "")).casefold()
     description = str(job.get("description", "")).casefold()
     text = f"{title} {description}"
-    target_tokens = {
-        token.casefold()
-        for role in preferences.get("target_roles", [])
-        for token in re.findall(r"[A-Za-z0-9+#.]+", role)
-        if len(token) >= 3 and token.casefold() not in {"engineer", "software", "developer"}
-    }
-    role_hits = sorted(token for token in target_tokens if token in title)
-    role_score = min(25, 10 + len(role_hits) * 5) if any(word in title for word in ("engineer", "developer")) else 5
+    role_score, same_role_family = _role_match(title, preferences)
 
     candidate_terms = _candidate_terms(candidate_profile)
     preferred_skills = [str(value) for value in preferences.get("preferred_skills", [])]
@@ -259,7 +298,10 @@ def rule_score(
         "salary_employment": salary_score,
     }
     strategy = next((item for item in strategies if item.get("id") == eligibility.route), None)
-    if strategy and strategy.get("kind") == "priority_company":
+    # A priority company is a reason to look at its engineering roles, not at its
+    # procurement or pre-sales openings, and the floor never touches the title match
+    # itself because that dimension is the answer to "is this my job?".
+    if strategy and strategy.get("kind") == "priority_company" and same_role_family:
         _raise_dimensions_to_floor(dimensions, 55)
     if eligibility.status == EligibilityStatus.INELIGIBLE:
         _cap_dimensions(dimensions, 39)
@@ -283,6 +325,8 @@ def rule_score(
         {"requirement": risk, "severity": "high" if eligibility.status == EligibilityStatus.INELIGIBLE else "medium"}
         for risk in eligibility.risks
     ]
+    if not same_role_family:
+        gaps.insert(0, {"requirement": f"{job.get('title', 'This title')} is a different role from your targets", "severity": "high"})
     return ScoreResult(
         total=total,
         dimensions=dimensions,
@@ -297,9 +341,9 @@ def rule_score(
 
 
 def _raise_dimensions_to_floor(dimensions: dict[str, int], floor: int) -> None:
-    maximums = {"role_domain": 25, "domain_experience": 20, "stack": 20}
+    maximums = {"domain_experience": 20, "stack": 20}
     shortfall = max(0, floor - sum(dimensions.values()))
-    for key in ("role_domain", "domain_experience", "stack"):
+    for key in ("domain_experience", "stack"):
         increase = min(shortfall, maximums[key] - dimensions[key])
         dimensions[key] += increase
         shortfall -= increase

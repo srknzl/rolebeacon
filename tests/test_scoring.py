@@ -138,3 +138,35 @@ def test_priority_company_strategy_has_score_floor() -> None:
 
     assert eligibility.route == "priority-companies"
     assert score.total >= 55
+
+
+def score(value):
+    return rule_score(
+        value,
+        evaluate(value),
+        PREFERENCES.model_dump(mode="json"),
+        CANDIDATE.model_dump(mode="json"),
+        STRATEGIES,
+    )
+
+
+def test_a_different_job_family_scores_near_zero_on_title_match() -> None:
+    # Each of these contains an engineering word while being a different job.
+    for title in ("Engineering Manager, Platform", "Senior Product Manager", "Customer Engineer (Pre-Sales)"):
+        result = score(job(title=title))
+
+        assert result.dimensions["role_domain"] == 2, title
+        assert any("different role" in gap["requirement"] for gap in result.gaps), title
+
+
+def test_any_engineering_title_matches_and_a_target_role_matches_fully() -> None:
+    assert score(job(title="Site Reliability Engineer")).dimensions["role_domain"] == 14
+    assert score(job(title="Staff Distributed Systems Engineer")).dimensions["role_domain"] == 25
+
+
+def test_a_priority_company_does_not_lift_a_role_the_candidate_is_not_looking_for() -> None:
+    # The floor exists to surface a wanted company's engineering roles, not its procurement openings.
+    result = score(job(company="Google", title="Manager, Procurement", location="Unknown", remote_scope=""))
+
+    assert result.dimensions["role_domain"] == 2
+    assert result.total < 55

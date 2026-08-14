@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import parse_qs, parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import httpx
+import pycountry
 
 from .domain import SourceConfig
 from .profile import country_catalog
@@ -199,7 +200,7 @@ class SourceDiscoveryService:
         if source.kind == "amazon_jobs":
             response = await client.get(
                 "https://www.amazon.jobs/en/search.json",
-                params=amazon_search_params(source.url, 0, 100),
+                params=amazon_search_params(source.url, 0, 100, str(source.options.get("location_filter_code", ""))),
             )
             response.raise_for_status()
             payload = response.json()
@@ -337,7 +338,7 @@ def google_result_links(value: str, base_url: str) -> list[tuple[str, str]]:
     return list(dict.fromkeys(parser.links))
 
 
-def amazon_search_params(careers_url: str, offset: int, limit: int) -> dict[str, Any]:
+def amazon_search_params(careers_url: str, offset: int, limit: int, location_filter_code: str = "") -> dict[str, Any]:
     query = parse_qs(urlsplit(careers_url).query)
     allowed = {
         "base_query", "loc_query", "country", "city", "region", "category[]", "business_category[]",
@@ -345,6 +346,13 @@ def amazon_search_params(careers_url: str, offset: int, limit: int) -> dict[str,
         "distanceType", "loc_group_id",
     }
     params: dict[str, Any] = {key: values if len(values) > 1 else values[0] for key, values in query.items() if key in allowed}
+    # amazon.jobs only geo-filters server-side on the ISO alpha-3 "country" param. Without it, "loc_query"
+    # is a hint the API mostly ignores, and a page sorted by "recent" across every country returns almost
+    # no matches for one. This derives it from the source's own configured location filter.
+    if "country" not in params and location_filter_code:
+        country = pycountry.countries.get(alpha_2=location_filter_code.upper())
+        if country:
+            params["country"] = country.alpha_3
     params.update({"offset": offset, "result_limit": limit, "sort": query.get("sort", ["recent"])[0]})
     return params
 

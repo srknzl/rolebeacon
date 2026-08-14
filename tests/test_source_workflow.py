@@ -11,7 +11,13 @@ from rolebeacon.collectors import AmazonJobsCollector, GoogleCareersCollector
 from rolebeacon.config import Settings
 from rolebeacon.domain import SourceConfig
 from rolebeacon.setup import SetupService
-from rolebeacon.source_discovery import SourceDiscoveryError, SourceDiscoveryService, detect_source, same_source
+from rolebeacon.source_discovery import (
+    SourceDiscoveryError,
+    SourceDiscoveryService,
+    amazon_search_params,
+    detect_source,
+    same_source,
+)
 
 
 def setup_payload() -> dict:
@@ -219,6 +225,9 @@ async def test_google_first_party_collector_parses_public_search_and_detail_page
 async def test_amazon_first_party_collector_normalizes_public_json_jobs() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/en/search.json"
+        # Without an ISO alpha-3 "country" param, amazon.jobs geo-filters weakly and a page
+        # sorted by "recent" across every country returns almost no matches for one.
+        assert request.url.params.get("country") == "DEU"
         return httpx.Response(
             200,
             json={
@@ -338,3 +347,21 @@ def test_sources_workflow_discovers_saves_syncs_and_displays_jobs_end_to_end(tmp
     assert sync.status_code == 202
     assert jobs.json()["jobs"][0]["title"] == "Senior Backend Engineer"
     assert jobs.json()["jobs"][0]["primary_source_id"].startswith("greenhouse-example-co")
+
+
+def test_amazon_search_params_derives_the_iso_alpha3_country_from_the_location_filter() -> None:
+    # amazon.jobs only honors geography server-side through "country" (ISO alpha-3). Without it a
+    # request sorted by "recent" scans every country and almost never lands on the one requested.
+    params = amazon_search_params(
+        "https://www.amazon.jobs/en/search?base_query=software+engineer&loc_query=Germany", 0, 100, "DE"
+    )
+
+    assert params["country"] == "DEU"
+
+
+def test_amazon_search_params_does_not_override_a_country_already_in_the_url() -> None:
+    params = amazon_search_params(
+        "https://www.amazon.jobs/en/search?base_query=software+engineer&country=USA", 0, 100, "DE"
+    )
+
+    assert params["country"] == "USA"

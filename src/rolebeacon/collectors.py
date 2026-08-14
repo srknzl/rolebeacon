@@ -696,7 +696,10 @@ class AmazonJobsCollector(Collector):
         for page_number in range(max(1, self.config.max_pages)):
             response = await self.client.get(
                 "https://www.amazon.jobs/en/search.json",
-                params=amazon_search_params(self.config.url, page_number * page_size, page_size),
+                params=amazon_search_params(
+                    self.config.url, page_number * page_size, page_size,
+                    str(self.config.options.get("location_filter_code", "")),
+                ),
             )
             requests += 1
             response.raise_for_status()
