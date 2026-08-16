@@ -619,7 +619,10 @@ def test_relocation_source_candidates_are_named_per_country_not_identically() ->
     )
 
     names = [item.name for item in candidates]
-    assert names == ["Google Careers — France", "Amazon Jobs — France", "Google Careers — Germany", "Amazon Jobs — Germany"]
+    assert names == [
+        "Google Careers — France", "Amazon Jobs — France", "Google Careers — Germany", "Amazon Jobs — Germany",
+        "Google Careers — Remote",
+    ]
     assert len(set(names)) == len(names)
 
 
@@ -652,10 +655,11 @@ def test_setup_complete_expands_a_continent_toggle_into_every_member_country(tmp
     enabled = {source.id for source in updated.load_sources() if source.enabled}
     google_enabled = {s for s in enabled if s.startswith("google-careers-")}
     amazon_enabled = {s for s in enabled if s.startswith("amazon-jobs-")}
-    # +1: setup_payload()'s work_authorizations (["TR"]) is now searched too, alongside the
-    # Oceania relocation targets - a candidate's own country needs no relocation but still gets
-    # a generated source, since that's the whole point of including work_authorizations.
-    assert len(google_enabled) == len(CONTINENT_COUNTRY_CODES["OCEANIA"]) + 1
+    # +1 country each: setup_payload()'s work_authorizations (["TR"]) is now searched too,
+    # alongside the Oceania relocation targets - a candidate's own country needs no relocation
+    # but still gets a generated source. Google gets one more on top of that: the single,
+    # non-country-scoped "Google Careers — Remote" source, which Amazon has no equivalent for.
+    assert len(google_enabled) == len(CONTINENT_COUNTRY_CODES["OCEANIA"]) + 2
     assert len(amazon_enabled) == len(CONTINENT_COUNTRY_CODES["OCEANIA"]) + 1
 
 

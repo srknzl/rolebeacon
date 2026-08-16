@@ -72,11 +72,11 @@
       {% set google_help = "Official Google careers search personalized from your target roles and relocation targets at sync time." %}
       {% set google_ids = sources|selectattr('kind', 'equalto', 'google_careers')|map(attribute='id')|join(',') %}
       <label title="{{ google_help }}"><input class="source-choice" type="checkbox" value="__google_careers__" data-source-ids="{{ google_ids }}"
-        {% if sources|selectattr('kind', 'equalto', 'google_careers')|selectattr('enabled')|list %}checked{% endif %}> Google Careers {{ tip(google_help) }}<span class="source-choice-note">Searches every relocation-target country or continent you've added.</span></label>
+        {% if sources|selectattr('kind', 'equalto', 'google_careers')|selectattr('enabled')|list %}checked{% endif %}> Google Careers {{ tip(google_help) }}<span class="source-choice-note">Searches every country you're authorized to work in or willing to relocate to, plus one Remote-eligible search covering roles with no fixed country.</span></label>
       {% set amazon_help = "Official Amazon careers search personalized from your target roles and relocation targets at sync time." %}
       {% set amazon_ids = sources|selectattr('kind', 'equalto', 'amazon_jobs')|map(attribute='id')|join(',') %}
       <label title="{{ amazon_help }}"><input class="source-choice" type="checkbox" value="__amazon_jobs__" data-source-ids="{{ amazon_ids }}"
-        {% if sources|selectattr('kind', 'equalto', 'amazon_jobs')|selectattr('enabled')|list %}checked{% endif %}> Amazon Jobs {{ tip(amazon_help) }}<span class="source-choice-note">Searches every relocation-target country or continent you've added.</span></label>
+        {% if sources|selectattr('kind', 'equalto', 'amazon_jobs')|selectattr('enabled')|list %}checked{% endif %}> Amazon Jobs {{ tip(amazon_help) }}<span class="source-choice-note">Searches every country you're authorized to work in or willing to relocate to. Amazon's own search has no remote-eligible filter, so there's no Remote row here.</span></label>
     </div>
   </section>
 

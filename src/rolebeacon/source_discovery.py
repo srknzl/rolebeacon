@@ -310,6 +310,18 @@ def relocation_source_candidates(countries: list[dict[str, str]]) -> list[Source
             "ingestion_filter": True, "official_first_party": True,
             "url": f"https://www.amazon.jobs/en/search?{urlencode({'loc_query': name})}",
         }))
+    # One additional, non-country-scoped source: Google Careers' own "Remote eligible" filter
+    # (has_remote=true, confirmed against the live site) catches roles with no fixed country tag
+    # at all, which no per-country query above can ever match. Added once, not per country.
+    # Amazon Jobs has no equivalent filter in its own search UI (checked: Industry experience,
+    # Job type, Job category, Country/Region, State/Province - no remote facet) - guessing a
+    # query param for it would just add another source that silently returns nothing.
+    candidates.append(SourceConfig.from_dict({
+        "id": "google-careers-remote", "kind": "google_careers", "name": "Google Careers — Remote",
+        "company": "Google", "enabled": False, "min_sync_interval_seconds": 14400, "trust_priority": 100,
+        "max_pages": 10, "ingestion_filter": True, "official_first_party": True,
+        "url": f"https://www.google.com/about/careers/applications/jobs/results/?{urlencode({'has_remote': 'true'})}",
+    }))
     return candidates
 
 
