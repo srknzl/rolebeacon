@@ -17,7 +17,7 @@ This report records the findings from the pre-production code review. The cleara
 | Findings | Resolution |
 | --- | --- |
 | 1–3 | Sponsorship and relocation are independent; clearance uses a structured candidate conflict matrix; absent remote geography remains unknown. |
-| 4–5 | Non-truncated, structurally valid, non-empty complete snapshots reconcile source associations; implausible empty snapshots preserve active jobs. Eligibility signals participate in content identity while mutable links update independently. |
+| 4–5 | Non-truncated, structurally valid complete snapshots reconcile source associations; empty or dramatically smaller snapshots preserve active jobs until an identical source-ID fingerprint confirms the contraction. Eligibility signals participate in content identity while mutable links update independently. |
 | 6–7 | Setup round-trips all values with explicit secret preserve/replace/remove actions; migration dispatches before destination initialization. |
 | 8–10 | Company lists use Unicode whole-token identity with legal-suffix normalization and explicit aliases; company keys are Unicode-safe; ambiguous opening collisions enter duplicate review instead of auto-merging. |
 | 11 | Source preview, manual refresh, and scheduled refresh all require explicit activation. |

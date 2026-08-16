@@ -17,6 +17,7 @@ from rolebeacon.sync import (
     deduplicate_source_jobs,
     engineering_job,
     personalize_source,
+    snapshot_guard_thresholds,
 )
 
 
@@ -50,6 +51,16 @@ def test_friendly_error_prefix_covers_the_common_httpx_failures() -> None:
     assert "too long to respond" in _friendly_error_prefix(httpx.ReadTimeout("timed out", request=request))
     assert "Could not connect" in _friendly_error_prefix(httpx.ConnectError("refused", request=request))
     assert _friendly_error_prefix(ValueError("unrelated")) == ""
+
+
+def test_snapshot_guard_options_are_runtime_validated() -> None:
+    assert snapshot_guard_thresholds({}) == (0.5, 20)
+    assert snapshot_guard_thresholds(
+        {"snapshot_drop_ratio": 0.25, "snapshot_drop_minimum_baseline": 100}
+    ) == (0.25, 100)
+    assert snapshot_guard_thresholds(
+        {"snapshot_drop_ratio": "invalid", "snapshot_drop_minimum_baseline": -1}
+    ) == (0.5, 20)
 
 
 def test_collector_duplicates_are_collapsed_before_upsert() -> None:
@@ -270,6 +281,7 @@ async def test_empty_complete_snapshot_preserves_previously_active_posting(tmp_p
 
     assert database.get_job(job_id)["active"] == 1
     assert database.source_state("arbeitnow")["last_truncated"] == 1
+    assert "second consistent complete snapshot" in database.source_state("arbeitnow")["last_snapshot_warning"]
 
 
 async def test_process_lock_prevents_two_refresh_processes_from_racing(tmp_path) -> None:

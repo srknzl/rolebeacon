@@ -7,7 +7,7 @@
 {% block content %}
 <section class="page-heading">
   <div><p class="eyebrow">DISCOVERY</p><h1>Jobs</h1></div>
-  <span>{% if total %}{{ jobs|length }} of {{ total }} matches{% else %}No matches{% endif %}</span>
+  <span>{% if total %}{{ total }} of {{ all_matches_total }} jobs shown{% elif all_matches_total %}No visible matches of {{ all_matches_total }} jobs{% else %}No matches{% endif %}{% if hidden_title_count %} · {{ hidden_title_count }} different-role title{{ '' if hidden_title_count == 1 else 's' }} hidden{% endif %}</span>
 </section>
 
 <form class="filters" method="get">
@@ -76,8 +76,8 @@
 {% if active_chips %}
 <div class="filter-chips">
   <span>Filtering by</span>
-  {% for chip in active_chips %}<a class="filter-chip" href="{{ request.url.remove_query_params([chip.key, 'page']) }}" title="Remove this filter">{{ chip.label }}: {{ chip.value }} <span aria-hidden="true">×</span></a>{% endfor %}
-  <a class="filter-chip filter-chip-clear" href="/jobs">Clear all</a>
+  {% for chip in active_chips %}<a class="filter-chip" href="{% if chip.inverse %}{{ request.url.remove_query_params('page').include_query_params(show_mismatched_titles=1) }}{% else %}{{ request.url.remove_query_params([chip.key, 'page']) }}{% endif %}" title="{{ 'Show these jobs' if chip.inverse else 'Remove this filter' }}">{{ chip.label }}: {{ chip.value }} <span aria-hidden="true">×</span></a>{% endfor %}
+  <a class="filter-chip filter-chip-clear" href="/jobs?show_mismatched_titles=1">Clear all</a>
 </div>
 {% endif %}
 

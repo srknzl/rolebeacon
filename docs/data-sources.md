@@ -90,10 +90,18 @@ Official references:
 | 6 | SerpApi Google Jobs | Paid API key | Fills coverage gaps through structured Google Jobs results and geolocation | Commercial dependency, cost, duplicates, and upstream layout changes | Optional and disabled by default |
 
 Collector completeness is explicit. Only a non-truncated, plausible complete snapshot participates in
-absence-based closure; partial, date-bounded, failed, page-limited, or unexpectedly empty responses
-never deactivate a previously active posting. Complete JSON and XML collectors validate their expected
-top-level payload shape before declaring a snapshot. Source status shows when coverage was incomplete
-or implausible. A job remains active while any active source still reports it, and provenance is
+absence-based closure; partial, date-bounded, failed, or page-limited responses never deactivate a
+previously active posting. Complete JSON and XML collectors validate their expected top-level payload
+shape before declaring a snapshot. When a complete snapshot falls below 50% of an accepted baseline of
+at least 20 jobs, or becomes empty while jobs remain active, RoleBeacon preserves missing jobs and stores
+the observed source-job ID fingerprint. Reconciliation occurs only if the next complete snapshot has the
+same fingerprint. A declared `provider_total` larger than the returned unique job set is explicitly
+incomplete and can never be confirmed. The Sources page shows the pending baseline and count warning.
+
+Advanced source definitions may override `snapshot_drop_ratio` and
+`snapshot_drop_minimum_baseline`; invalid values fall back to the conservative defaults. The accepted
+baseline, pending confirmation, warning, and any eventual job deactivations are persisted
+transactionally. A job remains active while any active source still reports it, and provenance is
 preserved during reconciliation.
 
 Gmail OAuth credentials are stored under the configured operating-system application-data directory

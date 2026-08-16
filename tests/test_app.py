@@ -974,8 +974,41 @@ def test_jobs_page_hides_mismatched_titles_by_default(tmp_path) -> None:
 
     assert "Backend Engineer" in default_view.text
     assert "Talent Acquisition Specialist" not in default_view.text
+    assert "1 of 2 jobs shown" in default_view.text
+    assert "1 different-role title hidden" in default_view.text
+    assert "Hiding different-role titles: 1 job" in default_view.text
+    assert "show_mismatched_titles=1" in default_view.text
     assert "Backend Engineer" in shown.text
     assert "Talent Acquisition Specialist" in shown.text
+    assert "2 of 2 jobs shown" in shown.text
+    assert "Hiding different-role titles" not in shown.text
+
+
+def test_sources_page_explains_a_quarantined_snapshot_drop(tmp_path) -> None:
+    settings = configured_settings(tmp_path)
+    app = create_app(settings)
+    source_id = settings.load_sources()[0].id
+    app.state.database.upsert_job(
+        CollectedJob(
+            source=source_id,
+            source_job_id="baseline-job",
+            title="Backend Engineer",
+            company="Example",
+            location="Remote Worldwide",
+            description="Build backend systems.",
+            url="https://example.test/jobs/baseline-job",
+        )
+    )
+    app.state.database.reconcile_source_snapshot_guarded(source_id, {"baseline-job"})
+    result = app.state.database.reconcile_source_snapshot_guarded(source_id, set())
+
+    with TestClient(app) as client:
+        page = client.get("/sources")
+
+    assert result.reconciled is False
+    assert page.status_code == 200
+    assert "Snapshot count fell from 1 to 0" in page.text
+    assert "second consistent complete snapshot" in page.text
 
 
 def test_job_detail_decisions_are_in_place_and_cover_letter_requires_llm(tmp_path) -> None:
