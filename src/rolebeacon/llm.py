@@ -7,7 +7,7 @@ import httpx
 
 from .config import Settings
 from .domain import EligibilityResult, EligibilityStatus, ScoreResult
-from .scoring import SCORING_PROMPT_VERSION
+from .scoring import DIMENSION_MAXIMUMS, SCORING_PROMPT_VERSION
 
 SCORE_SCHEMA = {
     "type": "object",
@@ -17,12 +17,14 @@ SCORE_SCHEMA = {
             "type": "object",
             "additionalProperties": False,
             "properties": {
-                "role_domain": {"type": "integer", "minimum": 0, "maximum": 25},
-                "stack": {"type": "integer", "minimum": 0, "maximum": 20},
-                "domain_experience": {"type": "integer", "minimum": 0, "maximum": 20},
-                "seniority": {"type": "integer", "minimum": 0, "maximum": 10},
-                "location_authorization": {"type": "integer", "minimum": 0, "maximum": 15},
-                "salary_employment": {"type": "integer", "minimum": 0, "maximum": 10},
+                "role_domain": {"type": "integer", "minimum": 0, "maximum": DIMENSION_MAXIMUMS["role_domain"]},
+                "stack": {"type": "integer", "minimum": 0, "maximum": DIMENSION_MAXIMUMS["stack"]},
+                "domain_experience": {"type": "integer", "minimum": 0, "maximum": DIMENSION_MAXIMUMS["domain_experience"]},
+                "seniority": {"type": "integer", "minimum": 0, "maximum": DIMENSION_MAXIMUMS["seniority"]},
+                "location_authorization": {
+                    "type": "integer", "minimum": 0, "maximum": DIMENSION_MAXIMUMS["location_authorization"],
+                },
+                "salary_employment": {"type": "integer", "minimum": 0, "maximum": DIMENSION_MAXIMUMS["salary_employment"]},
             },
             "required": ["role_domain", "stack", "domain_experience", "seniority", "location_authorization", "salary_employment"],
         },
@@ -50,10 +52,10 @@ SCORE_SCHEMA = {
 }
 
 SCORING_RUBRIC = """Use the full integer point ranges below. These are additive points, not 0-to-1 ratings.
-- role_domain (0-25): 25 exact target role/domain, 18-22 strong overlap, 8-17 partial, 0-7 unrelated.
+- role_domain (0-30): 30 exact target role/domain, 22-27 strong overlap, 10-21 partial, 0-9 unrelated.
 - stack (0-20): 18-20 nearly all required technologies, 10-17 meaningful overlap, 1-9 weak overlap, 0 none.
-- domain_experience (0-20): 18-20 direct proven experience, 10-17 transferable, 1-9 adjacent, 0 none.
-- seniority (0-10): 9-10 proven target seniority, 5-8 close, 1-4 mismatch, 0 disqualifying.
+- domain_experience (0-10): 9-10 direct proven experience, 5-8 transferable, 1-4 adjacent, 0 none.
+- seniority (0-15): 13-15 proven target seniority, 7-12 close, 1-6 mismatch, 0 disqualifying.
 - location_authorization (0-15): 15 explicitly eligible, 8-12 likely compatible, 0-5 unknown or risky.
 - salary_employment (0-10): 8-10 confirmed fit, 5 when unstated, 0-4 conflict or material uncertainty.
 

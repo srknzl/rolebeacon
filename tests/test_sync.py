@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import httpx
+
 from rolebeacon.collectors import plain_text
 from rolebeacon.config import Settings
 from rolebeacon.database import Database
-from rolebeacon.domain import CollectedJob
+from rolebeacon.domain import CollectedJob, SourceConfig
 from rolebeacon.llm import LlmClient
 from rolebeacon.source_discovery import relocation_source_candidates
-from rolebeacon.sync import SyncService, deduplicate_source_jobs, personalize_source
+from rolebeacon.sync import SyncService, _friendly_error_prefix, deduplicate_source_jobs, personalize_source
 
 
 def test_incremental_window_overlaps_last_success(tmp_path) -> None:
@@ -27,6 +29,20 @@ def test_plain_text_excludes_non_visible_page_content() -> None:
     value = "<style>.secret { color: red }</style><main>Visible</main><script>hidden()</script>"
 
     assert plain_text(value) == "Visible"
+
+
+def test_friendly_error_prefix_covers_the_common_httpx_failures() -> None:
+    request = httpx.Request("GET", "https://example.test/jobs")
+    rate_limited = httpx.HTTPStatusError("429", request=request, response=httpx.Response(429, request=request))
+    server_error = httpx.HTTPStatusError("500", request=request, response=httpx.Response(500, request=request))
+    client_error = httpx.HTTPStatusError("404", request=request, response=httpx.Response(404, request=request))
+
+    assert "rate-limiting" in _friendly_error_prefix(rate_limited)
+    assert "server had an error" in _friendly_error_prefix(server_error)
+    assert "rejected the request" in _friendly_error_prefix(client_error)
+    assert "too long to respond" in _friendly_error_prefix(httpx.ReadTimeout("timed out", request=request))
+    assert "Could not connect" in _friendly_error_prefix(httpx.ConnectError("refused", request=request))
+    assert _friendly_error_prefix(ValueError("unrelated")) == ""
 
 
 def test_collector_duplicates_are_collapsed_before_upsert() -> None:
@@ -55,15 +71,14 @@ def test_collector_duplicates_are_collapsed_before_upsert() -> None:
     assert result[0].description == "Updated representation"
 
 
-def test_first_party_sources_use_saved_roles_and_relocation_targets(tmp_path) -> None:
+def test_first_party_sources_use_saved_roles_and_keep_their_baked_in_location(tmp_path) -> None:
     settings = Settings.load(tmp_path)
     google = next(source for source in settings.load_sources() if source.kind == "google_careers")
     amazon = next(source for source in settings.load_sources() if source.kind == "amazon_jobs")
     search = {"target_roles": ["Backend Engineer", "Platform Engineer"]}
-    mobility = {"relocation_targets": [{"country_code": "DE", "country_name": "Germany"}]}
 
-    personalized_google = personalize_source(google, search, mobility)
-    personalized_amazon = personalize_source(amazon, search, mobility)
+    personalized_google = personalize_source(google, search)
+    personalized_amazon = personalize_source(amazon, search)
 
     assert "q=Backend+Engineer+OR+Platform+Engineer" in personalized_google.url
     assert "location=Germany" in personalized_google.url
@@ -75,26 +90,42 @@ def test_first_party_sources_never_fall_back_to_a_hardcoded_title() -> None:
     generated = relocation_source_candidates([{"code": "DE", "name": "Germany"}])
     google = next(source for source in generated if source.kind == "google_careers")
     amazon = next(source for source in generated if source.kind == "amazon_jobs")
-    mobility = {"relocation_targets": [{"country_code": "DE", "country_name": "Germany"}]}
 
-    personalized_google = personalize_source(google, {"target_roles": []}, mobility)
-    personalized_amazon = personalize_source(amazon, {"target_roles": []}, mobility)
+    personalized_google = personalize_source(google, {"target_roles": []})
+    personalized_amazon = personalize_source(amazon, {"target_roles": []})
 
     assert "q=" not in personalized_google.url
     assert "base_query=" not in personalized_amazon.url
 
 
-def test_first_party_sources_skip_any_continent_pseudo_code_as_a_location(tmp_path) -> None:
-    settings = Settings.load(tmp_path)
-    google = next(source for source in settings.load_sources() if source.kind == "google_careers")
-    amazon = next(source for source in settings.load_sources() if source.kind == "amazon_jobs")
-    mobility = {"relocation_targets": [{"country_code": "AFRICA", "country_name": "Africa"}]}
+def test_personalize_source_never_touches_each_generated_countrys_own_location() -> None:
+    # Root cause of "56 Google/56 Amazon rows, still thin results": personalize_source() used to
+    # overwrite every generated row's location with whichever country came first in relocation
+    # targets, on every sync - collapsing all per-country rows onto one country. It must not do
+    # that again: each row's own baked-in location must survive personalizing untouched.
+    generated = relocation_source_candidates([{"code": "DE", "name": "Germany"}, {"code": "FR", "name": "France"}])
+    search = {"target_roles": ["Backend Engineer"]}
 
-    personalized_google = personalize_source(google, {"target_roles": ["Backend Engineer"]}, mobility)
-    personalized_amazon = personalize_source(amazon, {"target_roles": ["Backend Engineer"]}, mobility)
+    personalized = [personalize_source(source, search) for source in generated]
 
-    assert "location=Africa" not in personalized_google.url
-    assert "loc_query=Africa" not in personalized_amazon.url
+    google_urls = [source.url for source in personalized if source.kind == "google_careers"]
+    amazon_urls = [source.url for source in personalized if source.kind == "amazon_jobs"]
+    assert any("location=Germany" in url for url in google_urls)
+    assert any("location=France" in url for url in google_urls)
+    assert any("loc_query=Germany" in url for url in amazon_urls)
+    assert any("loc_query=France" in url for url in amazon_urls)
+
+
+def test_personalize_source_injects_role_text_into_option_based_query_kinds() -> None:
+    # Adzuna, Jooble, SerpApi, and Remotive store their free-text query in options, not the URL -
+    # each must receive the candidate's real target_roles the same way Google/Amazon do.
+    search = {"target_roles": ["Backend Engineer", "Platform Engineer"]}
+    for kind, option_key in (("adzuna", "query"), ("jooble", "query"), ("serpapi", "query"), ("remotive", "search")):
+        source = SourceConfig(id=f"{kind}-test", kind=kind, name=kind)
+
+        personalized = personalize_source(source, search)
+
+        assert personalized.options[option_key] == "Backend Engineer OR Platform Engineer", kind
 
 
 async def test_unavailable_selected_llm_stops_refresh_before_collection_or_rules_fallback(tmp_path, monkeypatch) -> None:

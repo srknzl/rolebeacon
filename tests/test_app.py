@@ -8,9 +8,9 @@ from time import sleep
 import pytest
 from fastapi.testclient import TestClient
 
-from rolebeacon.app import create_app
+from rolebeacon.app import _source_filter_options, create_app
 from rolebeacon.config import Settings
-from rolebeacon.domain import CollectedJob, EligibilityResult, EligibilityStatus
+from rolebeacon.domain import CollectedJob, EligibilityResult, EligibilityStatus, SourceConfig
 from rolebeacon.llm import SCORING_RUBRIC, LlmClient
 from rolebeacon.setup import SetupService
 
@@ -188,7 +188,7 @@ def test_llm_score_total_is_derived_from_dimensions(tmp_path) -> None:
 
 def test_llm_rubric_uses_full_point_ranges_and_positive_evidence() -> None:
     assert "not 0-to-1 ratings" in SCORING_RUBRIC
-    assert "role_domain (0-25)" in SCORING_RUBRIC
+    assert "role_domain (0-30)" in SCORING_RUBRIC
     assert 'never write "absent"' in SCORING_RUBRIC.casefold()
 
 
@@ -300,6 +300,7 @@ def test_setup_shows_searchable_country_catalog_and_rules_model_status(tmp_path)
     assert setup.status_code == 200
     assert 'data-country-code="TR" data-country-name="Türkiye"' in setup.text
     assert 'data-country-code="DE" data-country-name="Germany"' in setup.text
+    assert "only sees jobs from your enabled sources" in setup.text
     assert model_status.json()["status"] == "rules_only"
 
 
@@ -363,14 +364,19 @@ def test_dashboard_jobs_api_and_feedback(tmp_path) -> None:
     with TestClient(app) as client:
         dashboard = client.get("/")
         jobs = client.get("/api/jobs")
-        feedback = client.post(f"/api/jobs/{job_id}/feedback", json={"status": "interested"})
+        feedback = client.post(f"/api/jobs/{job_id}/feedback", json={"status": "bookmarked"})
 
     assert dashboard.status_code == 200
     assert "RoleBeacon" in dashboard.text
-    assert "No recommended jobs yet" in dashboard.text
+    # An exact title-and-skill match against the fixture profile clears the 65-point recommended
+    # bar (role_domain 30 + stack 5 + seniority 10 + location 15 + salary 5 = 65), so it shows here
+    # rather than in the empty state.
+    assert "Backend Engineer" in dashboard.text
+    assert "No recommended jobs yet" not in dashboard.text
+    assert "only sees jobs from your enabled sources" in dashboard.text
     assert jobs.json()["jobs"][0]["title"] == "Backend Engineer"
-    assert feedback.json()["status"] == "interested"
-    assert database.get_job(job_id)["status"] == "interested"
+    assert feedback.json()["status"] == "bookmarked"
+    assert database.get_job(job_id)["status"] == "bookmarked"
 
 
 def test_job_detail_renders_mojibake_repair_filter_end_to_end(tmp_path) -> None:
@@ -433,6 +439,97 @@ def test_preferences_page_edits_the_complete_saved_setup_without_resetting_it(tm
     assert app.state.settings.load_search_profile()["priority_companies"] == ["Google", "Microsoft"]
 
 
+def test_source_filter_options_collapses_generated_rows_but_lists_others_individually() -> None:
+    sources = [
+        # A row can carry a stale per-country name left over from an older save (save_sources()
+        # keeps an existing row's saved name forever) - the grouped label must not leak it.
+        SourceConfig(id="google-careers-germany", kind="google_careers", name="Google Careers — Germany"),
+        SourceConfig(id="google-careers-france", kind="google_careers", name="Google Careers"),
+        SourceConfig(id="amazon-jobs-germany", kind="amazon_jobs", name="Amazon Jobs"),
+        SourceConfig(id="adzuna-de", kind="adzuna", name="Adzuna — Germany"),
+        SourceConfig(id="adzuna-uk", kind="adzuna", name="Adzuna — UK"),
+    ]
+
+    options = _source_filter_options(sources)
+
+    assert options == [
+        {"value": "google_careers", "label": "Google Careers"},
+        {"value": "amazon_jobs", "label": "Amazon Jobs"},
+        {"value": "adzuna-de", "label": "Adzuna — Germany"},
+        {"value": "adzuna-uk", "label": "Adzuna — UK"},
+    ]
+
+
+def test_jobs_page_source_filter_groups_google_across_countries_and_company_list_narrows_watchlist(tmp_path) -> None:
+    from rolebeacon.source_discovery import relocation_source_candidates
+
+    payload = setup_payload()
+    payload["preferences"]["company_watchlist"] = ["Watched Co"]
+    settings = SetupService(Settings.load(tmp_path)).complete(payload)
+    generated, _ = settings.save_sources(
+        relocation_source_candidates([{"code": "DE", "name": "Germany"}, {"code": "FR", "name": "France"}])
+    )
+    germany = next(item for item in generated if item.kind == "google_careers" and "Germany" in item.url)
+    france = next(item for item in generated if item.kind == "google_careers" and "France" in item.url)
+    app = create_app(settings)
+    database = app.state.database
+    database.upsert_job(CollectedJob(
+        source=germany.id, source_job_id="1", title="Backend Engineer", company="Example DE",
+        location="Berlin", description="Build backend systems.", url="https://example.com/jobs/de",
+        published_at=datetime.now(UTC),
+    ))
+    database.upsert_job(CollectedJob(
+        source=france.id, source_job_id="2", title="Backend Engineer", company="Example FR",
+        location="Paris", description="Build backend systems.", url="https://example.com/jobs/fr",
+        published_at=datetime.now(UTC),
+    ))
+    database.upsert_job(CollectedJob(
+        source="adzuna-de", source_job_id="3", title="Backend Engineer", company="Watched Co",
+        location="Berlin", description="Build backend systems.", url="https://example.com/jobs/watched",
+        published_at=datetime.now(UTC),
+    ))
+
+    with TestClient(app) as client:
+        grouped = client.get("/jobs?source=google_careers")
+        watchlist = client.get("/jobs?company_list=watchlist")
+
+    assert grouped.status_code == 200
+    assert grouped.text.count('value="google_careers"') == 1
+    assert "Example DE" in grouped.text and "Example FR" in grouped.text
+    assert watchlist.status_code == 200
+    assert "Watched Co" in watchlist.text
+    assert "Example DE" not in watchlist.text
+
+
+def test_jobs_page_supports_page_size_and_location_filter_and_company_suggest(tmp_path) -> None:
+    app = create_app(configured_settings(tmp_path))
+    database = app.state.database
+    for index in range(12):
+        database.upsert_job(CollectedJob(
+            source="fixture", source_job_id=str(index), title=f"Engineer {index}",
+            company="Canonical" if index == 0 else "Other Co",
+            location="Berlin" if index == 0 else "Paris",
+            description="Build systems.", url=f"https://example.test/jobs/{index}",
+            published_at=datetime.now(UTC),
+        ))
+
+    with TestClient(app) as client:
+        paged = client.get("/jobs?page_size=10")
+        unpaged = client.get("/jobs")
+        located = client.get("/jobs?location=Berlin")
+        suggestions = client.get("/api/companies/suggest?q=Canon")
+
+    assert paged.status_code == 200
+    assert "Page 1 of 2" in paged.text
+    assert unpaged.status_code == 200
+    assert "Page 1 of 2" not in unpaged.text
+    assert located.status_code == 200
+    assert "Engineer 0" in located.text
+    assert "Engineer 1" not in located.text
+    assert suggestions.status_code == 200
+    assert suggestions.json()["companies"] == ["Canonical"]
+
+
 def test_invalid_feedback_is_rejected(tmp_path) -> None:
     app = create_app(configured_settings(tmp_path))
 
@@ -491,6 +588,130 @@ def test_realistic_job_detail_with_llm_evidence_renders_without_500(tmp_path) ->
     assert "Why it matches" in response.text
 
 
+def test_job_detail_shows_the_ineligible_score_cap_explanation(tmp_path) -> None:
+    from rolebeacon.domain import ScoreResult
+    from rolebeacon.scoring import INELIGIBLE_SCORE_CAP, SCORING_PROMPT_VERSION
+
+    # Startup runs an immediate sync, which requeues and rescores any job whose stored
+    # prompt_version doesn't match the current one - match it so this seeded score survives.
+    scoring_version = f"{SCORING_PROMPT_VERSION}:rules"
+    app = create_app(configured_settings(tmp_path))
+    job_id, _ = app.state.database.upsert_job(
+        CollectedJob(
+            source="manual", source_job_id="ineligible", title="Backend Engineer", company="Example",
+            location="United States", description="Requires US citizenship, no sponsorship offered.",
+            url="https://example.test/jobs/ineligible",
+        )
+    )
+    eligibility = EligibilityResult(
+        status=EligibilityStatus.INELIGIBLE, route="", sponsorship="unavailable", relocation="unknown",
+        location_fit="onsite", reasons=[], risks=["Citizens only, sponsorship unavailable"],
+    )
+    app.state.database.save_evaluation(
+        job_id, eligibility,
+        ScoreResult(
+            total=INELIGIBLE_SCORE_CAP, dimensions={}, confidence=0.8, verdict="reject",
+            evidence=[], gaps=[{"requirement": "Citizens only, sponsorship unavailable", "severity": "high"}],
+            provider="rules", model="deterministic-v2", prompt_version=scoring_version,
+        ), "scored",
+    )
+
+    with TestClient(app) as client:
+        response = client.get(f"/jobs/{job_id}")
+
+    assert response.status_code == 200
+    assert f"Score capped at {INELIGIBLE_SCORE_CAP}" in response.text
+
+
+def test_job_detail_shows_the_score_breakdown_by_dimension(tmp_path) -> None:
+    from rolebeacon.domain import ScoreResult
+    from rolebeacon.scoring import SCORING_PROMPT_VERSION
+
+    # Startup runs an immediate sync, which requeues and rescores any job whose stored
+    # prompt_version doesn't match the current one - match it so this seeded score survives.
+    scoring_version = f"{SCORING_PROMPT_VERSION}:rules"
+    app = create_app(configured_settings(tmp_path))
+    job_id, _ = app.state.database.upsert_job(
+        CollectedJob(
+            source="manual", source_job_id="scored", title="Backend Engineer", company="Example",
+            location="Remote Worldwide", description="Build backend systems.",
+            url="https://example.test/jobs/scored",
+        )
+    )
+    eligibility = EligibilityResult(
+        status=EligibilityStatus.ELIGIBLE, route="remote-tr", sponsorship="unknown", relocation="unknown",
+        location_fit="worldwide", reasons=[], risks=[],
+    )
+    app.state.database.save_evaluation(
+        job_id, eligibility,
+        ScoreResult(
+            total=85,
+            dimensions={
+                "role_domain": 25, "stack": 15, "domain_experience": 10,
+                "seniority": 10, "location_authorization": 15, "salary_employment": 10,
+            },
+            confidence=0.8, verdict="review", evidence=[], gaps=[],
+            provider="rules", model="deterministic-v2", prompt_version=scoring_version,
+        ), "scored",
+    )
+
+    with TestClient(app) as client:
+        response = client.get(f"/jobs/{job_id}")
+
+    assert response.status_code == 200
+    assert "Score breakdown" in response.text
+    assert "Role match" in response.text
+    assert "25 / 30" in response.text
+    assert "15 / 20" in response.text
+
+
+def test_jobs_page_hides_mismatched_titles_by_default(tmp_path) -> None:
+    from rolebeacon.domain import ScoreResult
+    from rolebeacon.scoring import SCORING_PROMPT_VERSION
+
+    # Startup runs an immediate sync, which requeues and rescores any job whose stored
+    # prompt_version doesn't match the current one - match it so these seeded scores survive.
+    scoring_version = f"{SCORING_PROMPT_VERSION}:rules"
+    app = create_app(configured_settings(tmp_path))
+    database = app.state.database
+    matched_id, _ = database.upsert_job(
+        CollectedJob(
+            source="manual", source_job_id="matched", title="Backend Engineer", company="Example",
+            location="Remote Worldwide", description="Build backend systems.",
+            url="https://example.test/jobs/matched",
+        )
+    )
+    mismatched_id, _ = database.upsert_job(
+        CollectedJob(
+            source="manual", source_job_id="mismatched", title="Talent Acquisition Specialist", company="Other Example",
+            location="Remote Worldwide", description="Own the roadmap.",
+            url="https://example.test/jobs/mismatched",
+        )
+    )
+    eligibility = EligibilityResult(
+        status=EligibilityStatus.ELIGIBLE, route="remote-tr", sponsorship="unknown", relocation="unknown",
+        location_fit="worldwide", reasons=[], risks=[],
+    )
+
+    def evaluation(role_domain: int) -> ScoreResult:
+        return ScoreResult(
+            total=70, dimensions={"role_domain": role_domain}, confidence=0.8, verdict="review",
+            evidence=[], gaps=[], provider="rules", model="deterministic-v2", prompt_version=scoring_version,
+        )
+
+    database.save_evaluation(matched_id, eligibility, evaluation(25), "scored")
+    database.save_evaluation(mismatched_id, eligibility, evaluation(2), "scored")
+
+    with TestClient(app) as client:
+        default_view = client.get("/jobs")
+        shown = client.get("/jobs?show_mismatched_titles=1")
+
+    assert "Backend Engineer" in default_view.text
+    assert "Talent Acquisition Specialist" not in default_view.text
+    assert "Backend Engineer" in shown.text
+    assert "Talent Acquisition Specialist" in shown.text
+
+
 def test_job_detail_decisions_are_in_place_and_cover_letter_requires_llm(tmp_path) -> None:
     app = create_app(configured_settings(tmp_path))
     job_id, _ = app.state.database.upsert_job(
@@ -502,7 +723,7 @@ def test_job_detail_decisions_are_in_place_and_cover_letter_requires_llm(tmp_pat
 
     with TestClient(app) as client:
         page = client.get(f"/jobs/{job_id}")
-        decision = client.post(f"/api/jobs/{job_id}/feedback", json={"status": "interested"})
+        decision = client.post(f"/api/jobs/{job_id}/feedback", json={"status": "bookmarked"})
 
     assert page.status_code == 200
     assert "data-decision-form" in page.text
@@ -510,7 +731,72 @@ def test_job_detail_decisions_are_in_place_and_cover_letter_requires_llm(tmp_pat
     assert "The tailored résumé uses only your locally stored candidate profile" in page.text
     assert "Cover letter requires an LLM" in page.text
     assert decision.status_code == 200
-    assert app.state.database.get_job(job_id)["status"] == "interested"
+    assert app.state.database.get_job(job_id)["status"] == "bookmarked"
+
+
+def test_bookmarking_a_job_shows_it_on_the_pipeline_board_without_a_resume(tmp_path) -> None:
+    app = create_app(configured_settings(tmp_path))
+    job_id, _ = app.state.database.upsert_job(
+        CollectedJob(
+            source="manual", source_job_id="bookmark", title="Backend Engineer", company="Example",
+            location="Remote", description="Build backend systems.", url="https://example.test/bookmark",
+        )
+    )
+
+    with TestClient(app) as client:
+        client.post(f"/api/jobs/{job_id}/feedback", json={"status": "bookmarked"})
+        board = client.get("/applications")
+
+    assert board.status_code == 200
+    assert "Job tracking" in board.text
+    assert "Backend Engineer" in board.text
+    assert not app.state.database.list_applications()
+
+
+def test_job_detail_bookmark_button_toggles_between_bookmark_and_remove(tmp_path) -> None:
+    app = create_app(configured_settings(tmp_path))
+    job_id, _ = app.state.database.upsert_job(
+        CollectedJob(
+            source="manual", source_job_id="toggle", title="Backend Engineer", company="Example",
+            location="Remote", description="Build backend systems.", url="https://example.test/toggle",
+        )
+    )
+
+    with TestClient(app) as client:
+        before = client.get(f"/jobs/{job_id}")
+        client.post(f"/api/jobs/{job_id}/feedback", json={"status": "bookmarked"})
+        after = client.get(f"/jobs/{job_id}")
+
+    # Not bookmarked yet: the button offers to bookmark it.
+    assert 'data-toggle="bookmarked" value="bookmarked"' in before.text
+    assert ">Bookmark<" in before.text
+    # Already bookmarked: the same button now offers to undo it, not re-send "bookmarked" forever.
+    assert 'data-toggle="bookmarked" value="new"' in after.text
+    assert ">Remove bookmark<" in after.text
+
+
+def test_removing_a_bookmarked_job_takes_it_off_the_pipeline_board(tmp_path) -> None:
+    # The job tracking page's delete affordance and the job-detail "Remove bookmark" toggle both
+    # just POST status=new at the existing feedback endpoint - confirm that alone is enough to
+    # drop the job off the board, without deleting the job itself.
+    app = create_app(configured_settings(tmp_path))
+    job_id, _ = app.state.database.upsert_job(
+        CollectedJob(
+            source="manual", source_job_id="unbookmark", title="Backend Engineer", company="Example",
+            location="Remote", description="Build backend systems.", url="https://example.test/unbookmark",
+        )
+    )
+
+    with TestClient(app) as client:
+        client.post(f"/api/jobs/{job_id}/feedback", json={"status": "bookmarked"})
+        on_board = client.get("/applications")
+        client.post(f"/api/jobs/{job_id}/feedback", json={"status": "new"})
+        off_board = client.get("/applications")
+        still_browsable = client.get(f"/jobs/{job_id}")
+
+    assert "Backend Engineer" in on_board.text
+    assert "Backend Engineer" not in off_board.text
+    assert still_browsable.status_code == 200
 
 
 def test_manual_import_does_not_fetch_and_creates_job(tmp_path) -> None:

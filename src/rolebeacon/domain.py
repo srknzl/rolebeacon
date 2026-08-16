@@ -17,13 +17,12 @@ class EligibilityStatus(StrEnum):
 
 
 class JobStatus(StrEnum):
-    NEW = "new"
-    INTERESTED = "interested"
-    MAYBE = "maybe"
-    REJECTED = "rejected"
-    APPLIED = "applied"
-    INTERVIEW = "interview"
+    NEW = "new"                        # internal default; never a kanban column
+    BOOKMARKED = "bookmarked"          # was: interested, maybe
+    NOT_INTERESTED = "not_interested"  # was: rejected (pre-application meaning)
+    APPLIED = "applied"                # was: applied, interview
     OFFER = "offer"
+    REJECTED = "rejected"              # employer rejected post-application (new meaning)
 
 
 @dataclass(slots=True)

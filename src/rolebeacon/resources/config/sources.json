@@ -97,7 +97,7 @@
     "enabled": false,
     "min_sync_interval_seconds": 14400,
     "trust_priority": 100,
-    "max_pages": 2,
+    "max_pages": 10,
     "ingestion_filter": true,
     "official_first_party": true
   },
@@ -110,7 +110,7 @@
     "enabled": false,
     "min_sync_interval_seconds": 14400,
     "trust_priority": 100,
-    "max_pages": 5,
+    "max_pages": 10,
     "location_filter_code": "DE",
     "location_filter_text": "Germany",
     "ingestion_filter": true,

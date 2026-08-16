@@ -17,6 +17,7 @@
     {{ option_list("work_model", "Work model", [("", "Any work model"), ("remote_worldwide", "Remote worldwide"), ("remote", "Any remote"), ("onsite", "On-site or hybrid")], "Derived from the posting's own location wording. Country-scoped remote counts as regional, never worldwide.") }}
     {{ option_list("posted_within", "Posted within", [("", "Any age"), ("1", "Last 24 hours"), ("7", "Last 7 days"), ("30", "Last 30 days"), ("90", "Last 90 days")], "Uses the posting date when the source publishes one, otherwise the date RoleBeacon first collected it.") }}
     {{ option_list("sort", "Sort by", sort_options, "Reorders the results without changing which jobs match. Title match and technology match rank on one part of the score, so a lower-scoring job can lead when it matches that part best.") }}
+    {{ option_list("page_size", "Per page", [("50", "50"), ("20", "20"), ("10", "10")], "How many jobs are shown on each page.") }}
     <button class="button button-primary" type="submit">Apply</button>
   </div>
 
@@ -25,10 +26,13 @@
     <div class="filters-grid">
       <fieldset>
         <legend>Role</legend>
+        <p class="fieldset-note">Jobs with a different-role title are hidden by default {{ tip("A title that reads as a different job entirely, such as a Product Manager or Sales Engineer posting when you look for engineering roles, not just a weaker match. Untick to see them anyway.") }}</p>
         <label>Title contains {{ tip("Matches the job title only. Use this when a technology is mentioned once in the body but you want it to be the actual role.") }}<input name="title" value="{{ selected.get('title', '') }}" placeholder="backend"></label>
         {{ option_list("seniority", "Seniority", [("", "Any level"), ("junior", "Junior"), ("senior", "Senior"), ("staff", "Staff"), ("principal", "Principal"), ("lead", "Lead"), ("manager", "Manager")], "Read from wording in the job title. Postings that state no level are excluded when you pick one.") }}
-        <label>Minimum title match {{ tip("The title-match part of the score, 0 to 25. Higher values keep only roles whose title closely matches your target roles.") }}<input type="number" min="0" max="25" name="min_title_match" value="{{ selected.get('min_title_match', '') }}"></label>
+        <label>Minimum title match {{ tip("The title-match part of the score, 0 to 30. Higher values keep only roles whose title closely matches your target roles.") }}<input type="number" min="0" max="30" name="min_title_match" value="{{ selected.get('min_title_match', '') }}"></label>
         <label>Minimum technology match {{ tip("The technology part of the score, 0 to 20. Higher values keep only roles overlapping the skills in your profile.") }}<input type="number" min="0" max="20" name="min_stack_match" value="{{ selected.get('min_stack_match', '') }}"></label>
+        <label class="checkbox"><input type="checkbox" name="hide_unmet_experience" value="1" {% if selected.get('hide_unmet_experience') %}checked{% endif %}>Hide unmet experience requirements {{ tip("Rules-only signal: hides jobs whose posting states a specific years-of-experience requirement (such as \"5+ years of Java\") that your profile does not show. Has no effect on jobs scored by a language model.") }}</label>
+        <label class="checkbox"><input type="checkbox" name="show_mismatched_titles" value="1" {% if selected.get('show_mismatched_titles') %}checked{% endif %}>Show different-role titles anyway</label>
       </fieldset>
 
       {% if technology_options %}
@@ -46,7 +50,9 @@
         {{ option_list("sponsorship", "Sponsorship", [("", "Any"), ("available", "Stated available"), ("unavailable", "Stated unavailable"), ("unknown", "Not stated")], "What the posting itself says about visa sponsorship. When nothing is stated it stays unknown rather than being guessed.") }}
         {{ option_list("relocation", "Relocation", [("", "Any"), ("available", "Stated available"), ("unknown", "Not stated")], "What the posting itself says about relocation support.") }}
         <label>Strategy {{ tip("The search strategy that surfaced this job. RoleBeacon generates one per target role, work-authorization country, relocation target, and remote preference.") }}<select name="route"><option value="">All strategies</option>{% for route in routes %}<option value="{{ route.id }}" {% if selected.get('route', '') == route.id %}selected{% endif %}>{{ route.label }}</option>{% endfor %}</select></label>
-        <label>Company {{ tip("Exact employer name. Matching ignores case, punctuation, and suffixes such as Inc or GmbH.") }}<input name="company" value="{{ selected.get('company', '') }}" placeholder="Canonical"></label>
+        <label>Company {{ tip("Exact employer name. Matching ignores case, punctuation, and suffixes such as Inc or GmbH.") }}<input name="company" value="{{ selected.get('company', '') }}" placeholder="Canonical" list="company-suggestions" autocomplete="off"></label>
+        <datalist id="company-suggestions"></datalist>
+        <label>Location contains {{ tip("Matches the posting's stated location text, such as a city or country. Remote postings are matched by their own wording, not this filter.") }}<input name="location" value="{{ selected.get('location', '') }}" placeholder="Berlin"></label>
       </fieldset>
 
       <fieldset>
@@ -57,8 +63,9 @@
 
       <fieldset>
         <legend>Pipeline and provenance</legend>
-        <label>Status {{ tip("Your own pipeline decision for the job. It is stored locally and never changes the original posting.") }}<select name="job_status"><option value="">All statuses</option>{% for value in ['new','interested','maybe','rejected','applied','interview','offer'] %}<option {% if selected.get('job_status', '') == value %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
-        <label>Source {{ tip("The collection source the job arrived from. Useful when one board is noisy or a source was just added.") }}<select name="source"><option value="">All sources</option>{% for item in sources %}<option value="{{ item.id }}" {% if selected.get('source', '') == item.id %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></label>
+        <label>Status {{ tip("Your own pipeline decision for the job. It is stored locally and never changes the original posting.") }}<select name="job_status"><option value="">All statuses</option>{% for value in ['new','bookmarked','not_interested','applied','offer','rejected'] %}<option {% if selected.get('job_status', '') == value %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
+        <label>Source {{ tip("The collection source the job arrived from. Useful when one board is noisy or a source was just added. Google Careers and Amazon Jobs are grouped across all their configured countries.") }}<select name="source"><option value="">All sources</option>{% for item in sources %}<option value="{{ item.value }}" {% if selected.get('source', '') == item.value %}selected{% endif %}>{{ item.label }}</option>{% endfor %}</select></label>
+        {{ option_list("company_list", "Company list", [("", "All companies"), ("priority", "Priority companies"), ("watchlist", "Watchlist")], "Narrow to jobs at companies on your priority list or watchlist from Settings.") }}
         {{ option_list("provider", "Scored by", [("", "Any engine"), ("rules", "Rules only"), ("openai-compatible", "Language model")], "Which engine produced the score. Rules-only scores are deterministic; model scores add written evidence.") }}
         <label>Minimum score {{ tip("Hides jobs whose opportunity score is below this value. The opportunity score runs from 0 to 100 and blends job fit (80%) with company fit (20%) after eligibility has been checked.") }}<input type="number" min="0" max="100" name="min_score" value="{{ selected.get('min_score', '') }}"></label>
       </fieldset>
@@ -87,4 +94,20 @@
   {% if page < page_count %}<a class="button" href="{{ request.url.include_query_params(page=page + 1) }}">Next →</a>{% endif %}
 </nav>
 {% endif %}
+<script>
+  const companyInput = document.querySelector('input[name="company"]');
+  const companyList = document.getElementById("company-suggestions");
+  let companySuggestTimer;
+  companyInput?.addEventListener("input", () => {
+    clearTimeout(companySuggestTimer);
+    const query = companyInput.value.trim();
+    if (query.length < 2) { companyList.innerHTML = ""; return; }
+    companySuggestTimer = setTimeout(async () => {
+      const response = await fetch(`/api/companies/suggest?q=${encodeURIComponent(query)}`);
+      if (!response.ok) return;
+      const data = await response.json();
+      companyList.innerHTML = data.companies.map(name => `<option value="${name.replace(/"/g, "&quot;")}"></option>`).join("");
+    }, 200);
+  });
+</script>
 {% endblock %}

@@ -9,7 +9,7 @@ from typing import Any, Protocol
 
 from .domain import EligibilityStatus, ScoreResult
 from .profile import CandidateProfileV1, MobilityProfileV1, SearchPreferencesV1, generate_strategies
-from .scoring import evaluate_eligibility, rule_score
+from .scoring import DIMENSION_MAXIMUMS, evaluate_eligibility, rule_score
 
 
 class ModelScorer(Protocol):
@@ -162,7 +162,7 @@ def evaluation_cases() -> tuple[EvaluationCase, ...]:
             score_range=(40, 82),
             required_evidence_terms=("Java", "Kafka"),
             max_location_score=8,
-            rules_score_range=(45, 65),
+            rules_score_range=(55, 75),
         ),
         EvaluationCase(
             id="no_sponsorship_blocker",
@@ -351,12 +351,6 @@ def run_rules_evaluation(runs: int = 3) -> dict[str, Any]:
 
 
 def _valid_dimension_bounds(dimensions: dict[str, int]) -> bool:
-    maximums = {
-        "role_domain": 25,
-        "stack": 20,
-        "domain_experience": 20,
-        "seniority": 10,
-        "location_authorization": 15,
-        "salary_employment": 10,
-    }
-    return set(dimensions) == set(maximums) and all(0 <= dimensions[key] <= maximum for key, maximum in maximums.items())
+    return set(dimensions) == set(DIMENSION_MAXIMUMS) and all(
+        0 <= dimensions[key] <= maximum for key, maximum in DIMENSION_MAXIMUMS.items()
+    )

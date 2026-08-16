@@ -646,17 +646,28 @@ class GoogleCareersCollector(Collector):
         requests = 0
         for page_number in range(1, max(1, self.config.max_pages) + 1):
             search_url = str(httpx.URL(self.config.url).copy_set_param("page", str(page_number)))
-            response = await self.client.get(search_url)
-            requests += 1
-            response.raise_for_status()
+            try:
+                response = await self.client.get(search_url)
+                requests += 1
+                response.raise_for_status()
+            except httpx.HTTPError:
+                # Page 1 failing means the source itself is broken - a real error. A later page
+                # failing (e.g. a slow-walked/rate-limited request) must not discard every job
+                # already found on the pages before it - keep them and stop paginating.
+                if page_number == 1:
+                    raise
+                break
             links = [item for item in google_result_links(response.text, str(response.url)) if item[0] not in seen_urls]
             if not links:
                 break
             for url, title in links:
                 seen_urls.add(url)
-                detail_response = await self.client.get(url)
-                requests += 1
-                detail_response.raise_for_status()
+                try:
+                    detail_response = await self.client.get(url)
+                    requests += 1
+                    detail_response.raise_for_status()
+                except httpx.HTTPError:
+                    continue  # one flaky job detail page must not cost every job already found
                 detail = _google_job_detail(plain_text(detail_response.text), title)
                 identifier_match = re.search(r"/jobs/results/(\d+)", url)
                 jobs.append(
@@ -675,14 +686,37 @@ class GoogleCareersCollector(Collector):
         return CollectionBatch(jobs=jobs, requests_made=requests, attribution="Google Careers")
 
 
+# Some teams (DeepMind, Ads, Pixel...) prepend an "about us" blurb that itself mentions "Google"
+# before the real location line, so the search below occasionally grabs a sentence instead of a
+# place name. A real location line is short and reads as place names, not prose - reject anything
+# containing a lowercase prose word rather than surface a wrong location silently.
+_LOCATION_PROSE_WORDS = {"the", "with", "and", "our", "we", "is", "are", "to", "for", "on", "that", "this"}
+
+
+def _looks_like_location(value: str) -> bool:
+    if not value or len(value) > 90 or not re.search(r"[A-Za-z]{2,}", value):
+        return False
+    # Case-sensitive on purpose: real location text capitalizes every word ("Waterloo, ON,
+    # Canada"), so a casefolded check would misfire on state/province codes that happen to
+    # spell an English word, like Ontario's "ON" reading as the preposition "on".
+    return not any(word in _LOCATION_PROSE_WORDS for word in re.findall(r"[a-zA-Z']+", value))
+
+
 def _google_job_detail(text: str, title: str) -> dict[str, str]:
     start = text.rfind(title)
     detail = text[start:] if start >= 0 else text
     footer = detail.find("Information collected and processed as part of your Google Careers profile")
     if footer >= 0:
         detail = detail[:footer]
-    location_match = re.search(r"Google place (.*?) bar_chart", detail)
-    location = location_match.group(1).strip(" ;") if location_match else ""
+    # Search only after the title: the title itself often contains "Google" (e.g. "..., Google
+    # Cloud"), which would otherwise match first. The real location line follows as either the
+    # old icon-label markup ("corporate_fare Google place Berlin, Germany bar_chart ...") or the
+    # current one (just "Google Berlin, Germany" on its own line) - one pattern covers both since
+    # every icon word here is optional and the capture stops at the line break either way.
+    location_match = re.search(r"(?:corporate_fare\s+)?Google\s+(?:place\s+)?([^\n]+)", detail[len(title):])
+    location = location_match.group(1).split("bar_chart")[0].strip(" ;") if location_match else ""
+    if not _looks_like_location(location):
+        location = ""
     return {"location": location, "description": detail}
 
 
@@ -694,15 +728,22 @@ class AmazonJobsCollector(Collector):
         requests = 0
         page_size = 100
         for page_number in range(max(1, self.config.max_pages)):
-            response = await self.client.get(
-                "https://www.amazon.jobs/en/search.json",
-                params=amazon_search_params(
-                    self.config.url, page_number * page_size, page_size,
-                    str(self.config.options.get("location_filter_code", "")),
-                ),
-            )
-            requests += 1
-            response.raise_for_status()
+            try:
+                response = await self.client.get(
+                    "https://www.amazon.jobs/en/search.json",
+                    params=amazon_search_params(
+                        self.config.url, page_number * page_size, page_size,
+                        str(self.config.options.get("location_filter_code", "")),
+                    ),
+                )
+                requests += 1
+                response.raise_for_status()
+            except httpx.HTTPError:
+                # Same reasoning as Google: the first page failing is a real error, but a later
+                # page failing must not discard the jobs already found on earlier pages.
+                if page_number == 0:
+                    raise
+                break
             payload = response.json()
             provider_items = payload.get("jobs", [])
             items = [item for item in provider_items if amazon_location_matches(item, self.config)]
@@ -833,7 +874,13 @@ class JobicyCollector(Collector):
 
 class RemotiveCollector(Collector):
     async def collect(self, since: datetime, cursor: str = "") -> CollectionBatch:
-        params = {"category": self.config.options.get("category", "software-dev"), "limit": 100}
+        params: dict[str, Any] = {"limit": 100}
+        category = str(self.config.options.get("category", "")).strip()
+        if category:
+            params["category"] = category
+        search = str(self.config.options.get("search", "")).strip()
+        if search:
+            params["search"] = search
         response = await self.client.get(self.config.url or "https://remotive.com/api/remote-jobs", params=params)
         response.raise_for_status()
         payload = response.json()
@@ -875,7 +922,7 @@ class AdzunaCollector(Collector):
         for page in range(1, max(1, self.config.max_pages) + 1):
             response = await self.client.get(
                 f"https://api.adzuna.com/v1/api/jobs/{country}/search/{page}",
-                params={"app_id": app_id, "app_key": app_key, "results_per_page": 50, "what": self.config.options.get("query", "software engineer")},
+                params={"app_id": app_id, "app_key": app_key, "results_per_page": 50, "what": self.config.options.get("query", "")},
             )
             requests += 1
             response.raise_for_status()
@@ -908,7 +955,7 @@ class JoobleCollector(Collector):
             raise RuntimeError("Jooble credentials are not configured")
         response = await self.client.post(
             f"https://jooble.org/api/{quote(api_key)}",
-            json={"keywords": self.config.options.get("query", "software engineer"), "location": self.config.options.get("location", "")},
+            json={"keywords": self.config.options.get("query", ""), "location": self.config.options.get("location", "")},
         )
         response.raise_for_status()
         payload = response.json()
@@ -934,7 +981,7 @@ class SerpApiCollector(Collector):
             raise RuntimeError("SerpApi credentials are not configured")
         response = await self.client.get(
             "https://serpapi.com/search.json",
-            params={"engine": "google_jobs", "q": self.config.options.get("query", "software engineer"), "location": self.config.options.get("location", "Germany"), "api_key": api_key},
+            params={"engine": "google_jobs", "q": self.config.options.get("query", ""), "location": self.config.options.get("location", "Germany"), "api_key": api_key},
         )
         response.raise_for_status()
         payload = response.json()
@@ -1111,5 +1158,5 @@ def default_http_client() -> httpx.AsyncClient:
         headers={"User-Agent": USER_AGENT, "Accept": "application/json, application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.8"},
         follow_redirects=True,
         timeout=httpx.Timeout(30, connect=10),
-        limits=httpx.Limits(max_connections=8, max_keepalive_connections=4),
+        limits=httpx.Limits(max_connections=12, max_keepalive_connections=6),
     )

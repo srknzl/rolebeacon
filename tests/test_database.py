@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import UTC, datetime
 
-from rolebeacon.database import Database, JobFilters, canonicalize_url
+from rolebeacon.database import Database, JobFilters, canonicalize_url, company_key
 from rolebeacon.domain import CollectedJob, EligibilityResult, EligibilityStatus, JobStatus, ScoreResult
 
 
@@ -258,6 +258,139 @@ def test_filters_narrow_the_set_and_the_count_agrees_with_the_page(tmp_path) -> 
     assert database.count_jobs(JobFilters()) == 2
 
 
+def test_experience_requirements_are_stored_and_hide_unmet_experience_filters_them_out(tmp_path) -> None:
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    clean = sample_job()
+    clean_id, _ = database.upsert_job(clean)
+    # Distinct company so the strong-identity dedup (company+title+location) does not fold this
+    # into the same job row as `clean`.
+    gapped = sample_job(source="source-b")
+    gapped.company = "Other Example"
+    gapped.source_job_id = "job-2"
+    gapped.url = "https://example.com/jobs/2"
+    gapped_id, _ = database.upsert_job(gapped)
+
+    def eligibility() -> EligibilityResult:
+        return EligibilityResult(
+            status=EligibilityStatus.ELIGIBLE, route="remote-from-tr", sponsorship="unknown",
+            relocation="unknown", location_fit="worldwide", reasons=[], risks=[],
+        )
+
+    def result(gaps: list[dict[str, str]]) -> ScoreResult:
+        return ScoreResult(
+            total=70,
+            dimensions={
+                "role_domain": 20, "stack": 15, "domain_experience": 15,
+                "seniority": 8, "location_authorization": 10, "salary_employment": 2,
+            },
+            confidence=0.7, verdict="review", evidence=[], gaps=gaps,
+            provider="rules", model="test", prompt_version="job-fit-v7:rules",
+        )
+
+    database.save_evaluation(
+        clean_id, eligibility(), result([]), "scored", requirements=[{"skill": "Java", "years": 5}]
+    )
+    database.save_evaluation(
+        gapped_id,
+        eligibility(),
+        result([{"requirement": "Posting asks for 6+ years of Rust, not found in your profile", "severity": "medium"}]),
+        "scored",
+        requirements=[{"skill": "Rust", "years": 6}],
+    )
+
+    assert database.get_job(clean_id)["requirements"] == [{"skill": "Java", "years": 5}]
+    assert database.get_job(gapped_id)["requirements"] == [{"skill": "Rust", "years": 6}]
+    assert [job["id"] for job in database.list_jobs(JobFilters(hide_unmet_experience=True))] == [clean_id]
+
+
+def test_hide_mismatched_titles_excludes_low_role_domain_jobs_but_keeps_unscored_ones(tmp_path) -> None:
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    matched = sample_job()
+    matched_id, _ = database.upsert_job(matched)
+    mismatched = sample_job(source="source-b")
+    mismatched.company = "Other Example"
+    mismatched.source_job_id = "job-2"
+    mismatched.url = "https://example.com/jobs/2"
+    mismatched_id, _ = database.upsert_job(mismatched)
+    # A third, never-scored job - it must stay visible until scoring actually confirms a mismatch.
+    unscored = sample_job(source="source-c")
+    unscored.company = "Third Example"
+    unscored.source_job_id = "job-3"
+    unscored.url = "https://example.com/jobs/3"
+    unscored_id, _ = database.upsert_job(unscored)
+
+    def result(role_domain: int) -> ScoreResult:
+        return ScoreResult(
+            total=70,
+            dimensions={
+                "role_domain": role_domain, "stack": 15, "domain_experience": 15,
+                "seniority": 8, "location_authorization": 10, "salary_employment": 2,
+            },
+            confidence=0.7, verdict="review", evidence=[], gaps=[],
+            provider="rules", model="test", prompt_version="job-fit-v7:rules",
+        )
+
+    eligibility = EligibilityResult(
+        status=EligibilityStatus.ELIGIBLE, route="remote-from-tr", sponsorship="unknown",
+        relocation="unknown", location_fit="worldwide", reasons=[], risks=[],
+    )
+    database.save_evaluation(matched_id, eligibility, result(25), "scored")
+    database.save_evaluation(mismatched_id, eligibility, result(2), "scored")
+
+    kept = {job["id"] for job in database.list_jobs(JobFilters(hide_mismatched_titles=True))}
+    assert kept == {matched_id, unscored_id}
+    assert database.count_jobs(JobFilters(hide_mismatched_titles=True)) == 2
+
+
+def test_source_ids_filter_matches_any_of_several_grouped_source_rows(tmp_path) -> None:
+    # The Jobs page groups every Google/Amazon country row into one dropdown option, so the
+    # filter must accept a set of ids and match a job from any one of them.
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    germany_id, _ = database.upsert_job(sample_job(source="google-careers-germany"))
+    database.upsert_job(sample_job(source="adzuna-uk"))
+
+    jobs = database.list_jobs(JobFilters(source_ids=("google-careers-germany", "google-careers-france")))
+
+    assert [job["id"] for job in jobs] == [germany_id]
+
+
+def test_starting_a_source_clears_its_stale_skip_reason_note(tmp_path) -> None:
+    # A source skipped for "minimum sync interval" and then actually started later must not keep
+    # showing that stale note next to a status the note no longer explains.
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    database.skip_source("google-careers-germany", "minimum_sync_interval")
+
+    database.start_source("google-careers-germany")
+
+    state = database.source_state("google-careers-germany")
+    assert state is not None
+    assert state["status"] == "running"
+    assert state["last_skipped_reason"] == ""
+
+
+def test_company_in_filter_matches_priority_or_watchlist_companies(tmp_path) -> None:
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    watched = CollectedJob(
+        source="fixture", source_job_id="watched", title="Backend Engineer", company="Watched Co",
+        location="Remote", description="Build things.", url="https://example.com/jobs/watched",
+    )
+    other = CollectedJob(
+        source="fixture", source_job_id="other", title="Backend Engineer", company="Other Co",
+        location="Remote", description="Build things.", url="https://example.com/jobs/other",
+    )
+    watched_id, _ = database.upsert_job(watched)
+    database.upsert_job(other)
+
+    jobs = database.list_jobs(JobFilters(company_in=(company_key("Watched Co"),)))
+
+    assert [job["id"] for job in jobs] == [watched_id]
+
+
 def test_regenerating_an_artifact_cannot_rewind_a_prepared_application(tmp_path) -> None:
     database = Database(tmp_path / "jobs.sqlite3")
     database.initialize()
@@ -279,7 +412,43 @@ def test_recording_an_outcome_puts_a_job_on_the_pipeline_board(tmp_path) -> None
 
     database.save_feedback(job_id, JobStatus.APPLIED)
 
-    application = database.list_applications()[0]
-    assert application["job_id"] == job_id
-    assert application["job_status"] == "applied"
-    assert application["status"] == "saved"
+    # The pipeline board reads jobs.status directly now, so an outcome alone (no resume ever
+    # generated) is enough to place the job on the board without touching the applications table.
+    assert [job["id"] for job in database.list_jobs(JobFilters(status="applied"))] == [job_id]
+    assert not database.list_applications()
+
+
+def test_legacy_job_statuses_migrate_to_the_five_pipeline_states(tmp_path) -> None:
+    db_path = tmp_path / "jobs.sqlite3"
+    database = Database(db_path)
+    database.initialize()
+    legacy_to_new = {
+        "interested": "bookmarked",
+        "maybe": "bookmarked",
+        "rejected": "not_interested",
+        "applied": "applied",
+        "interview": "applied",
+        "offer": "offer",
+    }
+    job_ids: dict[str, int] = {}
+    for index, legacy_status in enumerate(legacy_to_new):
+        job = CollectedJob(
+            # Distinct company per row so the strong-identity dedup (company+title+location)
+            # does not fold these into a single job the way real duplicate postings would.
+            source="legacy", source_job_id=str(index), title="Engineer", company=f"Example {index}",
+            location="Remote", description="Role", url=f"https://example.com/jobs/legacy-{index}",
+        )
+        job_id, _ = database.upsert_job(job)
+        job_ids[legacy_status] = job_id
+    with sqlite3.connect(db_path) as connection:
+        for legacy_status, job_id in job_ids.items():
+            connection.execute("UPDATE jobs SET status = ? WHERE id = ?", (legacy_status, job_id))
+        # This fresh database already recorded migration 3 as a no-op. Undo that marker to
+        # simulate a real pre-migration database, then let initialize() run it for real.
+        connection.execute("DELETE FROM schema_migrations WHERE version = 3")
+        connection.commit()
+
+    Database(db_path).initialize()
+
+    for legacy_status, job_id in job_ids.items():
+        assert database.get_job(job_id)["status"] == legacy_to_new[legacy_status]

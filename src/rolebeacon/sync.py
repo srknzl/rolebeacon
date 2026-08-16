@@ -8,13 +8,37 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+import httpx
+
 from .collectors import as_batch, create_collector, default_http_client
 from .config import Settings
 from .database import Database
 from .domain import CollectedJob, EligibilityStatus
 from .llm import LlmClient, LlmUnavailable
-from .profile import RELOCATION_REGION_CODES
-from .scoring import SCORING_PROMPT_VERSION, evaluate_eligibility, rule_score
+from .scoring import SCORING_PROMPT_VERSION, evaluate_eligibility, extract_experience_requirements, rule_score
+
+# Different sources hit different providers, so syncing them concurrently is safe - these two
+# caps just keep any one provider from being hammered hard enough to get rate-limited/blocked.
+SOURCE_CONCURRENCY = 6
+PER_KIND_CONCURRENCY = 2
+
+
+def _friendly_error_prefix(error: Exception) -> str:
+    """A short human sentence for the handful of httpx exceptions actually seen in practice,
+    prefixed onto the existing raw exception text - not a general error-classification framework."""
+    if isinstance(error, httpx.HTTPStatusError):
+        status = error.response.status_code
+        if status == 429:
+            return "The source is rate-limiting requests. "
+        if 500 <= status < 600:
+            return "The source's server had an error. "
+        if 400 <= status < 500:
+            return "The source rejected the request. "
+    elif isinstance(error, httpx.TimeoutException):
+        return "The source took too long to respond. "
+    elif isinstance(error, httpx.ConnectError):
+        return "Could not connect to the source. "
+    return ""
 
 
 @dataclass(slots=True)
@@ -96,61 +120,15 @@ class SyncService:
                 self.status.phase_message = "Collecting job postings"
                 self.status.progress_percent = 10
                 async with default_http_client() as client:
-                    for source in sources:
-                        self.status.current_source = source.name
-                        state = self.database.source_state(source.id) or {}
-                        skip_reason, next_eligible = self._skip_reason(source, state, force)
-                        run_started = datetime.now(UTC)
-                        run_id = self.database.start_sync_run(source.id)
-                        if skip_reason:
-                            self.database.skip_source(source.id, skip_reason, next_eligible)
-                            self.database.finish_sync_run(run_id, status="skipped", started_at=run_started, skip_reason=skip_reason)
-                            self.status.sources_completed += 1
-                            self.status.progress_percent = 10 + int(50 * self.status.sources_completed / max(1, self.status.sources_total))
-                            continue
-                        self.database.start_source(source.id)
-                        since = self._since(state.get("last_successful_sync_at"))
-                        try:
-                            collector = create_collector(personalize_source(source, search_profile, mobility_profile), client)
-                            batch = as_batch(await collector.collect(since, state.get("cursor", "")))
-                            raw_count = len(batch.jobs)
-                            jobs = deduplicate_source_jobs(batch.jobs)
-                            duplicate_count = raw_count - len(jobs)
-                            filtered = 0
-                            changed = 0
-                            created = 0
-                            for job in jobs:
-                                if batch.attribution:
-                                    job.metadata.setdefault("source_attribution", batch.attribution)
-                                if source.ingestion_filter and not engineering_job(job, search_profile=search_profile):
-                                    filtered += 1
-                                    continue
-                                existed = self.database.has_source_job(job.source, job.source_job_id)
-                                matched_job_id = self.database.matching_job_id(job)
-                                job_id, did_change = self.database.upsert_job(job, source.trust_priority)
-                                if matched_job_id is None:
-                                    created += 1
-                                elif not existed:
-                                    duplicate_count += 1
-                                if did_change:
-                                    changed_ids.add(job_id)
-                                    changed += 1
-                            self.database.finish_source(source.id, len(jobs), changed, batch.cursor)
-                            self.database.finish_sync_run(
-                                run_id, status="success", started_at=run_started, jobs_seen=len(jobs),
-                                jobs_new=created, jobs_changed=changed, jobs_filtered=filtered,
-                                duplicates=duplicate_count, requests_made=batch.requests_made,
-                            )
-                            self.status.jobs_seen += len(jobs) - filtered
-                            self.status.jobs_changed += changed
-                        except Exception as error:
-                            message = f"{type(error).__name__}: {error}"
-                            self.database.fail_source(source.id, message)
-                            self.database.finish_sync_run(run_id, status="error", started_at=run_started, error=message)
-                            self.status.source_errors += 1
-                        finally:
-                            self.status.sources_completed += 1
-                            self.status.progress_percent = 10 + int(50 * self.status.sources_completed / max(1, self.status.sources_total))
+                    global_gate = asyncio.Semaphore(SOURCE_CONCURRENCY)
+                    kind_gates: dict[str, asyncio.Semaphore] = {}
+
+                    async def guarded(source: Any) -> None:
+                        gate = kind_gates.setdefault(source.kind, asyncio.Semaphore(PER_KIND_CONCURRENCY))
+                        async with global_gate, gate:
+                            await self._sync_one_source(source, client, search_profile, force, changed_ids)
+
+                    await asyncio.gather(*(guarded(source) for source in sources))
 
                 scoring_version = (
                     f"{SCORING_PROMPT_VERSION}:{self.settings.llm_model}"
@@ -169,6 +147,7 @@ class SyncService:
                         continue
                     eligibility = evaluate_eligibility(job_record, search_profile, mobility_profile, strategies)
                     rules = rule_score(job_record, eligibility, search_profile, candidate_profile, strategies)
+                    requirements = extract_experience_requirements(str(job_record.get("description", "")))
                     score = rules
                     score_status = "scored"
                     if eligibility.status != EligibilityStatus.INELIGIBLE and self.settings.llm_enabled:
@@ -183,7 +162,7 @@ class SyncService:
                                 "choose Rules only, then refresh again."
                             ) from error
                     score.prompt_version = scoring_version
-                    self.database.save_evaluation(job_id, eligibility, score, score_status)
+                    self.database.save_evaluation(job_id, eligibility, score, score_status, requirements=requirements)
                     self.status.jobs_scored += 1
                     self.status.progress_percent = 65 + int(30 * self.status.jobs_scored / max(1, self.status.jobs_to_score))
             except Exception as error:
@@ -196,6 +175,64 @@ class SyncService:
                 self.status.phase_message = self.status.error or "Refresh complete"
                 self.status.progress_percent = 100
             return self.status
+
+    async def _sync_one_source(
+        self, source: Any, client: Any, search_profile: dict[str, Any], force: bool, changed_ids: set[int]
+    ) -> None:
+        self.status.current_source = source.name
+        state = self.database.source_state(source.id) or {}
+        skip_reason, next_eligible = self._skip_reason(source, state, force)
+        run_started = datetime.now(UTC)
+        run_id = self.database.start_sync_run(source.id)
+        if skip_reason:
+            self.database.skip_source(source.id, skip_reason, next_eligible)
+            self.database.finish_sync_run(run_id, status="skipped", started_at=run_started, skip_reason=skip_reason)
+            self.status.sources_completed += 1
+            self.status.progress_percent = 10 + int(50 * self.status.sources_completed / max(1, self.status.sources_total))
+            return
+        self.database.start_source(source.id)
+        since = self._since(state.get("last_successful_sync_at"))
+        try:
+            collector = create_collector(personalize_source(source, search_profile), client)
+            batch = as_batch(await collector.collect(since, state.get("cursor", "")))
+            raw_count = len(batch.jobs)
+            jobs = deduplicate_source_jobs(batch.jobs)
+            duplicate_count = raw_count - len(jobs)
+            filtered = 0
+            changed = 0
+            created = 0
+            for job in jobs:
+                if batch.attribution:
+                    job.metadata.setdefault("source_attribution", batch.attribution)
+                if source.ingestion_filter and not engineering_job(job, search_profile=search_profile):
+                    filtered += 1
+                    continue
+                existed = self.database.has_source_job(job.source, job.source_job_id)
+                matched_job_id = self.database.matching_job_id(job)
+                job_id, did_change = self.database.upsert_job(job, source.trust_priority)
+                if matched_job_id is None:
+                    created += 1
+                elif not existed:
+                    duplicate_count += 1
+                if did_change:
+                    changed_ids.add(job_id)
+                    changed += 1
+            self.database.finish_source(source.id, len(jobs), changed, batch.cursor)
+            self.database.finish_sync_run(
+                run_id, status="success", started_at=run_started, jobs_seen=len(jobs),
+                jobs_new=created, jobs_changed=changed, jobs_filtered=filtered,
+                duplicates=duplicate_count, requests_made=batch.requests_made,
+            )
+            self.status.jobs_seen += len(jobs) - filtered
+            self.status.jobs_changed += changed
+        except Exception as error:
+            message = f"{_friendly_error_prefix(error)}{type(error).__name__}: {error}"
+            self.database.fail_source(source.id, message)
+            self.database.finish_sync_run(run_id, status="error", started_at=run_started, error=message)
+            self.status.source_errors += 1
+        finally:
+            self.status.sources_completed += 1
+            self.status.progress_percent = 10 + int(50 * self.status.sources_completed / max(1, self.status.sources_total))
 
     def _skip_reason(self, source: Any, state: dict[str, Any], force: bool) -> tuple[str, datetime | None]:
         now = datetime.now(UTC)
@@ -280,35 +317,32 @@ def engineering_job(job: CollectedJob, search_profile: dict[str, Any]) -> bool:
     return not role_terms or any(term in searchable.casefold() for term in role_terms)
 
 
-def personalize_source(source: Any, search_profile: dict[str, Any], mobility_profile: dict[str, Any]) -> Any:
-    """Apply the user's roles and relocation choices to providers that support query filters."""
+_URL_QUERY_KINDS = {"google_careers": "q", "amazon_jobs": "base_query"}
+_OPTION_QUERY_KINDS = {"adzuna": "query", "jooble": "query", "serpapi": "query", "remotive": "search"}
+
+
+def personalize_source(source: Any, search_profile: dict[str, Any]) -> Any:
+    """Refresh each provider's free-text role query from the candidate's real target_roles.
+
+    Location is intentionally not touched here: relocation_source_candidates() bakes the correct
+    per-country location into each generated Google/Amazon row once, and every Setup/Settings save
+    re-bakes it (save_sources() replaces a matched row's url/options wholesale). Overwriting it again
+    here from "the first relocation target" would collapse every generated per-country row back onto
+    the same one country on every sync - which is exactly the bug this replaced.
+    """
     roles = [str(value).strip() for value in search_profile.get("target_roles", []) if str(value).strip()]
     role_query = " OR ".join(roles[:5])
-    targets = mobility_profile.get("relocation_targets", [])
-    location = next(
-        (
-            str(item.get("country_name", "")).strip()
-            for item in targets
-            if str(item.get("country_code", "")).upper() not in RELOCATION_REGION_CODES
-            and str(item.get("country_name", "")).strip()
-        ),
-        "",
-    )
-    if source.kind not in {"google_careers", "amazon_jobs"} or not source.url:
+    if not role_query:
         return source
-    parts = urlsplit(source.url)
-    query = dict(parse_qsl(parts.query, keep_blank_values=True))
-    if source.kind == "google_careers":
-        if role_query:
-            query["q"] = role_query
-        if location:
-            query["location"] = location
-    else:
-        if role_query:
-            query["base_query"] = role_query
-        if location:
-            query["loc_query"] = location
-    return replace(source, url=urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment)))
+    if source.kind in _URL_QUERY_KINDS and source.url:
+        key = _URL_QUERY_KINDS[source.kind]
+        parts = urlsplit(source.url)
+        query = dict(parse_qsl(parts.query, keep_blank_values=True))
+        query[key] = role_query
+        return replace(source, url=urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment)))
+    if source.kind in _OPTION_QUERY_KINDS:
+        return replace(source, options={**source.options, _OPTION_QUERY_KINDS[source.kind]: role_query})
+    return source
 
 
 class Scheduler:

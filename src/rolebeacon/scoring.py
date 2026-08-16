@@ -5,7 +5,73 @@ from typing import Any
 
 from .domain import EligibilityResult, EligibilityStatus, ScoreResult
 
-SCORING_PROMPT_VERSION = "job-fit-v5"
+SCORING_PROMPT_VERSION = "job-fit-v10"
+
+# Ineligibility is a hard gate: no combination of fit signals may push a total above this cap.
+# LLM scoring is only ever invoked for eligible jobs (see sync.py), so every ineligible job's
+# score is this rule-based score, capped here - the cap always applies regardless of provider.
+INELIGIBLE_SCORE_CAP = 39
+
+# Every ScoreResult (rules in this file, or the LLM in llm.py) fills these six dimension keys
+# with a point total up to the max below - the LLM prompt's SCORING_RUBRIC uses the same maxima,
+# so this is the one place both providers' points mean the same thing to a reader. Drives the
+# "why this score" drilldown on the job detail page: label, ceiling, and what earns the points.
+DIMENSION_META: list[tuple[str, str, int, str]] = [
+    ("role_domain", "Role match", 30, "How closely the title matches your target roles."),
+    ("stack", "Skills", 20, "Your skills mentioned in the posting text."),
+    ("domain_experience", "Domain experience", 10, "Your preferred domains mentioned in the posting text."),
+    ("seniority", "Seniority", 15, "Title seniority against your preferred seniority."),
+    ("location_authorization", "Location & authorization", 15, "Eligibility status: eligible, unknown, or ineligible."),
+    ("salary_employment", "Salary & employment", 10, "Whether stated pay meets your minimum, when the posting states one."),
+]
+DIMENSION_MAXIMUMS: dict[str, int] = {key: max_points for key, _, max_points, _ in DIMENSION_META}
+
+# Words that end a skill phrase rather than belong to it, so "5 years of Java experience" and
+# "5+ years of experience with Java" both resolve to the skill "Java", not "Java experience", and
+# "5 years of Go required" resolves to "Go", not "Go required". The rest are generic filler that
+# real postings put right where a skill would go ("5+ years of non-internship professional
+# software development experience", "an advanced degree", "one or more languages", "state of the
+# art") - never a skill name themselves, tuned against real live-data false positives.
+_REQUIREMENT_STOPWORDS = (
+    "experience", "background", "development", "skills", "skill", "knowledge", "and", "or", "with",
+    "required", "preferred", "needed", "is", "are", "a", "the", "in", "of", "an", "to", "into",
+    "one", "non", "full", "software", "professional", "advanced", "expert", "hands", "state", "progressive",
+    "relevant", "industry", "recent", "overall", "technical",
+)
+# Never itself a skill - it's the verb before the real (unextracted) object, as in "years of
+# experience leading design" or "years of experience building large-scale infrastructure".
+# ponytail: blocks every -ing word, including real skill nouns like "Networking" or the second
+# word of "Data Engineering" - degrades those to a shorter/partial skill rather than dropping the
+# match, which fits "tolerate misses, avoid bogus captures." Allowlist a specific term here if one
+# needs to survive whole.
+_SKILL_WORD = r"(?:(?!(?:" + "|".join(_REQUIREMENT_STOPWORDS) + r")\b)(?!\w+ing\b)[A-Za-z][\w+#.]{1,24})"
+# Heuristic, single-pass "N years of X" extraction - not a grammar. Misses are fine; a skill
+# phrase that accidentally swallows a stray word is the acceptable failure mode here. The
+# lookbehind stops a two-word skill from crossing a sentence boundary ("Kafka. General" in
+# "...with Kafka. General software...") since a real skill name never ends a matched word in ".".
+# At least one of "of"/"experience with|in|using" must be present - both fully optional used to
+# let bare "N years <two random words>" match any unrelated "N years" mention at all, e.g. "10
+# years to exercise your options" (stock-plan clause) or "5-10 years into the future".
+_EXPERIENCE_PATTERN = re.compile(
+    rf"\b(\d+)\+?\s*years?\s+(?:of\s+experience\s+(?:with|in|using)\s+|of\s+|experience\s+(?:with|in|using)\s+)"
+    rf"({_SKILL_WORD}(?<!\.)(?:[\s/-]+{_SKILL_WORD}){{0,1}})",
+    re.IGNORECASE,
+)
+
+
+def extract_experience_requirements(description: str) -> list[dict[str, Any]]:
+    """Deterministic, LLM-free 'N years of X' extraction so rules-only mode has the same
+    experience-requirement signal as LLM mode. Keeps the longest years figure seen per skill."""
+    found: dict[str, tuple[str, int]] = {}
+    for match in _EXPERIENCE_PATTERN.finditer(description):
+        years = int(match.group(1))
+        skill = match.group(2).strip().rstrip(".,")
+        if not skill or not (0 < years <= 40):
+            continue
+        key = skill.casefold()
+        if key not in found or years > found[key][1]:
+            found[key] = (skill, years)
+    return [{"skill": skill, "years": years} for skill, years in found.values()]
 
 # A title's head noun is the job. "Engineering Manager", "Sales Engineer", and
 # "Customer Engineer (Pre-Sales)" all contain an engineering word while being a different
@@ -128,7 +194,8 @@ def evaluate_eligibility(
         (
             strategy
             for strategy in strategies
-            if strategy.get("kind") == "priority_company" and _company_in(company, strategy.get("companies", []))
+            if strategy.get("kind") in ("priority_company", "company_watchlist")
+            and _company_in(company, strategy.get("companies", []))
         ),
         None,
     )
@@ -186,7 +253,8 @@ def evaluate_eligibility(
         location_fit = f"mobility-unknown:{country_strategy.get('country_code', '')}"
         risks.append("Sponsorship and relocation support are not stated")
     elif priority:
-        risks.append("Location and work authorization must be confirmed for this priority company")
+        label = "watchlist" if priority.get("kind") == "company_watchlist" else "priority"
+        risks.append(f"Location and work authorization must be confirmed for this {label} company")
     else:
         risks.append("Location eligibility could not be established")
 
@@ -195,7 +263,11 @@ def evaluate_eligibility(
     if relocation:
         reasons.append("Relocation support is explicitly mentioned")
     if priority:
-        reasons.append("Company is on the candidate priority list")
+        reasons.append(
+            "Company is on the candidate watchlist"
+            if priority.get("kind") == "company_watchlist"
+            else "Company is on the candidate priority list"
+        )
 
     return EligibilityResult(
         status=status,
@@ -239,10 +311,10 @@ def _role_match(title: str, preferences: dict[str, Any]) -> tuple[int, bool]:
     if any(term in title for term in OTHER_ROLE_FAMILY_TERMS if term not in wanted):
         return 2, False
     if not any(term in title for term in ENGINEERING_ROLE_TERMS) and not any(word in title for word in specifics):
-        return 5, False
+        return 6, False
     if any(role in title for role in targets):
-        return 25, True
-    return min(25, 14 + 4 * len([word for word in specifics if word in title])), True
+        return 30, True
+    return min(30, 17 + 5 * len([word for word in specifics if word in title])), True
 
 
 def rule_score(
@@ -267,18 +339,18 @@ def rule_score(
 
     domains = [str(value) for value in preferences.get("preferred_domains", [])]
     domain_hits = [domain for domain in domains if domain.casefold() in text]
-    domain_score = min(20, len(domain_hits) * 5)
+    domain_score = min(10, len(domain_hits) * 5)
 
-    seniority_score = 7
+    seniority_score = 10
     preferred_seniority = {str(value).casefold() for value in preferences.get("preferred_seniority", [])}
     title_seniority = next(
         (level for level in ("intern", "junior", "senior", "staff", "principal", "lead", "manager") if level in title),
         "unspecified",
     )
     if preferred_seniority:
-        seniority_score = 10 if title_seniority in preferred_seniority else 4
+        seniority_score = 15 if title_seniority in preferred_seniority else 6
     elif title_seniority in {"intern", "junior"}:
-        seniority_score = 3
+        seniority_score = 4
 
     location_score = {
         EligibilityStatus.ELIGIBLE: 15,
@@ -304,13 +376,17 @@ def rule_score(
         "salary_employment": salary_score,
     }
     strategy = next((item for item in strategies if item.get("id") == eligibility.route), None)
-    # A priority company is a reason to look at its engineering roles, not at its
+    # A priority/watchlist company is a reason to look at its engineering roles, not at its
     # procurement or pre-sales openings, and the floor never touches the title match
-    # itself because that dimension is the answer to "is this my job?".
-    if strategy and strategy.get("kind") == "priority_company" and same_role_family:
-        _raise_dimensions_to_floor(dimensions, 55)
+    # itself because that dimension is the answer to "is this my job?". Watchlist gets a
+    # smaller floor than priority - "lighter weight" is the field's own documented intent.
+    if strategy and same_role_family:
+        if strategy.get("kind") == "priority_company":
+            _raise_dimensions_to_floor(dimensions, 55)
+        elif strategy.get("kind") == "company_watchlist":
+            _raise_dimensions_to_floor(dimensions, 45)
     if eligibility.status == EligibilityStatus.INELIGIBLE:
-        _cap_dimensions(dimensions, 39)
+        _cap_dimensions(dimensions, INELIGIBLE_SCORE_CAP)
     total = sum(dimensions.values())
     threshold = int(strategy.get("threshold", 80)) if strategy else 80
     verdict = (
@@ -331,6 +407,15 @@ def rule_score(
         {"requirement": risk, "severity": "high" if eligibility.status == EligibilityStatus.INELIGIBLE else "medium"}
         for risk in eligibility.risks
     ]
+    for requirement in extract_experience_requirements(str(job.get("description", ""))):
+        if requirement["skill"].casefold() not in candidate_terms:
+            gaps.append(
+                {
+                    "requirement": f"Posting asks for {requirement['years']}+ years of {requirement['skill']}, "
+                    "not found in your profile",
+                    "severity": "medium",
+                }
+            )
     if not same_role_family:
         gaps.insert(0, {"requirement": f"{job.get('title', 'This title')} is a different role from your targets", "severity": "high"})
     return ScoreResult(
@@ -347,10 +432,9 @@ def rule_score(
 
 
 def _raise_dimensions_to_floor(dimensions: dict[str, int], floor: int) -> None:
-    maximums = {"domain_experience": 20, "stack": 20}
     shortfall = max(0, floor - sum(dimensions.values()))
     for key in ("domain_experience", "stack"):
-        increase = min(shortfall, maximums[key] - dimensions[key])
+        increase = min(shortfall, DIMENSION_MAXIMUMS[key] - dimensions[key])
         dimensions[key] += increase
         shortfall -= increase
         if not shortfall:

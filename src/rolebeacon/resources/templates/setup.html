@@ -2,7 +2,7 @@
 {% from "_help.html" import tip %}
 {% block title %}{{ 'Preferences' if editing else 'Setup' }} · RoleBeacon{% endblock %}
 {% block content %}
-<section class="page-heading"><div><p class="eyebrow">{{ 'PREFERENCES' if editing else 'FIRST-RUN SETUP' }}</p><h1>{{ 'Edit your RoleBeacon preferences' if editing else 'Make RoleBeacon yours' }}</h1><p>{% if editing %}Every setup value is editable here. Saving preserves the page state and does not contact any job source by itself.{% else %}Rules-only scoring works without a model. No job source is contacted until you activate setup.{% endif %}</p></div></section>
+<section class="page-heading"><div><p class="eyebrow">{{ 'PREFERENCES' if editing else 'FIRST-RUN SETUP' }}</p><h1>{{ 'Edit your RoleBeacon preferences' if editing else 'Make RoleBeacon yours' }}</h1><p>{% if editing %}Every setup value is editable here. Saving preserves the page state and does not contact any job source by itself.{% else %}Rules-only scoring works without a model. No job source is contacted until you activate setup.{% endif %}</p><p class="muted">RoleBeacon only sees jobs from your enabled sources — it cannot guarantee catching every posting. <a href="/sources">See Sources for exact coverage</a>.</p></div></section>
 <div id="setup-message" class="toast" role="status" aria-live="polite" hidden></div>
 <form id="setup-form" class="form-stack" data-complete-url="/api/setup/complete{% if editing %}?return_to=/settings{% endif %}">
   <nav class="settings-tabs" aria-label="Preference sections">
@@ -185,7 +185,11 @@
       return chip;
     }));
     const selected = new Set(entries.map(item => item.code));
-    picker.querySelectorAll(".country-option").forEach(option => { option.setAttribute("aria-selected", String(selected.has(option.dataset.countryCode))); });
+    const coveredByRegion = new Set(entries.flatMap(item => {
+      const region = picker.querySelector(`.country-region-option[data-country-code="${item.code}"]`);
+      return region ? region.dataset.regionCodes.split(",") : [];
+    }));
+    picker.querySelectorAll(".country-option").forEach(option => { option.setAttribute("aria-selected", String(selected.has(option.dataset.countryCode) || coveredByRegion.has(option.dataset.countryCode))); });
   };
   const syncCountryPickers = () => countryPickers.forEach(renderPicker);
   countryPickers.forEach(picker => {
@@ -208,12 +212,20 @@
     picker.querySelectorAll(".country-option").forEach(option => option.addEventListener("click", () => {
       const entries = pickerEntries(picker);
       const present = new Set(entries.map(item => item.code));
-      const additions = option.dataset.regionCodes
-        ? option.dataset.regionCodes.split(",").filter(code => !present.has(code)).map(code => ({
-            code, name: picker.querySelector(`.country-option[data-country-code="${code}"]`)?.dataset.countryName || code,
-          }))
-        : present.has(option.dataset.countryCode) ? [] : [{code: option.dataset.countryCode, name: option.dataset.countryName}];
-      if (additions.length) writePickerEntries(picker, [...entries, ...additions]);
+      if (option.dataset.regionCodes) {
+        // A region entry supersedes its members: add one pill for the region itself, and drop
+        // any member-country chips it now covers instead of leaving both on screen.
+        const memberCodes = new Set(option.dataset.regionCodes.split(","));
+        const kept = entries.filter(item => !memberCodes.has(item.code));
+        const addition = present.has(option.dataset.countryCode) ? [] : [{code: option.dataset.countryCode, name: option.dataset.countryName}];
+        writePickerEntries(picker, [...kept, ...addition]);
+      } else {
+        const coveredByRegion = [...document.querySelectorAll(".country-region-option")]
+          .some(region => present.has(region.dataset.countryCode) && region.dataset.regionCodes.split(",").includes(option.dataset.countryCode));
+        if (!coveredByRegion && !present.has(option.dataset.countryCode)) {
+          writePickerEntries(picker, [...entries, {code: option.dataset.countryCode, name: option.dataset.countryName}]);
+        }
+      }
       search.value = "";
       options.hidden = true;
       renderPicker(picker);

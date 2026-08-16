@@ -4,7 +4,7 @@ import sqlite3
 
 from rolebeacon.config import Settings
 from rolebeacon.migration import import_legacy
-from rolebeacon.resume import BuiltinResumeRenderer, render_resume_html
+from rolebeacon.resume import BuiltinResumeRenderer, render_resume_html, tailor_profile_for_job
 
 
 def test_legacy_import_is_copy_only_and_idempotent(tmp_path) -> None:
@@ -87,6 +87,65 @@ def test_builtin_resume_uses_only_profile_facts() -> None:
     assert "Built an internal service." in value
     assert "Go, Python" in value
     assert "visa sponsorship" not in value.casefold()
+
+
+def test_tailored_resume_differs_for_very_different_jobs() -> None:
+    # A candidate with both backend and frontend history: a distributed-systems job and a
+    # React job must not get the same resume, only reordered skills - the tailoring must
+    # actually select different bullets and projects, not just shuffle a skills line.
+    profile = {
+        "name": "Example Candidate",
+        "headline": "Software Engineer",
+        "summary": "Builds reliable systems.",
+        "skills": {"Languages": ["Go", "TypeScript"]},
+        "experience": [
+            {
+                "company": "Example Co",
+                "title": "Engineer",
+                "start": "2023",
+                "end": "2024",
+                "highlights": [
+                    "Operated a distributed Kafka messaging pipeline in production.",
+                    "Tuned Raft consensus and replication for a Go backend service.",
+                    "Built a React component library used across the frontend team.",
+                    "Migrated a legacy UI to TypeScript and improved accessibility.",
+                ],
+            }
+        ],
+        "projects": [
+            {
+                "name": "kafka-consumer",
+                "summary": "A distributed Go service consuming Kafka topics.",
+                "highlights": ["Handled backpressure and replication."],
+            },
+            {
+                "name": "react-dashboard",
+                "summary": "A React and TypeScript admin dashboard.",
+                "highlights": ["Built reusable frontend components."],
+            },
+        ],
+    }
+    backend_job = {
+        "title": "Senior Backend Engineer",
+        "description": "Own our distributed Go services, Kafka pipelines, and Raft-based replication.",
+    }
+    frontend_job = {
+        "title": "Senior Frontend Engineer",
+        "description": "Build our React and TypeScript component library and admin dashboard UI.",
+    }
+
+    backend_resume = render_resume_html(tailor_profile_for_job(profile, backend_job), backend_job)
+    frontend_resume = render_resume_html(tailor_profile_for_job(profile, frontend_job), frontend_job)
+
+    assert backend_resume != frontend_resume
+    assert "Kafka messaging pipeline" in backend_resume
+    assert "React component library used" not in backend_resume
+    assert "kafka-consumer" in backend_resume
+    assert "react-dashboard" not in backend_resume
+    assert "React component library used" in frontend_resume
+    assert "Kafka messaging pipeline" not in frontend_resume
+    assert "react-dashboard" in frontend_resume
+    assert "kafka-consumer" not in frontend_resume
 
 
 async def test_builtin_resume_creates_pdf(tmp_path) -> None:

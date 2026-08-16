@@ -280,16 +280,19 @@ def relocation_source_candidates(countries: list[dict[str, str]]) -> list[Source
     for country in countries:
         code, name = country["code"], country["name"]
         candidates.append(SourceConfig.from_dict({
-            "id": _source_id("google-careers", "", name), "kind": "google_careers", "name": "Google Careers",
+            # Country-suffixed so dozens of otherwise-identical rows are traceable to a country on
+            # the Sources health table. The Jobs-page filter still groups all of a kind under one
+            # label (see _GROUPED_SOURCE_LABELS in app.py) - that grouping is separate from this name.
+            "id": _source_id("google-careers", "", name), "kind": "google_careers", "name": f"Google Careers — {name}",
             "company": "Google", "enabled": False, "min_sync_interval_seconds": 14400, "trust_priority": 100,
-            "max_pages": 1,  # generated rows: keep per-sync request volume bounded across many countries
+            "max_pages": 10,  # both collectors break early on an empty page, so this is a ceiling, not a target
             "ingestion_filter": True, "official_first_party": True,
             "url": f"https://www.google.com/about/careers/applications/jobs/results/?{urlencode({'location': name})}",
         }))
         candidates.append(SourceConfig.from_dict({
-            "id": _source_id("amazon-jobs", "", name), "kind": "amazon_jobs", "name": "Amazon Jobs",
+            "id": _source_id("amazon-jobs", "", name), "kind": "amazon_jobs", "name": f"Amazon Jobs — {name}",
             "company": "Amazon", "enabled": False, "min_sync_interval_seconds": 14400, "trust_priority": 100,
-            "max_pages": 2, "location_filter_code": code, "location_filter_text": name,
+            "max_pages": 10, "location_filter_code": code, "location_filter_text": name,
             "ingestion_filter": True, "official_first_party": True,
             "url": f"https://www.amazon.jobs/en/search?{urlencode({'loc_query': name})}",
         }))

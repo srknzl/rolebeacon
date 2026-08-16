@@ -25,8 +25,10 @@ class JobFilters:
     technologies: tuple[str, ...] = ()
     route: str = ""
     status: str = ""
-    source: str = ""
+    source_ids: tuple[str, ...] = ()
     company: str = ""
+    company_in: tuple[str, ...] = ()
+    location: str = ""
     eligibility: str = ""
     sponsorship: str = ""
     relocation: str = ""
@@ -40,12 +42,16 @@ class JobFilters:
     salary_floor: float = 0
     has_salary: bool = False
     exclude_ineligible: bool = False
+    hide_unmet_experience: bool = False
+    hide_mismatched_titles: bool = False
 
 
 # Artifact preparation stages, in the only order they may advance.
 ARTIFACT_STAGES = ("saved", "preparing", "ready")
-# Outcomes the user records on the job itself. They own the pipeline column once set.
-APPLICATION_OUTCOMES = ("applied", "interview", "offer", "rejected")
+# Kanban columns on the pipeline board, in display order. The board is driven directly by
+# jobs.status now, not by applications-table membership; "new" is the collector default and
+# is never a column of its own.
+PIPELINE_COLUMNS = ("not_interested", "bookmarked", "applied", "rejected", "offer")
 
 # Sort keys are a fixed allow-list because they are interpolated into ORDER BY.
 JOB_SORTS: dict[str, str] = {
@@ -89,7 +95,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     primary_source_priority INTEGER NOT NULL DEFAULT 0,
     merged_into_job_id INTEGER REFERENCES jobs(id),
     normalized_title TEXT NOT NULL DEFAULT '',
-    location_bucket TEXT NOT NULL DEFAULT ''
+    location_bucket TEXT NOT NULL DEFAULT '',
+    requirements_json TEXT NOT NULL DEFAULT '[]'
 );
 
 CREATE INDEX IF NOT EXISTS idx_jobs_company ON jobs(company);
@@ -386,6 +393,7 @@ class Database:
             self._ensure_column(connection, "jobs", "merged_into_job_id", "INTEGER")
             self._ensure_column(connection, "jobs", "normalized_title", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(connection, "jobs", "location_bucket", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(connection, "jobs", "requirements_json", "TEXT NOT NULL DEFAULT '[]'")
             for name, definition in (
                 ("source_priority", "INTEGER NOT NULL DEFAULT 50"),
                 ("metadata_json", "TEXT NOT NULL DEFAULT '{}'"),
@@ -419,6 +427,17 @@ class Database:
             connection.execute(
                 "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (2, ?)", (_iso(),)
             )
+            if not connection.execute("SELECT 1 FROM schema_migrations WHERE version = 3").fetchone():
+                # Collapse the old 7-state job status onto the 5 real pipeline columns. 'rejected'
+                # changes meaning here (pre-application "not interested" -> post-application
+                # "employer rejected"), so old 'rejected' rows must move first.
+                for table in ("jobs", "feedback"):
+                    connection.execute(f"UPDATE {table} SET status = 'not_interested' WHERE status = 'rejected'")
+                    connection.execute(f"UPDATE {table} SET status = 'bookmarked' WHERE status IN ('interested', 'maybe')")
+                    connection.execute(f"UPDATE {table} SET status = 'applied' WHERE status = 'interview'")
+                connection.execute(
+                    "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (3, ?)", (_iso(),)
+                )
 
     @staticmethod
     def _ensure_column(connection: sqlite3.Connection, table: str, name: str, definition: str) -> None:
@@ -637,11 +656,17 @@ class Database:
         if filters.status:
             clauses.append("j.status = ?")
             params.append(filters.status)
-        if filters.source:
-            clauses.append("EXISTS (SELECT 1 FROM job_sources js WHERE js.job_id = j.id AND js.source_id = ?)")
-            params.append(filters.source)
+        if filters.source_ids:
+            placeholders = ",".join("?" for _ in filters.source_ids)
+            clauses.append(f"EXISTS (SELECT 1 FROM job_sources js WHERE js.job_id = j.id AND js.source_id IN ({placeholders}))")
+            params.extend(filters.source_ids)
         if filters.exclude_ineligible:
             clauses.append("COALESCE(e.status, 'unknown') <> 'ineligible'")
+        if filters.hide_unmet_experience:
+            # Rules-mode gap text always reads "...years of <skill>..." for an experience-requirement
+            # gap (see extract_experience_requirements in scoring.py); LLM-mode gap text won't match
+            # this, so the filter simply has no effect on LLM-scored jobs.
+            clauses.append("COALESCE(ms.gaps_json, '') NOT LIKE '%years of%'")
         if filters.eligibility:
             clauses.append("COALESCE(e.status, 'unknown') = ?")
             params.append(filters.eligibility)
@@ -669,6 +694,13 @@ class Database:
         if filters.company:
             clauses.append("j.company_key = ?")
             params.append(company_key(filters.company))
+        if filters.location:
+            clauses.append("j.location LIKE ?")
+            params.append(f"%{filters.location}%")
+        if filters.company_in:
+            placeholders = ",".join("?" for _ in filters.company_in)
+            clauses.append(f"j.company_key IN ({placeholders})")
+            params.extend(filters.company_in)
         if filters.posted_within_days > 0:
             clauses.append(
                 "julianday(COALESCE(j.published_at, j.first_seen_at)) >= julianday('now', ?)"
@@ -688,6 +720,12 @@ class Database:
         if filters.provider:
             clauses.append("COALESCE(ms.provider, '') = ?")
             params.append(filters.provider)
+        if filters.hide_mismatched_titles:
+            # role_domain <= 9 is "unrelated" in both rule-based scoring (_role_match returns 2 or
+            # 6 for a different role family, never 10-21) and the LLM prompt's own documented
+            # bucket (0-9 unrelated). Default to the max (same family) for a not-yet-scored job so
+            # pending jobs are never hidden before they get a chance to be seen.
+            clauses.append("COALESCE(json_extract(ms.dimensions_json, '$.role_domain'), 30) > 9")
         join_fts = ""
         if filters.query:
             join_fts = "JOIN jobs_fts f ON f.rowid = j.id"
@@ -776,7 +814,14 @@ class Database:
                 ).fetchall()
             ]
 
-    def save_evaluation(self, job_id: int, eligibility: EligibilityResult, score: ScoreResult, status: str) -> None:
+    def save_evaluation(
+        self,
+        job_id: int,
+        eligibility: EligibilityResult,
+        score: ScoreResult,
+        status: str,
+        requirements: list[dict[str, Any]] | None = None,
+    ) -> None:
         now = _iso()
         with self.connect() as connection:
             connection.execute(
@@ -810,7 +855,10 @@ class Database:
                     score.provider, score.model, score.prompt_version, now,
                 ),
             )
-            connection.execute("UPDATE jobs SET score_status = ? WHERE id = ?", (status, job_id))
+            connection.execute(
+                "UPDATE jobs SET score_status = ?, requirements_json = ? WHERE id = ?",
+                (status, json.dumps(requirements or []), job_id),
+            )
 
     def save_feedback(self, job_id: int, status: JobStatus, reason: str = "") -> None:
         now = _iso()
@@ -820,17 +868,6 @@ class Database:
                 "INSERT INTO feedback (job_id, status, reason, created_at) VALUES (?, ?, ?, ?)",
                 (job_id, status.value, reason.strip(), now),
             )
-            if status.value in APPLICATION_OUTCOMES:
-                # An outcome can be recorded on a job that was applied to without RoleBeacon preparing
-                # anything. Without a row here the pipeline board would never show it.
-                connection.execute(
-                    """
-                    INSERT INTO applications (job_id, status, created_at, updated_at)
-                    VALUES (?, 'saved', ?, ?)
-                    ON CONFLICT(job_id) DO UPDATE SET updated_at = excluded.updated_at
-                    """,
-                    (job_id, now, now),
-                )
 
     @staticmethod
     def _artifact_stage(column: str) -> str:
@@ -887,12 +924,16 @@ class Database:
             ]
 
     def start_source(self, source_id: str) -> None:
+        # Clears last_error/last_skipped_reason so a fresh attempt never displays a stale note
+        # from a previous run's different outcome (e.g. "minimum sync interval" left showing
+        # next to a source that is now actually running or has since failed for another reason).
         with self.connect() as connection:
             connection.execute(
                 """
                 INSERT INTO source_state (source_id, status, last_started_at)
                 VALUES (?, 'running', ?)
-                ON CONFLICT(source_id) DO UPDATE SET status = 'running', last_started_at = excluded.last_started_at, last_error = ''
+                ON CONFLICT(source_id) DO UPDATE SET status = 'running', last_started_at = excluded.last_started_at,
+                    last_error = '', last_skipped_reason = ''
                 """,
                 (source_id, _iso()),
             )
@@ -1227,6 +1268,20 @@ class Database:
                 ).fetchall()
             ]
 
+    def suggest_companies(self, prefix: str, limit: int = 20) -> list[str]:
+        """Distinct employer names for autocomplete, drawn from the jobs table itself so every
+        suggestion is guaranteed to actually match the company filter (which also matches jobs,
+        not the much smaller researched-companies table)."""
+        prefix = prefix.strip()
+        if not prefix:
+            return []
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT DISTINCT company FROM jobs WHERE active = 1 AND company LIKE ? ORDER BY company LIMIT ?",
+                (f"%{prefix}%", limit),
+            ).fetchall()
+            return [str(row["company"]) for row in rows]
+
     def dashboard_stats(self) -> dict[str, int]:
         with self.connect() as connection:
             row = connection.execute(
@@ -1235,7 +1290,7 @@ class Database:
                     COUNT(*) AS total,
                     SUM(CASE WHEN julianday(first_seen_at) >= julianday('now', '-1 day') THEN 1 ELSE 0 END) AS new_today,
                     SUM(CASE WHEN score_status = 'pending_llm' THEN 1 ELSE 0 END) AS pending_llm,
-                    SUM(CASE WHEN status IN ('interested', 'maybe') THEN 1 ELSE 0 END) AS shortlisted
+                    SUM(CASE WHEN status = 'bookmarked' THEN 1 ELSE 0 END) AS shortlisted
                 FROM jobs WHERE active = 1 AND merged_into_job_id IS NULL
                 """
             ).fetchone()
@@ -1249,7 +1304,7 @@ class Database:
         result = dict(row)
         for key in (
             "metadata_json", "reasons_json", "risks_json", "dimensions_json",
-            "evidence_json", "gaps_json",
+            "evidence_json", "gaps_json", "requirements_json",
         ):
             if key in result and result[key]:
                 result[key.removesuffix("_json")] = json.loads(result[key])

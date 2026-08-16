@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -7,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from rolebeacon.app import create_app
-from rolebeacon.collectors import AmazonJobsCollector, GoogleCareersCollector
+from rolebeacon.collectors import AmazonJobsCollector, GoogleCareersCollector, _google_job_detail
 from rolebeacon.config import Settings
 from rolebeacon.domain import SourceConfig
 from rolebeacon.profile import CONTINENT_COUNTRY_CODES, RELOCATION_REGION_CODES, relocation_countries
@@ -223,6 +224,170 @@ async def test_google_first_party_collector_parses_public_search_and_detail_page
     assert "distributed Java systems" in batch.jobs[0].description
 
 
+def test_google_job_detail_parses_the_current_no_icon_location_format() -> None:
+    # Newer postings drop the icon-label markup entirely: just "Google <location>" on its own
+    # line right after the title, no "place"/"bar_chart" words at all.
+    text = "Senior Backend Engineer\nGoogle Sunnyvale, CA, USA\nMinimum qualifications:\nBuild systems."
+
+    detail = _google_job_detail(text, "Senior Backend Engineer")
+
+    assert detail["location"] == "Sunnyvale, CA, USA"
+
+
+def test_google_job_detail_ignores_a_google_mention_inside_the_title() -> None:
+    # A title like "Engineer, Google Cloud" contains "Google" itself - the real location line
+    # that follows the title must win, not a false match inside the title text.
+    text = "Engineer, Google Cloud\nGoogle Zurich, Switzerland\nMinimum qualifications:\nBuild systems."
+
+    detail = _google_job_detail(text, "Engineer, Google Cloud")
+
+    assert detail["location"] == "Zurich, Switzerland"
+
+
+def test_google_job_detail_rejects_prose_swallowed_from_an_about_us_blurb() -> None:
+    # Some teams (DeepMind, Ads...) prepend an "about us" blurb mentioning Google before any real
+    # location line - the naive first-match would capture a sentence instead of a place, so a
+    # safe empty result is required rather than surfacing prose as a location.
+    text = (
+        "Research Scientist\n"
+        "We are Google DeepMind, and we are on a mission to solve intelligence.\n"
+        "Minimum qualifications:\nBuild systems."
+    )
+
+    detail = _google_job_detail(text, "Research Scientist")
+
+    assert detail["location"] == ""
+
+
+def _google_search_html(page: int, jobs: list[tuple[str, str]]) -> str:
+    links = "\n".join(
+        f'<a href="jobs/results/{job_id}-{title.lower().replace(" ", "-")}"'
+        f' aria-label="Learn more about {title}"></a>'
+        for job_id, title in jobs
+    )
+    return f"<span>page {page}</span>\n{links}"
+
+
+def _google_detail_html(title: str) -> str:
+    return (
+        f"<h1>{title}</h1>\n"
+        "<span>Google place Berlin, Germany bar_chart Mid</span>\n"
+        "<h3>Minimum qualifications:</h3><p>Build distributed systems.</p>\n"
+        "<p>Information collected and processed as part of your Google Careers profile</p>"
+    )
+
+
+@pytest.mark.asyncio
+async def test_google_first_party_collector_collects_every_job_across_all_ten_pages() -> None:
+    # Correctness check requested directly: fabricate a query whose results span every one of
+    # the 10 allowed pages, independently count every job link across those pages the way a
+    # human paging through the real site would, and assert the collector drops none of them.
+    pages = {
+        page: [(str(page * 10 + slot), f"Engineer {page}-{slot}") for slot in range(3)] for page in range(1, 11)
+    }
+    reference_ids = {job_id for jobs in pages.values() for job_id, _ in jobs}
+    assert len(reference_ids) == 30  # 10 pages x 3 jobs/page, sanity-checking the fixture itself
+    titles_by_id = {job_id: title for jobs in pages.values() for job_id, title in jobs}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        detail_match = re.search(r"/jobs/results/(\d+)", request.url.path)
+        if detail_match and detail_match.group(1) in titles_by_id:
+            return httpx.Response(200, text=_google_detail_html(titles_by_id[detail_match.group(1)]))
+        page = int(request.url.params.get("page", "1"))
+        return httpx.Response(200, text=_google_search_html(page, pages.get(page, [])))
+
+    config = detect_source(
+        "https://www.google.com/about/careers/applications/jobs/results/?q=Engineer&location=Germany", "Google"
+    )
+    config = SourceConfig.from_dict({**config.to_dict(), "max_pages": 10})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        batch = await GoogleCareersCollector(config, client).collect(datetime.now(UTC) - timedelta(days=30))
+
+    collected_ids = {job.source_job_id for job in batch.jobs}
+    assert collected_ids == reference_ids, f"missing: {reference_ids - collected_ids}"
+
+
+@pytest.mark.asyncio
+async def test_google_first_party_collector_keeps_already_found_jobs_when_a_later_page_fails() -> None:
+    # A slow-walked/rate-limited later page must not silently discard jobs already found on the
+    # pages before it - that would report success with 0 saved even though the work was real.
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "jobs/results/1-" in request.url.path:
+            return httpx.Response(200, text=_google_detail_html("Engineer One"))
+        page = int(request.url.params.get("page", "1"))
+        if page == 1:
+            return httpx.Response(200, text=_google_search_html(1, [("1", "Engineer One")]))
+        raise httpx.ReadTimeout("simulated provider stall", request=request)
+
+    config = SourceConfig.from_dict(
+        {
+            **detect_source(
+                "https://www.google.com/about/careers/applications/jobs/results/?q=Engineer&location=Germany",
+                "Google",
+            ).to_dict(),
+            "max_pages": 10,
+        }
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        batch = await GoogleCareersCollector(config, client).collect(datetime.now(UTC) - timedelta(days=30))
+
+    assert [job.source_job_id for job in batch.jobs] == ["1"]
+
+
+@pytest.mark.asyncio
+async def test_google_first_party_collector_keeps_other_jobs_when_one_detail_page_fails() -> None:
+    # One flaky job detail fetch must not cost every other job found on the same page.
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "jobs/results/1-" in request.url.path:
+            raise httpx.ReadTimeout("simulated provider stall", request=request)
+        if "jobs/results/2-" in request.url.path:
+            return httpx.Response(200, text=_google_detail_html("Engineer Two"))
+        return httpx.Response(
+            200, text=_google_search_html(1, [("1", "Engineer One"), ("2", "Engineer Two")])
+        )
+
+    config = detect_source(
+        "https://www.google.com/about/careers/applications/jobs/results/?q=Engineer&location=Germany", "Google"
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        batch = await GoogleCareersCollector(config, client).collect(datetime.now(UTC) - timedelta(days=30))
+
+    assert [job.source_job_id for job in batch.jobs] == ["2"]
+
+
+@pytest.mark.asyncio
+async def test_amazon_first_party_collector_keeps_already_found_jobs_when_a_later_page_fails() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        offset = int(request.url.params.get("offset", "0"))
+        if offset == 0:
+            return httpx.Response(
+                200,
+                json={
+                    "hits": 300,
+                    "jobs": [
+                        {
+                            "id_icims": "1", "title": "Engineer One", "location": "DE, Berlin",
+                            "job_path": "/en/jobs/1", "posted_date": datetime.now(UTC).strftime("%B %d, %Y"),
+                        }
+                    ],
+                },
+            )
+        raise httpx.ReadTimeout("simulated provider stall", request=request)
+
+    config = SourceConfig.from_dict(
+        {
+            **detect_source(
+                "https://www.amazon.jobs/en/search?base_query=software+engineer&loc_query=Germany", "Amazon"
+            ).to_dict(),
+            "max_pages": 10,
+        }
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        batch = await AmazonJobsCollector(config, client).collect(datetime.now(UTC) - timedelta(days=30))
+
+    assert [job.source_job_id for job in batch.jobs] == ["1"]
+
+
 @pytest.mark.asyncio
 async def test_amazon_first_party_collector_normalizes_public_json_jobs() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
@@ -273,6 +438,28 @@ async def test_amazon_first_party_collector_normalizes_public_json_jobs() -> Non
     assert batch.jobs[0].title == "Software Development Engineer"
     assert batch.jobs[0].url == "https://www.amazon.jobs/en/jobs/456/software-development-engineer"
     assert "Experience with Java" in batch.jobs[0].description
+
+
+@pytest.mark.asyncio
+async def test_amazon_first_party_collector_stops_at_the_first_empty_page() -> None:
+    # A generated per-country row now allows up to 10 pages so large countries aren't cut short,
+    # but a country with no matches must not spend all 10 requests finding that out.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"hits": 0, "jobs": []})
+
+    config = SourceConfig.from_dict(
+        {
+            **detect_source(
+                "https://www.amazon.jobs/en/search?base_query=software+engineer&loc_query=Iceland", "Amazon"
+            ).to_dict(),
+            "max_pages": 10,
+        }
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        batch = await AmazonJobsCollector(config, client).collect(datetime.now(UTC) - timedelta(days=30))
+
+    assert batch.requests_made == 1
+    assert batch.jobs == []
 
 
 def test_setup_edits_preserve_user_added_source_instances(tmp_path) -> None:
@@ -393,8 +580,20 @@ def test_relocation_source_candidates_carry_no_role_text() -> None:
     assert "q=" not in google.url and "location=France" in google.url
     assert "base_query=" not in amazon.url and "loc_query=France" in amazon.url
     assert amazon.options["location_filter_code"] == "FR"
-    assert google.max_pages == 1
-    assert amazon.max_pages == 2
+    assert google.max_pages == 10
+    assert amazon.max_pages == 10
+
+
+def test_relocation_source_candidates_are_named_per_country_not_identically() -> None:
+    # A user with several relocation-target countries gets dozens of Google/Amazon rows on the
+    # Sources health table; each must be traceable to its country, not just the first one.
+    candidates = relocation_source_candidates(
+        [{"code": "FR", "name": "France"}, {"code": "DE", "name": "Germany"}]
+    )
+
+    names = [item.name for item in candidates]
+    assert names == ["Google Careers — France", "Amazon Jobs — France", "Google Careers — Germany", "Amazon Jobs — Germany"]
+    assert len(set(names)) == len(names)
 
 
 def test_relocation_source_candidates_germany_entry_matches_the_shipped_default() -> None:

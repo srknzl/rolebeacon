@@ -246,7 +246,7 @@ class SetupPayloadV1(StrictModel):
 class SearchStrategyV1(StrictModel):
     id: str
     label: str
-    kind: Literal["priority_company", "authorized_local", "relocation", "remote", "other"]
+    kind: Literal["priority_company", "company_watchlist", "authorized_local", "relocation", "remote", "other"]
     threshold: int = Field(ge=0, le=100)
     country_code: str = ""
     country_name: str = ""
@@ -274,6 +274,16 @@ def generate_strategies(
                 kind="priority_company",
                 threshold=65,
                 companies=preferences.priority_companies,
+            )
+        )
+    if preferences.company_watchlist:
+        strategies.append(
+            SearchStrategyV1(
+                id="company-watchlist",
+                label="Company watchlist",
+                kind="company_watchlist",
+                threshold=70,
+                companies=preferences.company_watchlist,
             )
         )
 
