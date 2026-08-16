@@ -969,11 +969,14 @@ class Database:
         filters: JobFilters | None = None,
         *,
         sort: str = "decision_ready",
-        limit: int = 100,
+        limit: int | None = 100,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
         clauses, params, join_fts = self._job_filters(filters or JobFilters())
-        params.extend((limit, offset))
+        pagination = ""
+        if limit is not None:
+            pagination = "LIMIT ? OFFSET ?"
+            params.extend((limit, offset))
         sql = f"""
             SELECT j.*, e.status AS eligibility_status, e.route, e.sponsorship, e.relocation,
                    e.location_fit, e.reasons_json, e.risks_json,
@@ -998,10 +1001,34 @@ class Database:
             ORDER BY {JOB_SORTS.get(sort) or JOB_SORTS["decision_ready"]},
                      COALESCE(opportunity_score, ms.total, 0) DESC,
                      COALESCE(j.published_at, j.first_seen_at) DESC
-            LIMIT ? OFFSET ?
+            {pagination}
         """
         with self.connect() as connection:
             return [self._decode_row(row) for row in connection.execute(sql, params).fetchall()]
+
+    def list_job_sources(self, job_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
+        """Load every provenance association for a set of jobs without one query per job."""
+        result: dict[int, list[dict[str, Any]]] = {job_id: [] for job_id in job_ids}
+        with self.connect() as connection:
+            for start in range(0, len(job_ids), 500):
+                batch = job_ids[start : start + 500]
+                placeholders = ",".join("?" for _ in batch)
+                rows = connection.execute(
+                    f"""
+                    SELECT job_id, source_id, source_job_id, source_url, first_seen_at, last_seen_at,
+                           source_priority, metadata_json, active
+                    FROM job_sources
+                    WHERE job_id IN ({placeholders})
+                    ORDER BY job_id, active DESC, source_priority DESC, source_id, source_job_id
+                    """,
+                    batch,
+                ).fetchall()
+                for row in rows:
+                    source = dict(row)
+                    source["metadata"] = json.loads(source.pop("metadata_json") or "{}")
+                    source["active"] = bool(source["active"])
+                    result[int(source.pop("job_id"))].append(source)
+        return result
 
     def pending_job_ids(self, prompt_version: str = "", limit: int = 1000) -> list[int]:
         version_clause = ""
