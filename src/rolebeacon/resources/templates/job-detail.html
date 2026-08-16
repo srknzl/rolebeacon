@@ -68,7 +68,7 @@
       {% if application and application.packet_path %}<a class="artifact-link" data-packet-link href="/artifacts/{{ job.id }}/application-packet.json" title="Open the prepared answers RoleBeacon assembled for this application.">Open prepared application packet</a>{% endif %}
       <form action="/api/jobs/{{ job.id }}/prepare-application" method="post" data-prepare-form><button class="button button-primary wide" title="Assemble your saved answers into a reviewable packet. RoleBeacon never submits an application.">Prepare application</button></form>
       <a class="button button-quiet wide" href="{{ job.apply_url or job.canonical_url }}" target="_blank" rel="noopener" title="Open the original posting in a new tab for your review and final submission.">Open original posting ↗</a>
-      <p class="safety-note">RoleBeacon never submits the application. Review every answer and press Submit yourself.</p>
+      <p class="trust-banner">RoleBeacon never submits the application. Review every answer and press Submit yourself.</p>
     </div>
   </aside>
 </section>

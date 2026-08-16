@@ -40,8 +40,11 @@
   }));
   document.querySelectorAll(".kanban-column").forEach(column => {
     column.addEventListener("dragover", event => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; });
+    column.addEventListener("dragenter", () => column.classList.add("is-drag-over"));
+    column.addEventListener("dragleave", event => { if (!column.contains(event.relatedTarget)) column.classList.remove("is-drag-over"); });
     column.addEventListener("drop", async event => {
       event.preventDefault();
+      column.classList.remove("is-drag-over");
       const jobId = event.dataTransfer.getData("text/plain");
       const card = document.querySelector(`.application-card[data-job-id="${jobId}"]`);
       const from = card?.closest(".kanban-column");

@@ -9,7 +9,14 @@
     <button class="button settings-tab" type="button" data-settings-tab="search" aria-selected="true">Job search</button>
     <button class="button settings-tab" type="button" data-settings-tab="application" aria-selected="false">CV & applications</button>
   </nav>
-  <section class="panel settings-tab-panel" data-settings-panel="search">
+  <nav class="settings-quicknav settings-tab-panel" data-settings-panel="search" aria-label="Job search sections">
+    <a href="#panel-profile">Profile</a>
+    <a href="#panel-mobility">Mobility &amp; search</a>
+    <a href="#panel-sources">Sources</a>
+    <a href="#panel-scoring">Scoring</a>
+    <a href="#panel-company-research">Company research</a>
+  </nav>
+  <section class="panel settings-tab-panel" data-settings-panel="search" id="panel-profile">
     <h2>Search profile</h2>
     <p class="muted">Only information that affects discovery, eligibility, and job matching belongs here.</p>
     <div class="form-grid">
@@ -22,7 +29,7 @@
     <label>Skills, one per line {{ tip("Each line becomes a matching signal. Prefer specific technologies and domains.") }}<textarea id="skills" rows="5"></textarea></label>
   </section>
 
-  <section class="panel settings-tab-panel" data-settings-panel="search">
+  <section class="panel settings-tab-panel" data-settings-panel="search" id="panel-mobility">
     <h2>Mobility and search</h2>
     <div class="form-grid">
       <label>Target roles, one per line {{ tip("Job titles you actively want. These create search strategies and influence ranking.") }}<textarea id="target-roles" rows="5" required></textarea></label>
@@ -51,7 +58,7 @@
     </details>
   </section>
 
-  <section class="panel settings-tab-panel" data-settings-panel="search">
+  <section class="panel settings-tab-panel" data-settings-panel="search" id="panel-sources">
     <h2>Job sources</h2>
     <p>Selected sources are saved now and contacted only after activation.</p>
     <div class="checkbox-row">
@@ -72,7 +79,7 @@
     </div>
   </section>
 
-  <section class="panel settings-tab-panel" data-settings-panel="search">
+  <section class="panel settings-tab-panel" data-settings-panel="search" id="panel-scoring">
     <h2>Scoring engine</h2>
     <label>Mode {{ tip("Rules only is a complete mode: collection, eligibility, scoring, and company research all run on deterministic local rules, so the same input always gives the same result, and every claim quotes the source sentence it came from. Cover letters are the one feature it cannot do. An endpoint adds written evidence, written company assessments, and cover letters, but its wording varies between runs. If the endpoint is unreachable RoleBeacon stops and tells you, rather than quietly scoring with rules.") }}<select id="llm-mode"><option value="rules">Rules only — no model required</option><option value="ollama">Ollama on this computer or LAN</option><option value="custom">Custom OpenAI-compatible endpoint</option></select></label>
     <div id="model-details" class="model-details">
@@ -87,7 +94,7 @@
     </div>
   </section>
 
-  <section class="panel settings-tab-panel" data-settings-panel="search">
+  <section class="panel settings-tab-panel" data-settings-panel="search" id="panel-company-research">
     <h2>Company research</h2>
     <p>RoleBeacon includes {{ company_search.registry_count if company_search else 'a built-in' }} seeded company entries and uses Wikidata plus official company pages without an API key. A Brave Search key improves official-page discovery for unfamiliar companies.</p>
     <div class="model-health {{ 'model-health-success' if company_search and company_search.configured else 'model-health-rules' }}" id="company-search-status">
