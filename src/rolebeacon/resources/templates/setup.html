@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "_help.html" import tip %}
+{% macro model_pick(model) %}<button class="button button-quiet model-pick" type="button" data-model="{{ model }}">Select</button> <button class="button button-quiet model-copy" type="button" data-model="{{ model }}">Copy</button><br><code>ollama pull {{ model }}</code>{% endmacro %}
 {% block title %}{{ 'Preferences' if editing else 'Setup' }} · RoleBeacon{% endblock %}
 {% block content %}
 <section class="page-heading"><div><p class="eyebrow">{{ 'PREFERENCES' if editing else 'FIRST-RUN SETUP' }}</p><h1>{{ 'Edit your RoleBeacon preferences' if editing else 'Make RoleBeacon yours' }}</h1><p>{% if editing %}Every setup value is editable here. Saving preserves the page state and does not contact any job source by itself.{% else %}Rules-only scoring works without a model. No job source is contacted until you activate setup.{% endif %}</p><p class="muted">RoleBeacon only sees jobs from your enabled sources — it cannot guarantee catching every posting. <a href="/sources">See Sources for exact coverage</a>.</p></div></section>
@@ -96,17 +97,19 @@
     <p class="muted-cell">Measured on RoleBeacon's own rubric with <code>rolebeacon evaluate-model</code>; see <code>docs/local-model-guide.md</code> for the full write-up. VRAM is rough guidance for a 4-6 bit quantization.</p>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Tier / VRAM</th><th>Model</th><th>Verdict</th></tr></thead>
+        <thead><tr><th>Tier / VRAM</th><th>Model</th><th>Verdict</th><th>Use it</th></tr></thead>
         <tbody>
-          <tr><td>Small<br><small>6-8 GB</small></td><td>qwen3:8b</td><td>Shipped default. Not yet run through <code>evaluate-model</code>.</td></tr>
-          <tr><td>Medium<br><small>12-16 GB</small></td><td>qwen2.5:14b-instruct-q6_k</td><td><strong>Recommended.</strong> 0.87 rank correlation with rules, 97% evidence grounding.</td></tr>
-          <tr><td>Medium<br><small>12-16 GB</small></td><td>qwen3:14b</td><td>Not recommended. 0.32 correlation - reasoning mode fights the JSON schema.</td></tr>
-          <tr><td>Medium<br><small>12-16 GB</small></td><td>phi4:14b</td><td>Not recommended. Fast (7.4s median) but 3 of 4 test cases rejected for echoing the dimension name back as the evidence requirement.</td></tr>
-          <tr><td>Large<br><small>20-24 GB</small></td><td>qwen3.6:27b</td><td>Recommended for this tier. Reasons by default (RoleBeacon sends <code>think:false</code> for this model automatically) - matches qwen2.5:14b-instruct-q6_k's pass rate at ~4x the latency and VRAM.</td></tr>
-          <tr><td>Very large<br><small>48 GB+</small></td><td>qwen2.5:72b-instruct, llama3.3:70b-instruct</td><td>Not yet tested. Same-family non-reasoning picks if this tier is available.</td></tr>
+          <tr><td>Small<br><small>6-8 GB</small></td><td>qwen3:8b</td><td>Shipped default. Not yet run through <code>evaluate-model</code>.</td><td>{{ model_pick("qwen3:8b") }}</td></tr>
+          <tr><td>Medium<br><small>12-16 GB</small></td><td>qwen2.5:14b-instruct-q6_k</td><td><strong>Recommended.</strong> 0.87 rank correlation with rules, 97% evidence grounding.</td><td>{{ model_pick("qwen2.5:14b-instruct-q6_k") }}</td></tr>
+          <tr><td>Medium<br><small>12-16 GB</small></td><td>qwen3:14b</td><td>Not recommended. 0.32 correlation - reasoning mode fights the JSON schema.</td><td>{{ model_pick("qwen3:14b") }}</td></tr>
+          <tr><td>Medium<br><small>12-16 GB</small></td><td>phi4:14b</td><td>Not recommended. Fast (7.4s median) but 3 of 4 test cases rejected for echoing the dimension name back as the evidence requirement.</td><td>{{ model_pick("phi4:14b") }}</td></tr>
+          <tr><td>Large<br><small>20-24 GB</small></td><td>qwen3.6:27b</td><td>Recommended for this tier. Reasons by default (RoleBeacon sends <code>think:false</code> for this model automatically) - matches qwen2.5:14b-instruct-q6_k's pass rate at ~4x the latency and VRAM.</td><td>{{ model_pick("qwen3.6:27b") }}</td></tr>
+          <tr><td>Very large<br><small>48 GB+</small></td><td>qwen2.5:72b-instruct</td><td>Not yet tested. Same-family non-reasoning pick if this tier is available.</td><td>{{ model_pick("qwen2.5:72b-instruct") }}</td></tr>
+          <tr><td>Very large<br><small>48 GB+</small></td><td>llama3.3:70b-instruct</td><td>Not yet tested. Different-vendor non-reasoning pick if this tier is available.</td><td>{{ model_pick("llama3.3:70b-instruct") }}</td></tr>
         </tbody>
       </table>
     </div>
+    <p class="muted-cell">"Select" fills the model field below; you still choose Ollama mode and pull it yourself. "Copy" gives the exact <code>ollama pull</code> command to run on whichever machine hosts your Ollama - useful when it's a LAN host rather than this computer, since the Pull button above only reaches a locally installed Ollama.</p>
     </div>
   </section>
 
@@ -379,6 +382,17 @@
   document.getElementById("pull-model").addEventListener("click", async () => { try { message("Downloading the model. Keep this page open…"); const value = await post("/api/setup/model/pull", {model: document.getElementById("llm-model").value}); message(`Downloaded ${value.model}.`, true); } catch (error) { message(error.message); } });
   document.getElementById("test-model").addEventListener("click", async () => { try { const data = modelConfig(); const value = await post("/api/setup/model/test", data); const text = value.ok ? `Connected to ${data.base_url}. ${value.model_found ? `Model ${data.model} is ready.` : `The endpoint did not list ${data.model}.`}` : value.error; showModelConnection(text, value.ok && value.model_found ? "success" : "warning"); message(text, value.ok && value.model_found); } catch (error) { showModelConnection(error.message, "warning"); message(error.message); } });
   document.getElementById("save-company-search").addEventListener("click", async () => { try { const value = await post("/api/setup/company-search", {api_key: document.getElementById("company-search-api-key").value}); const status = document.getElementById("company-search-status"); status.className = `model-health ${value.configured ? "model-health-success" : "model-health-rules"}`; status.textContent = value.configured ? "Brave Search enrichment is configured." : "Brave Search disabled; no-key company research remains active."; document.getElementById("company-search-api-key").value = ""; message("Company research configuration saved.", true); } catch (error) { message(error.message); } });
+  document.querySelectorAll(".model-pick").forEach(button => button.addEventListener("click", () => {
+    document.getElementById("llm-model").value = button.dataset.model;
+    document.getElementById("llm-mode").value = "ollama";
+    updateModelVisibility();
+    message(`Model field set to ${button.dataset.model}. Choose Ollama or Custom above, then test the endpoint.`, true);
+  }));
+  document.querySelectorAll(".model-copy").forEach(button => button.addEventListener("click", async () => {
+    const command = `ollama pull ${button.dataset.model}`;
+    try { await navigator.clipboard.writeText(command); message(`Copied: ${command}`, true); }
+    catch (error) { message(`Could not copy automatically. Run this on your Ollama host: ${command}`); }
+  }));
   document.querySelectorAll(".settings-tab").forEach(tab => tab.addEventListener("click", () => {
     document.querySelectorAll(".settings-tab").forEach(item => item.setAttribute("aria-selected", String(item === tab)));
     document.querySelectorAll(".settings-tab-panel").forEach(panel => { panel.hidden = panel.dataset.settingsPanel !== tab.dataset.settingsTab; });
