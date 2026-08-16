@@ -16,6 +16,7 @@ dependencies = [
   "playwright>=1.54,<2",
   "pycountry>=24.6,<26",
   "python-multipart>=0.0.20,<1",
+  "tldextract>=5.3,<6",
   "uvicorn[standard]>=0.35,<1",
 ]
 
@@ -26,8 +27,10 @@ gmail = [
 ]
 dev = [
   "build>=1.2,<2",
+  "cyclonedx-bom>=7,<8",
   "mypy>=1.17,<2",
-  "pytest>=8.4,<9",
+  "pip-audit>=2.9,<3",
+  "pytest>=9.0.3,<10",
   "pytest-asyncio>=1.1,<2",
   "ruff>=0.12,<1",
 ]

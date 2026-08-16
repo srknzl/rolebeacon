@@ -5,6 +5,7 @@
 <section class="page-heading"><div><p class="eyebrow">MANUAL FALLBACK</p><h1>Import a job</h1><p>This form stores only what you paste. RoleBeacon does not fetch the URL.</p></div></section>
 {% if imported %}<div class="notice">Imported successfully. <a href="/jobs/{{ imported }}">Open job</a></div>{% endif %}
 <form class="form-stack import-form" method="post" action="/api/imports">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <section class="panel">
     <div class="import-grid">
       <label>Job title {{ tip("Copy the role title exactly as shown in the posting.") }}<input name="title" required></label>

@@ -1,4 +1,4 @@
-name: Secret scan
+name: Security checks
 
 on:
   push:
@@ -17,3 +17,17 @@ jobs:
       - uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+      - run: uv sync --frozen --extra dev
+      - run: uv export --frozen --all-extras --no-dev --no-emit-project --output-file requirements-audit.txt
+      - run: uv run pip-audit --requirement requirements-audit.txt
+      - run: uv run cyclonedx-py requirements requirements-audit.txt --output-format JSON --output-file sbom.cdx.json
+      - uses: actions/upload-artifact@v6
+        with:
+          name: rolebeacon-sbom
+          path: sbom.cdx.json

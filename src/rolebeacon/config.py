@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import stat
+import tempfile
+import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -38,12 +40,34 @@ def _read_json(path: Path, default: Any) -> Any:
 
 def _write_private_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    payload = (json.dumps(value, indent=2, ensure_ascii=False) + "\n").encode()
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     try:
-        path.chmod(stat.S_IRUSR | stat.S_IWUSR)
-    except OSError:
-        # Windows ACLs do not map directly to POSIX mode bits.
-        pass
+        fchmod = getattr(os, "fchmod", None)
+        if fchmod is not None:
+            fchmod(descriptor, stat.S_IRUSR | stat.S_IWUSR)
+        with os.fdopen(descriptor, "wb") as temporary:
+            temporary.write(payload)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_name, path)
+        try:
+            os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+        except OSError:
+            pass
+        try:
+            directory = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        except OSError:
+            pass
+    finally:
+        try:
+            Path(temporary_name).unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,7 +182,28 @@ class Settings:
 
     def load_sources(self) -> list[SourceConfig]:
         path = self.source_config_path if self.source_config_path.exists() else self.resource_dir / "config" / "sources.json"
-        return [SourceConfig.from_dict(value) for value in _read_json(path, [])]
+        sources = [SourceConfig.from_dict(value) for value in _read_json(path, [])]
+        setup = _read_json(self.setup_state_path, {})
+        configuration = setup.get("configuration", {}) if isinstance(setup, dict) else {}
+        enabled_ids = configuration.get("enabled_source_ids") if isinstance(configuration, dict) else None
+        if isinstance(enabled_ids, list):
+            enabled = {str(value) for value in enabled_ids}
+            for source in sources:
+                source.enabled = source.id in enabled
+        return sources
+
+    def _commit_source_enablement(self, sources: list[SourceConfig]) -> None:
+        """Keep the setup manifest as the atomic authority for source enablement."""
+        setup = _read_json(self.setup_state_path, {})
+        if not isinstance(setup, dict) or not setup.get("completed"):
+            return
+        configuration = setup.get("configuration")
+        if not isinstance(configuration, dict):
+            configuration = {}
+            setup["configuration"] = configuration
+        configuration["enabled_source_ids"] = sorted(source.id for source in sources if source.enabled)
+        setup["generation"] = uuid.uuid4().hex
+        _write_private_json(self.setup_state_path, setup)
 
     def save_source(self, source: SourceConfig) -> tuple[SourceConfig, bool]:
         """Add or update one source instance without altering other source choices."""
@@ -171,6 +216,7 @@ class Settings:
                 source.id = current.id
                 sources[index] = source
                 _write_private_json(self.source_config_path, [item.to_dict() for item in sources])
+                self._commit_source_enablement(sources)
                 return source, False
         existing_ids = {item.id for item in sources}
         base_id = source.id
@@ -180,6 +226,7 @@ class Settings:
             suffix += 1
         sources.append(source)
         _write_private_json(self.source_config_path, [item.to_dict() for item in sources])
+        self._commit_source_enablement(sources)
         return source, True
 
     def save_sources(self, candidates: list[SourceConfig]) -> tuple[list[SourceConfig], int]:
@@ -215,6 +262,7 @@ class Settings:
             saved.append(candidate)
             added += 1
         _write_private_json(self.source_config_path, [source.to_dict() for source in sources])
+        self._commit_source_enablement(sources)
         return saved, added
 
     def set_source_enabled(self, source_id: str, enabled: bool) -> SourceConfig:
@@ -223,23 +271,46 @@ class Settings:
             if source.id == source_id:
                 source.enabled = enabled
                 _write_private_json(self.source_config_path, [item.to_dict() for item in sources])
+                self._commit_source_enablement(sources)
                 return source
         raise LookupError(f"Source not found: {source_id}")
 
     def load_search_profile(self) -> dict[str, Any]:
+        setup = _read_json(self.setup_state_path, {})
+        configuration = setup.get("configuration", {}) if isinstance(setup, dict) else {}
+        if isinstance(configuration, dict) and isinstance(configuration.get("preferences"), dict):
+            return configuration["preferences"]
         return _read_json(self.search_profile_path, {})
 
     def save_search_profile(self, value: dict[str, Any]) -> Path:
+        setup = _read_json(self.setup_state_path, {})
+        configuration = setup.get("configuration") if isinstance(setup, dict) else None
+        if isinstance(configuration, dict) and isinstance(configuration.get("preferences"), dict):
+            updated_configuration = {**configuration, "preferences": value}
+            _write_private_json(self.setup_state_path, {**setup, "configuration": updated_configuration})
+            return self.setup_state_path
         _write_private_json(self.search_profile_path, value)
         return self.search_profile_path
 
     def load_candidate_profile(self) -> dict[str, Any]:
+        setup = _read_json(self.setup_state_path, {})
+        configuration = setup.get("configuration", {}) if isinstance(setup, dict) else {}
+        if isinstance(configuration, dict) and isinstance(configuration.get("candidate"), dict):
+            return configuration["candidate"]
         return _read_json(self.candidate_profile_path, {})
 
     def load_mobility_profile(self) -> dict[str, Any]:
+        setup = _read_json(self.setup_state_path, {})
+        configuration = setup.get("configuration", {}) if isinstance(setup, dict) else {}
+        if isinstance(configuration, dict) and isinstance(configuration.get("mobility"), dict):
+            return configuration["mobility"]
         return _read_json(self.mobility_profile_path, {})
 
     def load_strategies(self) -> list[dict[str, Any]]:
+        setup = _read_json(self.setup_state_path, {})
+        configuration = setup.get("configuration", {}) if isinstance(setup, dict) else {}
+        if isinstance(configuration, dict) and isinstance(configuration.get("strategies"), list):
+            return configuration["strategies"]
         return _read_json(self.strategies_path, [])
 
     def load_company_registry(self) -> list[dict[str, Any]]:
@@ -288,20 +359,37 @@ class Settings:
         for source in sources:
             source.enabled = source.id in enabled
         _write_private_json(self.source_config_path, [source.to_dict() for source in sources])
-        public_llm = {key: value for key, value in llm.items() if key != "api_key"}
+        public_llm = {key: value for key, value in llm.items() if key not in {"api_key", "api_key_action"}}
+        secrets = _read_json(self.secrets_path, {})
+        action = str(llm.get("api_key_action", "preserve"))
+        if action == "preserve" and str(llm.get("api_key", "")):
+            action = "replace"
+        if action == "replace":
+            secrets["llm_api_key"] = str(llm.get("api_key", ""))
+        elif action == "remove":
+            secrets.pop("llm_api_key", None)
+        _write_private_json(self.secrets_path, secrets)
         _write_private_json(
             self.setup_state_path,
             {
                 "schema_version": "1.0",
+                "generation": uuid.uuid4().hex,
                 "completed": True,
                 "activated": activate,
                 "llm": public_llm,
                 "resume_renderer": "builtin",
+                # This atomically replaced manifest is the commit point for related profile
+                # files. Readers use this generation, so a crash during compatibility-file
+                # writes cannot expose a mixed candidate/mobility/preferences generation.
+                "configuration": {
+                    "candidate": candidate,
+                    "mobility": mobility,
+                    "preferences": preferences,
+                    "strategies": strategies,
+                    "enabled_source_ids": sorted(enabled),
+                },
             },
         )
-        secrets = _read_json(self.secrets_path, {})
-        secrets["llm_api_key"] = llm.get("api_key", "")
-        _write_private_json(self.secrets_path, secrets)
         return replace(
             self,
             setup_complete=True,
@@ -310,5 +398,5 @@ class Settings:
             llm_enabled=str(public_llm.get("mode", "rules")) != "rules",
             llm_base_url=str(public_llm.get("base_url", self.llm_base_url)).rstrip("/"),
             llm_model=str(public_llm.get("model", self.llm_model)),
-            llm_api_key=str(llm.get("api_key", "")),
+            llm_api_key=str(secrets.get("llm_api_key", "")),
         )

@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}{{ error_title }} · RoleBeacon{% endblock %}
+{% block content %}
+<section class="empty-state" role="alert">
+  <h1>{{ error_title }}</h1>
+  <p>{{ error_detail }}</p>
+  <p><a class="button button-primary" href="/">Return to RoleBeacon</a></p>
+</section>
+{% endblock %}

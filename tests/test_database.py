@@ -532,3 +532,122 @@ def test_legacy_job_statuses_migrate_to_the_five_pipeline_states(tmp_path) -> No
 
     for legacy_status, job_id in job_ids.items():
         assert database.get_job(job_id)["status"] == legacy_to_new[legacy_status]
+
+
+def test_eligibility_signal_changes_requeue_but_link_only_changes_do_not(tmp_path) -> None:
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    original = sample_job()
+    original.metadata = {"signals": {"visa_sponsorship": False}}
+    job_id, _ = database.upsert_job(original)
+    updated_signal = sample_job()
+    updated_signal.metadata = {"signals": {"visa_sponsorship": True}}
+
+    _, signal_changed = database.upsert_job(updated_signal)
+    link_update = sample_job()
+    link_update.metadata = updated_signal.metadata
+    link_update.apply_url = "https://apply.example.com/new"
+    _, link_changed = database.upsert_job(link_update)
+
+    assert signal_changed is True
+    assert link_changed is False
+    assert database.get_job(job_id)["apply_url"] == "https://apply.example.com/new"
+
+
+def test_unicode_company_identity_never_collapses_distinct_employers(tmp_path) -> None:
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    first = sample_job()
+    first.company = "株式会社アルファ"
+    first.url = "https://alpha.example/jobs/1"
+    second = sample_job(source="source-b")
+    second.source_job_id = "job-2"
+    second.company = "株式会社ベータ"
+    second.url = "https://beta.example/jobs/1"
+
+    first_id, _ = database.upsert_job(first)
+    second_id, _ = database.upsert_job(second)
+
+    assert first_id != second_id
+    assert company_key(first.company) and company_key(second.company)
+
+
+def test_ambiguous_exact_title_collision_is_queued_not_automatically_merged(tmp_path) -> None:
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    first = sample_job()
+    second = sample_job(source="source-b")
+    second.source_job_id = "opening-2"
+    second.url = "https://example.com/jobs/2"
+
+    first_id, _ = database.upsert_job(first)
+    second_id, _ = database.upsert_job(second)
+
+    assert first_id != second_id
+    candidates = database.list_duplicate_candidates()
+    assert len(candidates) == 1
+    assert {candidates[0]["job_id"], candidates[0]["candidate_job_id"]} == {first_id, second_id}
+
+
+def test_complete_snapshot_deactivates_only_when_no_active_source_remains(tmp_path) -> None:
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    first_id, _ = database.upsert_job(sample_job(source="source-a"))
+    duplicate = sample_job(source="source-b")
+    duplicate.source_job_id = "other-id"
+    database.upsert_job(duplicate)
+
+    database.reconcile_source_snapshot("source-a", set())
+    assert database.get_job(first_id)["active"] == 1
+    database.reconcile_source_snapshot("source-b", set())
+    assert database.get_job(first_id)["active"] == 0
+
+
+def test_literal_fts_search_handles_unmatched_quotes(tmp_path) -> None:
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    database.upsert_job(sample_job(description="Kafka platform"))
+
+    assert database.list_jobs(JobFilters(query='"Kafka'))[0]["company"] == "Example"
+
+
+def test_ineligible_opportunity_score_is_not_lifted_by_company_fit(tmp_path) -> None:
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    job_id, _ = database.upsert_job(sample_job())
+    eligibility = EligibilityResult(
+        status=EligibilityStatus.INELIGIBLE, route="other", sponsorship="unknown", relocation="unknown",
+        location_fit="unknown", reasons=[], risks=["blocked"],
+    )
+    database.save_evaluation(job_id, eligibility, ScoreResult(
+        total=39, dimensions={"role_domain": 20, "stack": 10, "domain_experience": 0, "seniority": 9, "location_authorization": 0, "salary_employment": 0},
+        confidence=1, verdict="reject", evidence=[], gaps=[], provider="rules", model="test",
+    ), "scored")
+    database.save_company_research(
+        name="Example", domain="example.com", profile={}, evidence=[],
+        score={"total": 100, "dimensions": {"all": 100}}, provider="rules", model="test",
+    )
+
+    assert database.get_job(job_id)["opportunity_score"] == 39
+
+
+def test_duplicate_merge_refuses_to_delete_two_sets_of_user_artifacts(tmp_path) -> None:
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    first = sample_job()
+    second = sample_job(source="source-b")
+    second.source_job_id = "opening-2"
+    second.url = "https://example.com/jobs/2"
+    first_id, _ = database.upsert_job(first)
+    second_id, _ = database.upsert_job(second)
+    candidate_id = database.list_duplicate_candidates()[0]["id"]
+    database.save_application(first_id, status="ready", resume_path="first.pdf")
+    database.save_application(second_id, status="ready", cover_letter_path="second.txt")
+
+    try:
+        database.merge_duplicate(candidate_id)
+    except ValueError as error:
+        assert "Both jobs contain application work" in str(error)
+    else:
+        raise AssertionError("merge should require artifact review")
+    assert len(database.list_applications()) == 2

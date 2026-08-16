@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -102,6 +103,16 @@ class CollectionBatch:
     provider_total: int | None = None
     requests_made: int = 1
     attribution: str = ""
+    truncated: bool = False
+
+    def __iter__(self) -> Iterator[CollectedJob]:
+        return iter(self.jobs)
+
+    def __getitem__(self, index: int) -> CollectedJob:
+        return self.jobs[index]
+
+    def __len__(self) -> int:
+        return len(self.jobs)
 
 
 @dataclass(slots=True)

@@ -66,6 +66,14 @@ Run a readiness check at any time:
 uv run rolebeacon doctor
 ```
 
+Headless setup uses the same `SetupPayloadV1` schema and validation service as the web wizard.
+Importing does not activate collection unless `--activate` is explicitly supplied:
+
+```bash
+uv run rolebeacon setup --from-json /path/to/setup.json
+uv run rolebeacon setup --from-json /path/to/setup.json --activate
+```
+
 ## Scoring modes
 
 ### Rules only — recommended starting point
@@ -176,16 +184,23 @@ The deterministic score totals 100 points:
 
 | Dimension | Points |
 | --- | ---: |
-| Role and domain match | 25 |
+| Role and domain match | 30 |
 | Relevant skills | 20 |
-| Domain experience | 20 |
-| Seniority | 10 |
+| Domain experience | 10 |
+| Seniority | 15 |
 | Location and authorization | 15 |
 | Salary and engagement model | 10 |
+
+These values are the defaults. Setup can redistribute the 100 points using non-negative whole-number
+weights, including zero for an advanced opt-out. A weight change produces a new stable scoring-behavior
+version, so stale evaluations are requeued once. Location and authorization points always come from the
+deterministic eligibility result, and eligibility remains a separate hard gate regardless of its weight.
 
 Remote wording such as “EMEA” or “within your country of employment” is not treated as worldwide.
 Unknown eligibility remains visible as a risk. Explicit no-sponsorship, clearance, blocklist, and
 geographic restrictions cannot be overridden by company reputation or a high skills score.
+Ordinary phrases such as “medical clearance” are not security-clearance requirements, and ambiguous
+security-context mentions do not override work authorization on their own.
 
 ### What the optional LLM adds
 
@@ -358,8 +373,6 @@ uv run python -m build
 
 ## Phase 2 roadmap
 
-- User-configurable distribution of the 100 fit-score points, while preserving deterministic
-  eligibility hard gates and rules-only repeatability.
 - A complete web and CLI setup wizard that collects critical matching and mobility facts,
   includes explicit source selection, and requires confirmation before activation. See the
   [product backlog](docs/product-backlog.md) for acceptance criteria.

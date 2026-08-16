@@ -9,7 +9,14 @@ import httpx
 
 from .config import Settings
 from .domain import EligibilityResult, ScoreResult
-from .scoring import DIMENSION_MAXIMUMS, LOCATION_SCORES, SCORING_PROMPT_VERSION, compute_verdict
+from .scoring import (
+    DIMENSION_MAXIMUMS,
+    LOCATION_SCORES,
+    SCORING_PROMPT_VERSION,
+    apply_score_weights,
+    compute_verdict,
+    configured_score_weights,
+)
 
 # location_authorization is deliberately absent: it is a pure lookup from the deterministic
 # eligibility result (LOCATION_SCORES, scoring.py), spliced into dimensions in _normalize_score.
@@ -179,8 +186,8 @@ class LlmClient:
             try:
                 content = await self._chat_content(correction_messages, SCORE_SCHEMA, "job_match_score", 0.1, 900)
                 value = json.loads(content)
-                self._normalize_score(value, eligibility)
-                self._validate_score(value)
+                self._normalize_score(value, eligibility, search_profile)
+                self._validate_score(value, search_profile)
                 self._validate_score_semantics(value, profile_terms)
                 return ScoreResult(
                     total=value["total"],
@@ -338,11 +345,19 @@ class LlmClient:
         return prompt
 
     @staticmethod
-    def _validate_score(value: dict[str, Any]) -> None:
+    def _validate_score(value: dict[str, Any], preferences: dict[str, Any] | None = None) -> None:
+        if set(value) != {"dimensions", "confidence", "evidence", "gaps", "total", "verdict"}:
+            raise ValueError("Score returned unexpected or missing keys")
         dimensions = value["dimensions"]
+        maximums = configured_score_weights(preferences)
+        if set(dimensions) != set(maximums):
+            raise ValueError("Score dimensions do not match the canonical dimension set")
+        for key, maximum in maximums.items():
+            if not 0 <= int(dimensions[key]) <= maximum:
+                raise ValueError(f"{key} is outside its allowed range")
         if sum(int(item) for item in dimensions.values()) != int(value["total"]):
             raise ValueError("Dimension scores do not add up to total")
-        if not 0 <= int(value["total"]) <= 100:
+        if not 0 <= int(value["total"]) <= sum(maximums.values()):
             raise ValueError("Total is outside the allowed range")
         if not 0 <= float(value["confidence"]) <= 1:
             raise ValueError("Confidence is outside the allowed range")
@@ -383,8 +398,11 @@ class LlmClient:
             raise ValueError("; ".join(violations))
 
     @staticmethod
-    def _normalize_score(value: dict[str, Any], eligibility: EligibilityResult) -> None:
+    def _normalize_score(
+        value: dict[str, Any], eligibility: EligibilityResult, preferences: dict[str, Any] | None = None
+    ) -> None:
         value["dimensions"]["location_authorization"] = LOCATION_SCORES[eligibility.status]
+        value["dimensions"] = apply_score_weights(value["dimensions"], preferences or {})
         value["total"] = sum(int(item) for item in value["dimensions"].values())
         confidence = float(value["confidence"])
         value["confidence"] = confidence / 100 if 1 < confidence <= 100 else confidence

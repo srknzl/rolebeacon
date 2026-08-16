@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import sqlite3
+import unicodedata
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -181,7 +182,8 @@ CREATE TABLE IF NOT EXISTS source_state (
     jobs_seen INTEGER NOT NULL DEFAULT 0,
     jobs_changed INTEGER NOT NULL DEFAULT 0,
     next_eligible_sync_at TEXT,
-    last_skipped_reason TEXT NOT NULL DEFAULT ''
+    last_skipped_reason TEXT NOT NULL DEFAULT '',
+    last_truncated INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS source_sync_runs (
@@ -198,7 +200,8 @@ CREATE TABLE IF NOT EXISTS source_sync_runs (
     requests_made INTEGER NOT NULL DEFAULT 0,
     duration_ms INTEGER NOT NULL DEFAULT 0,
     error TEXT NOT NULL DEFAULT '',
-    skip_reason TEXT NOT NULL DEFAULT ''
+    skip_reason TEXT NOT NULL DEFAULT '',
+    truncated INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS duplicate_candidates (
@@ -325,6 +328,8 @@ def job_fingerprint(job: CollectedJob) -> str:
 
 
 def content_hash(job: CollectedJob) -> str:
+    raw_signals = job.metadata.get("signals")
+    signals = raw_signals if isinstance(raw_signals, dict) else {}
     material = json.dumps(
         {
             "title": job.title,
@@ -336,6 +341,7 @@ def content_hash(job: CollectedJob) -> str:
             "salary_min": job.salary_min,
             "salary_max": job.salary_max,
             "salary_currency": job.salary_currency,
+            "eligibility_signals": signals,
         },
         sort_keys=True,
         ensure_ascii=False,
@@ -344,9 +350,10 @@ def content_hash(job: CollectedJob) -> str:
 
 
 def company_key(name: str) -> str:
-    value = name.casefold()
-    value = re.sub(r"\b(?:incorporated|corporation|company|limited|ltd|llc|inc|gmbh|ag|se)\b", "", value)
-    return re.sub(r"[^a-z0-9]+", "", value)
+    value = unicodedata.normalize("NFKC", name).casefold()
+    tokens = re.findall(r"[^\W_]+", value, re.UNICODE)
+    legal_suffixes = {"incorporated", "corporation", "company", "limited", "ltd", "llc", "inc", "gmbh", "ag", "se"}
+    return "".join(token for token in tokens if token not in legal_suffixes)
 
 
 def normalized_title(value: str) -> str:
@@ -363,6 +370,11 @@ def location_bucket(value: str) -> str:
                 return f"remote:{region}"
         return "remote:unknown"
     return re.sub(r"[^a-z0-9]+", " ", text).strip()
+
+
+def _fts_literal_query(value: str) -> str:
+    terms = re.findall(r"[^\W_]+(?:[+#.][^\W_]*)?", unicodedata.normalize("NFKC", value), re.UNICODE)
+    return " AND ".join(f'"{term.replace(chr(34), chr(34) * 2)}"' for term in terms)
 
 
 def _seniority(value: str) -> str:
@@ -408,13 +420,19 @@ class Database:
                 self._ensure_column(connection, "job_sources", name, definition)
             self._ensure_column(connection, "source_state", "next_eligible_sync_at", "TEXT")
             self._ensure_column(connection, "source_state", "last_skipped_reason", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(connection, "source_state", "last_truncated", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(connection, "source_sync_runs", "truncated", "INTEGER NOT NULL DEFAULT 0")
             self._ensure_column(connection, "company_evidence", "etag", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(connection, "company_evidence", "last_modified", "TEXT NOT NULL DEFAULT ''")
-            for row in connection.execute("SELECT id, company, title, location FROM jobs").fetchall():
-                connection.execute(
-                    "UPDATE jobs SET company_key = ?, normalized_title = ?, location_bucket = ? WHERE id = ?",
-                    (company_key(row["company"]), normalized_title(row["title"]), location_bucket(row["location"]), row["id"]),
-                )
+            for row in connection.execute(
+                "SELECT id, company, title, location, company_key, normalized_title, location_bucket FROM jobs"
+            ).fetchall():
+                normalized = (company_key(row["company"]), normalized_title(row["title"]), location_bucket(row["location"]))
+                if normalized != (row["company_key"], row["normalized_title"], row["location_bucket"]):
+                    connection.execute(
+                        "UPDATE jobs SET company_key = ?, normalized_title = ?, location_bucket = ? WHERE id = ?",
+                        (*normalized, row["id"]),
+                    )
             connection.execute(
                 """
                 UPDATE jobs SET primary_source_id = COALESCE(
@@ -451,6 +469,9 @@ class Database:
             connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
 
     def upsert_job(self, job: CollectedJob, source_priority: int = 50) -> tuple[int, bool]:
+        incoming_company_key = company_key(job.company)
+        if not incoming_company_key:
+            raise ValueError("A job must have a non-empty Unicode company identity")
         now = _iso()
         canonical = canonicalize_url(job.url or job.apply_url)
         fingerprint = job_fingerprint(job)
@@ -483,7 +504,7 @@ class Database:
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        canonical, fingerprint, job.title, job.company, company_key(job.company), job.location, job.description,
+                        canonical, fingerprint, job.title, job.company, incoming_company_key, job.location, job.description,
                         job.apply_url or canonical, job.remote_scope, job.employment_type,
                         job.salary_min, job.salary_max, job.salary_currency,
                         _iso(job.published_at) if job.published_at else None,
@@ -521,7 +542,16 @@ class Database:
                         ),
                     )
                 else:
-                    connection.execute("UPDATE jobs SET last_seen_at = ?, active = 1 WHERE id = ?", (now, job_id))
+                    # Links are mutable provider metadata. Refresh them without re-scoring when
+                    # the content and eligibility signals are otherwise unchanged.
+                    if may_replace:
+                        connection.execute(
+                            "UPDATE jobs SET canonical_url = COALESCE(NULLIF(?, ''), canonical_url), "
+                            "apply_url = COALESCE(NULLIF(?, ''), apply_url), last_seen_at = ?, active = 1 WHERE id = ?",
+                            (canonical, job.apply_url or canonical, now, job_id),
+                        )
+                    else:
+                        connection.execute("UPDATE jobs SET last_seen_at = ?, active = 1 WHERE id = ?", (now, job_id))
                     changed = False
 
             connection.execute(
@@ -551,10 +581,43 @@ class Database:
             """,
             (company_key(job.company), normalized_title(job.title), location_bucket(job.location)),
         ).fetchall()
+        new_req = str(job.metadata.get("job_req_id") or job.metadata.get("requisition_id") or "")
         for candidate in candidates:
-            if self._dates_compatible(candidate["published_at"], job.published_at) and not self._requisition_conflict(candidate, job):
+            old = json.loads(candidate["metadata_json"] or "{}")
+            old_req = str(old.get("job_req_id") or old.get("requisition_id") or "")
+            if new_req and old_req == new_req and self._dates_compatible(candidate["published_at"], job.published_at):
                 return candidate
         return None
+
+    def reconcile_source_snapshot(self, source_id: str, seen_source_job_ids: set[str]) -> int:
+        """Atomically deactivate associations absent from a proven complete provider snapshot."""
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                "SELECT source_job_id, job_id FROM job_sources WHERE source_id = ? AND active = 1",
+                (source_id,),
+            ).fetchall()
+            missing = [row for row in rows if str(row["source_job_id"]) not in seen_source_job_ids]
+            for row in missing:
+                connection.execute(
+                    "UPDATE job_sources SET active = 0 WHERE source_id = ? AND source_job_id = ?",
+                    (source_id, row["source_job_id"]),
+                )
+            affected = {int(row["job_id"]) for row in missing}
+            for job_id in affected:
+                active = connection.execute(
+                    "SELECT 1 FROM job_sources WHERE job_id = ? AND active = 1 LIMIT 1", (job_id,)
+                ).fetchone()
+                connection.execute("UPDATE jobs SET active = ? WHERE id = ?", (1 if active else 0, job_id))
+            return len(missing)
+
+    def active_source_job_count(self, source_id: str) -> int:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS count FROM job_sources WHERE source_id = ? AND active = 1",
+                (source_id,),
+            ).fetchone()
+            return int(row["count"]) if row else 0
 
     @staticmethod
     def _dates_compatible(existing: str | None, incoming: datetime | None) -> bool:
@@ -608,7 +671,7 @@ class Database:
                        c.id AS company_id, c.remote_policy AS company_remote_policy,
                        c.sponsorship AS company_sponsorship, c.relocation AS company_relocation,
                        cs.total AS company_score,
-                       CASE WHEN ms.total IS NULL THEN NULL WHEN cs.total IS NULL THEN ms.total
+                       CASE WHEN ms.total IS NULL THEN NULL WHEN cs.total IS NULL OR e.status <> 'eligible' THEN ms.total
                             ELSE CAST(ROUND(ms.total * 0.8 + cs.total * 0.2) AS INTEGER) END AS opportunity_score
                 FROM jobs j
                 LEFT JOIN eligibility e ON e.job_id = j.id
@@ -734,9 +797,11 @@ class Database:
             clauses.append("COALESCE(json_extract(ms.dimensions_json, '$.role_domain'), 30) > 9")
         join_fts = ""
         if filters.query:
-            join_fts = "JOIN jobs_fts f ON f.rowid = j.id"
-            clauses.append("jobs_fts MATCH ?")
-            params.append(filters.query)
+            literal_query = _fts_literal_query(filters.query)
+            if literal_query:
+                join_fts = "JOIN jobs_fts f ON f.rowid = j.id"
+                clauses.append("jobs_fts MATCH ?")
+                params.append(literal_query)
         return clauses, params, join_fts
 
     def count_jobs(self, filters: JobFilters | None = None) -> int:
@@ -773,7 +838,7 @@ class Database:
                    c.id AS company_id, c.remote_policy AS company_remote_policy,
                    c.sponsorship AS company_sponsorship, c.relocation AS company_relocation,
                    cs.total AS company_score,
-                   CASE WHEN ms.total IS NULL THEN NULL WHEN cs.total IS NULL THEN ms.total
+                   CASE WHEN ms.total IS NULL THEN NULL WHEN cs.total IS NULL OR e.status <> 'eligible' THEN ms.total
                         ELSE CAST(ROUND(ms.total * 0.8 + cs.total * 0.2) AS INTEGER) END AS opportunity_score
             FROM jobs j
             {join_fts}
@@ -987,13 +1052,14 @@ class Database:
                 """
                 UPDATE source_sync_runs SET finished_at = ?, status = ?, jobs_seen = ?, jobs_new = ?,
                     jobs_changed = ?, jobs_filtered = ?, duplicates = ?, requests_made = ?,
-                    duration_ms = ?, error = ?, skip_reason = ? WHERE id = ?
+                    duration_ms = ?, error = ?, skip_reason = ?, truncated = ? WHERE id = ?
                 """,
                 (
                     _iso(), status, int(metrics.get("jobs_seen", 0)), int(metrics.get("jobs_new", 0)),
                     int(metrics.get("jobs_changed", 0)), int(metrics.get("jobs_filtered", 0)),
                     int(metrics.get("duplicates", 0)), int(metrics.get("requests_made", 0)), duration_ms,
-                    str(metrics.get("error", ""))[:1000], str(metrics.get("skip_reason", ""))[:500], run_id,
+                    str(metrics.get("error", ""))[:1000], str(metrics.get("skip_reason", ""))[:500],
+                    int(bool(metrics.get("truncated", False))), run_id,
                 ),
             )
 
@@ -1039,20 +1105,21 @@ class Database:
                 "SELECT * FROM api_usage ORDER BY period DESC, provider"
             ).fetchall()]
 
-    def finish_source(self, source_id: str, seen: int, changed: int, cursor: str = "") -> None:
+    def finish_source(self, source_id: str, seen: int, changed: int, cursor: str = "", truncated: bool = False) -> None:
         with self.connect() as connection:
             connection.execute(
                 """
                 INSERT INTO source_state (
-                    source_id, status, last_started_at, last_successful_sync_at, cursor, jobs_seen, jobs_changed
-                ) VALUES (?, 'idle', ?, ?, ?, ?, ?)
+                    source_id, status, last_started_at, last_successful_sync_at, cursor, jobs_seen, jobs_changed,
+                    last_truncated
+                ) VALUES (?, 'idle', ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(source_id) DO UPDATE SET
                     status = 'idle', last_successful_sync_at = excluded.last_successful_sync_at,
                     last_error = '', cursor = excluded.cursor, jobs_seen = excluded.jobs_seen,
                     jobs_changed = excluded.jobs_changed, next_eligible_sync_at = NULL,
-                    last_skipped_reason = ''
+                    last_skipped_reason = '', last_truncated = excluded.last_truncated
                 """,
-                (source_id, _iso(), _iso(), cursor, seen, changed),
+                (source_id, _iso(), _iso(), cursor, seen, changed, int(truncated)),
             )
 
     def fail_source(self, source_id: str, error: str, retry_seconds: int = 900) -> None:
@@ -1117,13 +1184,29 @@ class Database:
             ids = (int(candidate["job_id"]), int(candidate["candidate_job_id"]))
             winner = keep_job_id if keep_job_id in ids else ids[0]
             loser = ids[1] if winner == ids[0] else ids[0]
+            loser_application = connection.execute("SELECT * FROM applications WHERE job_id = ?", (loser,)).fetchone()
+            winner_application = connection.execute("SELECT * FROM applications WHERE job_id = ?", (winner,)).fetchone()
+            artifact_columns = ("resume_path", "cover_letter_path", "packet_path", "notes")
+            if loser_application and winner_application and any(loser_application[key] for key in artifact_columns) and any(
+                winner_application[key] for key in artifact_columns
+            ):
+                raise ValueError("Both jobs contain application work; resolve their artifacts before merging")
             connection.execute("UPDATE job_sources SET job_id = ? WHERE job_id = ?", (winner, loser))
             connection.execute("UPDATE feedback SET job_id = ? WHERE job_id = ?", (winner, loser))
-            loser_application = connection.execute("SELECT * FROM applications WHERE job_id = ?", (loser,)).fetchone()
-            winner_application = connection.execute("SELECT id FROM applications WHERE job_id = ?", (winner,)).fetchone()
             if loser_application and not winner_application:
                 connection.execute("UPDATE applications SET job_id = ? WHERE job_id = ?", (winner, loser))
             elif loser_application:
+                connection.execute(
+                    """
+                    UPDATE applications SET
+                      resume_path = COALESCE(NULLIF(resume_path, ''), ?),
+                      cover_letter_path = COALESCE(NULLIF(cover_letter_path, ''), ?),
+                      packet_path = COALESCE(NULLIF(packet_path, ''), ?),
+                      notes = COALESCE(NULLIF(notes, ''), ?), updated_at = ?
+                    WHERE job_id = ?
+                    """,
+                    (*(loser_application[key] for key in artifact_columns), _iso(), winner),
+                )
                 connection.execute("DELETE FROM applications WHERE job_id = ?", (loser,))
             connection.execute("UPDATE jobs SET active = 0, merged_into_job_id = ? WHERE id = ?", (winner, loser))
             connection.execute(
@@ -1284,6 +1367,20 @@ class Database:
             result["official_evidence_type_count"] = len(official_types)
             result["official_evidence_count"] = official_count
             result["evidence_count"] = len(result["evidence"])
+            salary_known = connection.execute(
+                "SELECT 1 FROM jobs WHERE company_key = ? AND active = 1 AND (salary_min IS NOT NULL OR salary_max IS NOT NULL) LIMIT 1",
+                (result["normalized_name"],),
+            ).fetchone() is not None
+            result["job_texts_sampled"] = sum(
+                item["source_type"] == "current_job_posting" for item in result["evidence"]
+            )
+            result["fact_coverage_factors"] = [
+                {"name": "Remote policy", "state": "unknown" if result["remote_policy"] == "unknown" else "established", "points": 0 if result["remote_policy"] == "unknown" else 2},
+                {"name": "Sponsorship", "state": "unknown" if result["sponsorship"] == "unknown" else "contradicted" if result["sponsorship"] == "unavailable" else "established", "points": 0 if result["sponsorship"] == "unknown" else 2},
+                {"name": "Relocation", "state": "unknown" if result["relocation"] == "unknown" else "contradicted" if result["relocation"] == "unavailable" else "established", "points": 0 if result["relocation"] == "unknown" else 2},
+                {"name": "Compensation", "state": "established" if salary_known else "unknown", "points": 2 if salary_known else 0},
+                {"name": "Engineering signals", "state": "established" if result.get("engineering_signals") else "unknown", "points": 2 if result.get("engineering_signals") else 0},
+            ]
             return result
 
     def list_companies(self) -> list[dict[str, Any]]:

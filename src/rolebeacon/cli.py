@@ -15,7 +15,7 @@ from .database import Database
 from .evaluation import run_model_evaluation, run_rules_evaluation
 from .llm import LlmClient
 from .migration import import_legacy
-from .setup import LocalModelService
+from .setup import LocalModelService, SetupService
 from .sync import SyncService
 
 
@@ -28,6 +28,9 @@ def main() -> None:
     subparsers.add_parser("sync", help="Run one incremental sync")
     subparsers.add_parser("status", help="Show source state and database statistics")
     subparsers.add_parser("doctor", help="Check setup, storage, database, and model readiness")
+    setup = subparsers.add_parser("setup", help="Validate and import SetupPayloadV1 JSON")
+    setup.add_argument("--from-json", type=Path, required=True)
+    setup.add_argument("--activate", action="store_true", help="Explicitly activate collection after import")
     migrate = subparsers.add_parser("migrate", help="Copy data from a legacy Job Radar installation")
     migrate.add_argument("--from", dest="legacy_root", type=Path, required=True)
     model = subparsers.add_parser("model", help="Manage an optional local model runtime")
@@ -56,13 +59,41 @@ def main() -> None:
 
     settings = Settings.load()
     settings.ensure_directories()
+    if args.command == "migrate":
+        print(json.dumps(import_legacy(settings, args.legacy_root), indent=2))
+        return
+    if args.command == "setup":
+        payload = json.loads(args.from_json.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise SystemExit("Setup JSON must be an object")
+        payload["activate"] = bool(args.activate)
+        service = SetupService(settings)
+        service.validate_setup_payload(payload)
+        saved = service.complete(payload)
+        print(
+            json.dumps(
+                {
+                    "setup_complete": saved.setup_complete,
+                    "activated": saved.activated,
+                    "enabled_source_ids": [source.id for source in saved.load_sources() if source.enabled],
+                    "scoring_mode": saved.llm_mode,
+                },
+                indent=2,
+            )
+        )
+        return
+    if args.command == "serve":
+        # Resolve overrides once so uvicorn's listener and the app's local-origin allowlist use
+        # exactly the same host and port.
+        settings = replace(settings, host=args.host or settings.host, port=args.port or settings.port)
+
     database = Database(settings.database_path)
     database.initialize()
 
     if args.command == "serve":
         from .app import create_app
 
-        uvicorn.run(create_app(settings), host=args.host or settings.host, port=args.port or settings.port)
+        uvicorn.run(create_app(settings), host=settings.host, port=settings.port)
     elif args.command == "sync":
         sync_service = SyncService(settings, database, LlmClient(settings))
         sync_result = asyncio.run(sync_service.run())
@@ -104,8 +135,6 @@ def main() -> None:
         print(json.dumps(checks, indent=2))
         if not checks["resources_present"] or not checks["data_directory_writable"]:
             raise SystemExit(1)
-    elif args.command == "migrate":
-        print(json.dumps(import_legacy(settings, args.legacy_root), indent=2))
     elif args.command == "model":
         models = LocalModelService(settings)
         if args.model_command == "doctor":

@@ -21,6 +21,7 @@ from .scoring import (
     evaluate_eligibility,
     extract_experience_requirements,
     rule_score,
+    scoring_behavior_version,
 )
 
 # Different sources hit different providers, so syncing them concurrently is safe - these two
@@ -88,8 +89,12 @@ class SyncService:
         if self._lock.locked():
             return self.status
         async with self._lock:
-            if not self.settings.setup_complete or (not manual and not self.settings.activated):
+            if not self.settings.setup_complete or not self.settings.activated:
                 self.status = SyncStatus(error="setup_required")
+                return self.status
+            process_lock = self._acquire_process_lock()
+            if process_lock is None:
+                self.status = SyncStatus(error="sync_already_running", phase="failed", phase_message="Another process is refreshing")
                 return self.status
             self.database.reset_stale_sync_runs()
             sources = [source for source in self.settings.load_sources() if source.enabled]
@@ -142,6 +147,7 @@ class SyncService:
                     if self.settings.llm_enabled
                     else f"{SCORING_PROMPT_VERSION}:rules"
                 )
+                scoring_version = f"{scoring_version}:weights-{scoring_behavior_version(search_profile)}"
                 # The 1000-job cap exists to bound an LLM-mode sync's wall-clock time; rules scoring
                 # is local and fast enough to clear the whole backlog every run.
                 score_limit = 1000 if self.settings.llm_enabled else 100_000
@@ -192,13 +198,65 @@ class SyncService:
             except Exception as error:
                 self.status.error = f"{type(error).__name__}: {error}"
             finally:
+                self._release_process_lock(process_lock)
                 self.status.running = False
                 self.status.current_source = ""
                 self.status.finished_at = datetime.now(UTC).isoformat()
-                self.status.phase = "failed" if self.status.error else "complete"
-                self.status.phase_message = self.status.error or "Refresh complete"
+                self.status.phase = (
+                    "failed" if self.status.error else "completed_with_errors" if self.status.source_errors else "complete"
+                )
+                self.status.phase_message = self.status.error or (
+                    f"Refresh completed with {self.status.source_errors} source error(s)"
+                    if self.status.source_errors else "Refresh complete"
+                )
                 self.status.progress_percent = 100
             return self.status
+
+    def _acquire_process_lock(self) -> Any | None:
+        path = self.settings.data_dir / "sync.lock"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle = path.open("a+b")
+        try:
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"\0")
+                handle.flush()
+            handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                getattr(msvcrt, "locking")(handle.fileno(), getattr(msvcrt, "LK_NBLCK"), 1)
+            else:
+                import fcntl
+
+                getattr(fcntl, "flock")(
+                    handle.fileno(), getattr(fcntl, "LOCK_EX") | getattr(fcntl, "LOCK_NB")
+                )
+            # Byte zero stays untouched while locked because Windows denies even the lock
+            # owner writes that overlap it. Human-readable ownership metadata starts at byte one.
+            handle.seek(1)
+            handle.truncate()
+            handle.write(f"pid={os.getpid()} started={datetime.now(UTC).isoformat()}\n".encode())
+            handle.flush()
+            return handle
+        except OSError:
+            handle.close()
+            return None
+
+    @staticmethod
+    def _release_process_lock(handle: Any) -> None:
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                handle.seek(0)
+                getattr(msvcrt, "locking")(handle.fileno(), getattr(msvcrt, "LK_UNLCK"), 1)
+            else:
+                import fcntl
+
+                getattr(fcntl, "flock")(handle.fileno(), getattr(fcntl, "LOCK_UN"))
+        finally:
+            handle.close()
 
     async def _sync_one_source(
         self, source: Any, client: Any, search_profile: dict[str, Any], force: bool, changed_ids: set[int]
@@ -217,7 +275,9 @@ class SyncService:
         self.database.start_source(source.id)
         since = self._since(state.get("last_successful_sync_at"))
         try:
-            collector = create_collector(personalize_source(source, search_profile), client)
+            personalized = personalize_source(source, search_profile)
+            personalized.options = {**personalized.options, "data_dir": str(self.settings.data_dir)}
+            collector = create_collector(personalized, client)
             batch = as_batch(await collector.collect(since, state.get("cursor", "")))
             raw_count = len(batch.jobs)
             jobs = deduplicate_source_jobs(batch.jobs)
@@ -241,11 +301,25 @@ class SyncService:
                 if did_change:
                     changed_ids.add(job_id)
                     changed += 1
-            self.database.finish_source(source.id, len(jobs), changed, batch.cursor)
+            active_before_reconciliation = self.database.active_source_job_count(source.id)
+            implausible_empty_snapshot = bool(
+                batch.complete_snapshot and not batch.truncated and not jobs and active_before_reconciliation
+            )
+            if implausible_empty_snapshot:
+                # A successful-but-empty provider response is indistinguishable from a schema
+                # change or transient board failure. Preserve the last known active snapshot and
+                # surface incomplete coverage instead of closing every posting in one run.
+                batch.truncated = True
+            elif batch.complete_snapshot and not batch.truncated:
+                self.database.reconcile_source_snapshot(
+                    source.id, {job.source_job_id for job in jobs}
+                )
+            self.database.finish_source(source.id, len(jobs), changed, batch.cursor, batch.truncated)
             self.database.finish_sync_run(
                 run_id, status="success", started_at=run_started, jobs_seen=len(jobs),
                 jobs_new=created, jobs_changed=changed, jobs_filtered=filtered,
                 duplicates=duplicate_count, requests_made=batch.requests_made,
+                truncated=batch.truncated,
             )
             self.status.jobs_seen += len(jobs) - filtered
             self.status.jobs_changed += changed

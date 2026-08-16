@@ -43,12 +43,20 @@
       <label>Company watchlist {{ tip("Companies to surface more prominently without creating a dedicated strategy.") }}<textarea id="company-watchlist" rows="5"></textarea></label>
       <label>Company blocklist {{ tip("Companies whose roles should be excluded from recommendations.") }}<textarea id="company-blocklist" rows="5"></textarea></label>
       <label>Excluded phrases {{ tip("Phrases that should reject a job, such as a clearance requirement you cannot meet.") }}<textarea id="exclude-phrases" rows="5"></textarea></label>
+      <label>Minimum salary {{ tip("A hard minimum rejects only postings with a comparable stated currency and amount. Missing or different-currency pay remains unknown.") }}<input id="salary-minimum" type="number" min="0" step="1000"></label>
+      <label>Salary currency {{ tip("ISO-style currency code used only for like-for-like comparisons, such as EUR or USD.") }}<input id="salary-currency" maxlength="3" placeholder="EUR"></label>
+      <label>Daily review limit {{ tip("Maximum number of ranked opportunities shown on the dashboard.") }}<input id="daily-review-limit" type="number" min="1" max="100" value="15"></label>
+      <label>Timezone {{ tip("Your saved timezone for scheduling and display. It is preserved when settings are edited.") }}<input id="timezone"></label>
+      <label>Security-clearance policy {{ tip("Optional sensitive local-only fact. RoleBeacon never infers it from nationality, location, or résumé text.") }}<select id="clearance-status"><option value="unknown">Unknown / not configured</option><option value="cannot_meet">I explicitly cannot meet clearance requirements</option><option value="eligible_to_attempt">I may be eligible to undergo vetting</option><option value="has_active_clearance">I have an active clearance (add exact credentials through Setup JSON)</option></select></label>
     </div>
     <div class="checkbox-row">
       <label title="Allows remote roles only when the posting explicitly permits work from your current country or worldwide."><input id="remote-current" type="checkbox" checked> Remote work from my current country</label>
       <label title="Allows relocation strategies for the target countries above; visa support remains an eligibility requirement."><input id="relocate" type="checkbox" checked> Willing to relocate</label>
       <label title="Allows roles offered through an independent-contractor agreement."><input id="contractor" type="checkbox" checked> Contractor arrangements accepted</label>
       <label title="Allows roles where an employer-of-record hires you locally on the company's behalf."><input id="eor" type="checkbox" checked> Employer-of-record arrangements accepted</label>
+      <label title="When enabled, relocation targets outside your work authorizations require explicit visa-sponsorship evidence."><input id="sponsorship-required" type="checkbox" checked> Sponsorship required outside authorized countries</label>
+      <label title="Reject only postings whose comparable stated salary is below your minimum; unknown pay stays unknown."><input id="salary-hard-filter" type="checkbox"> Enforce salary minimum as a hard filter</label>
+      <label title="Optional candidate-owned clearance policy; unknown remains the default."><input id="clearance-vetting" type="checkbox"> Willing to undergo clearance vetting</label>
     </div>
     <details>
       <summary>Plan preferences with an LLM</summary>
@@ -82,14 +90,28 @@
 
   <section class="panel settings-tab-panel" data-settings-panel="search" id="panel-scoring">
     <h2>Scoring engine</h2>
+    <fieldset>
+      <legend>Opportunity-fit point distribution</legend>
+      <p>Distribute all 100 fit points. A larger value makes that factor influence ranking more; zero removes it from fit ranking. Eligibility remains a separate hard deterministic gate, so no distribution can override authorization, sponsorship, clearance, or geographic restrictions.</p>
+      <div class="form-grid score-weight-grid">
+        <label>Role match {{ tip("How closely the job title matches your target roles.") }}<input class="score-weight" id="weight-role-domain" type="number" min="0" max="100" step="1" value="30"></label>
+        <label>Skills {{ tip("Your verified skills that appear in the posting.") }}<input class="score-weight" id="weight-stack" type="number" min="0" max="100" step="1" value="20"></label>
+        <label>Domain experience {{ tip("Preferred problem domains supported by the posting and profile.") }}<input class="score-weight" id="weight-domain-experience" type="number" min="0" max="100" step="1" value="10"></label>
+        <label>Seniority {{ tip("The title's seniority compared with your preferences.") }}<input class="score-weight" id="weight-seniority" type="number" min="0" max="100" step="1" value="15"></label>
+        <label>Location &amp; authorization {{ tip("A deterministic value derived only from eligibility; a model never supplies it.") }}<input class="score-weight" id="weight-location-authorization" type="number" min="0" max="100" step="1" value="15"></label>
+        <label>Salary &amp; employment {{ tip("Comparable stated pay and employment preferences; missing or incomparable pay stays unknown.") }}<input class="score-weight" id="weight-salary-employment" type="number" min="0" max="100" step="1" value="10"></label>
+      </div>
+      <p id="score-weight-total" role="status" aria-live="polite">Total: 100 of 100 points.</p>
+    </fieldset>
     <label>Mode {{ tip("Rules only is a complete mode: collection, eligibility, scoring, and company research all run on deterministic local rules, so the same input always gives the same result, and every claim quotes the source sentence it came from. Cover letters are the one feature it cannot do. An endpoint adds written evidence, written company assessments, and cover letters, but its wording varies between runs. If the endpoint is unreachable RoleBeacon stops and tells you, rather than quietly scoring with rules.") }}<select id="llm-mode"><option value="rules">Rules only — no model required</option><option value="ollama">Ollama on this computer or LAN</option><option value="custom">Custom OpenAI-compatible endpoint</option></select></label>
     <div id="model-details" class="model-details">
+    <p class="safety-note" id="model-disclosure">Job scoring sends summary, current location, experience, projects, skills, education, and search preferences to the configured model. Email, phone, website, GitHub, LinkedIn, and other contact details are excluded.</p>
     <div class="form-grid">
       <label>Endpoint {{ tip("Local Ollama normally uses http://127.0.0.1:11434/v1. A LAN or compatible endpoint can be used instead.") }}<input id="llm-base-url" value="http://127.0.0.1:11434/v1"></label>
       <label>Model {{ tip("The model identifier at the selected endpoint. qwen3:8b is RoleBeacon's shipped default but hasn't been measured on this project's rubric; qwen2.5:14b-instruct-q6_k is the measured recommendation if your hardware fits it - see the table below.") }}<input id="llm-model" value="qwen3:8b"></label>
-      <label>API key {{ tip("Optional for endpoints that require one. It stays in the local permission-restricted secrets file and is never sent to the browser again.") }}<input id="llm-api-key" type="password" autocomplete="off"></label>
+      <label>API key {{ tip("Leave blank to preserve an existing key. Enter a value to replace it, or use Remove saved key.") }}<input id="llm-api-key" type="password" autocomplete="off" placeholder="Leave blank to keep saved key"></label>
     </div>
-    <p><button id="discover-model" class="button" type="button">Detect Ollama</button> <button id="start-model" class="button" type="button">Start Ollama</button> <button id="pull-model" class="button" type="button">Pull selected model</button> <button id="test-model" class="button" type="button">Test endpoint</button></p>
+    <p><button id="discover-model" class="button" type="button">Detect Ollama</button> <button id="start-model" class="button" type="button">Start Ollama</button> <button id="pull-model" class="button" type="button">Pull selected model</button> <button id="test-model" class="button" type="button">Test endpoint</button> <button id="remove-llm-key" class="button button-quiet" type="button">Remove saved key</button></p>
     <div id="model-connection" class="model-health model-health-rules">Rules-only scoring is selected until you choose and test an LLM endpoint.</div>
     <p class="safety-note">Starting Ollama or downloading a model happens only when you click the corresponding button. qwen3:8b is the shipped default but not yet measured on this project's rubric; qwen2.5:14b-instruct-q6_k is the measured recommendation on hardware with enough memory (via <code>rolebeacon evaluate-model</code> - qwen3:14b's reasoning behavior scored worse on this rubric despite being larger).</p>
     <p class="safety-note">Scoring prompts run 2-8k tokens depending on posting length. A self-hosted Ollama needs <code>OLLAMA_CONTEXT_LENGTH</code> set to at least that (RoleBeacon requests 16384 tokens of context per call), or long postings are silently truncated before scoring - this is a setting on your Ollama host, not something RoleBeacon can set for you.</p>
@@ -130,7 +152,7 @@
 
   <section class="panel settings-tab-panel" data-settings-panel="application" hidden>
     <h2>CV & application profile</h2>
-    <p class="muted">These fields do not influence job discovery. They are used only when RoleBeacon generates a résumé or prepares an application.</p>
+    <p class="muted">Collection uses source choices and target-role queries, not contact details. Eligibility uses mobility and explicit posting restrictions. Rules-only fit uses headline, summary, skills, and verified experience/project/education vocabulary. LLM fit may use summary, location, experience, projects, skills, education, and search preferences. Generated résumés and cover letters use the fuller verified profile. Email, phone, website, GitHub, and LinkedIn are application-only and are excluded from scoring prompts.</p>
     <div class="form-grid">
       <label>Email {{ tip("Optional contact detail included in generated application materials. RoleBeacon never submits it automatically.") }}<input id="email" type="email"></label>
       <label>Phone {{ tip("Optional contact detail included in generated application materials. RoleBeacon never submits it automatically.") }}<input id="phone"></label>
@@ -138,7 +160,7 @@
       <label>Website {{ tip("Optional portfolio URL included in generated application materials.") }}<input id="website" type="url"></label>
     </div>
     <details><summary>Detailed candidate JSON</summary>
-      <p>Experience, projects, education, language proficiency, and detailed contact links are stored in CandidateProfileV1.</p>
+      <p>Experience, projects, education, summary, and skills can affect fit scoring and generated materials. Language proficiency is used in generated materials. Detailed contact links are application-only.</p>
       <textarea id="candidate-json" rows="14" placeholder="Paste CandidateProfileV1 JSON"></textarea>
       <p><button id="import-candidate" class="button button-primary" type="button">Import and validate JSON</button> <button id="copy-prompt" class="button" type="button">Copy CV conversion prompt</button> <a href="/api/schemas/candidate-profile" target="_blank">View JSON Schema</a></p>
     </details>
@@ -156,6 +178,9 @@
 </form>
 <script>
   const lines = id => document.getElementById(id).value.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+  let savedRelocationTargets = [];
+  let setupClearancePolicy = {};
+  let removeLlmKey = false;
   let messageTimer;
   const message = (text, ok = false) => {
     const box = document.getElementById("setup-message");
@@ -178,7 +203,8 @@
     if (!match || !(regionCodes().includes(code) || /^[A-Z]{2}$/.test(code))) {
       throw new Error(`Relocation target "${value}" must use CODE:Country, for example DE:Germany or EUROPE:Europe.`);
     }
-    return {country_code: regionCodes().includes(code) ? code : countryCode(code, "Relocation country code"), country_name: match[2].trim(), cities: []};
+    const saved = savedRelocationTargets.find(item => item.country_code === code);
+    return {country_code: regionCodes().includes(code) ? code : countryCode(code, "Relocation country code"), country_name: match[2].trim(), cities: saved?.cities || []};
   });
   const countryPickers = [...document.querySelectorAll(".country-picker")];
   const pickerEntries = picker => {
@@ -265,14 +291,26 @@
     return {...detailed, schema_version: "1.0", name: document.getElementById("name").value, headline: document.getElementById("headline").value, summary: document.getElementById("summary").value,
       contact: {...(detailed.contact || {}), email: document.getElementById("email").value, phone: document.getElementById("phone").value, website: optionalUrl("website")},
       location: {country_code: countryCode(document.getElementById("country-code").value, "Country code"), country_name: document.getElementById("country-name").value, city: document.getElementById("city").value},
-      skills: detailed.skills || {Skills: lines("skills")}, experience: detailed.experience || [], projects: detailed.projects || [], education: detailed.education || [], languages: detailed.languages || []};
+      skills: {Skills: lines("skills")}, experience: detailed.experience || [], projects: detailed.projects || [], education: detailed.education || [], languages: detailed.languages || []};
   };
+  const scoreWeights = () => {
+    const weights = {role_domain: Number(document.getElementById("weight-role-domain").value), stack: Number(document.getElementById("weight-stack").value), domain_experience: Number(document.getElementById("weight-domain-experience").value), seniority: Number(document.getElementById("weight-seniority").value), location_authorization: Number(document.getElementById("weight-location-authorization").value), salary_employment: Number(document.getElementById("weight-salary-employment").value)};
+    if (Object.values(weights).some(value => !Number.isInteger(value) || value < 0) || Object.values(weights).reduce((sum, value) => sum + value, 0) !== 100) throw new Error("Score weights must be non-negative whole numbers totaling 100.");
+    return weights;
+  };
+  const updateScoreWeightTotal = () => {
+    const total = [...document.querySelectorAll(".score-weight")].reduce((sum, input) => sum + (Number(input.value) || 0), 0);
+    const output = document.getElementById("score-weight-total");
+    output.textContent = `Total: ${total} of 100 points.${total === 100 ? " Ready to save." : " Adjust the values before saving."}`;
+    output.classList.toggle("validation-error", total !== 100);
+  };
+  document.querySelectorAll(".score-weight").forEach(input => input.addEventListener("input", updateScoreWeightTotal));
   const payload = () => ({candidate: candidate(), mobility: {schema_version: "1.0", current_country_code: countryCode(document.getElementById("country-code").value, "Country code"),
     work_authorizations: lines("authorizations").map(value => countryCode(value, "Authorized country code")), relocation_targets: relocationTargets(),
     remote_from_current_country: document.getElementById("remote-current").checked, willing_to_relocate: document.getElementById("relocate").checked,
-    contractor_allowed: document.getElementById("contractor").checked, eor_allowed: document.getElementById("eor").checked, sponsorship_required_outside_authorized_countries: true, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone},
-    preferences: {schema_version: "1.0", target_roles: lines("target-roles"), preferred_skills: lines("preferred-skills"), preferred_domains: lines("preferred-domains"), preferred_seniority: lines("preferred-seniority"), priority_companies: lines("priority-companies"), company_watchlist: lines("company-watchlist"), company_blocklist: lines("company-blocklist"), exclude_phrases: lines("exclude-phrases"), salary: {minimum: null, currency: "", hard_filter: false}, daily_review_limit: 15},
-    enabled_source_ids: [...document.querySelectorAll(".source-choice:checked")].map(item => item.value), llm: {mode: document.getElementById("llm-mode").value, base_url: document.getElementById("llm-base-url").value, model: document.getElementById("llm-model").value, api_key: document.getElementById("llm-api-key").value}, activate: document.getElementById("activate").checked});
+    contractor_allowed: document.getElementById("contractor").checked, eor_allowed: document.getElementById("eor").checked, sponsorship_required_outside_authorized_countries: document.getElementById("sponsorship-required").checked, timezone: document.getElementById("timezone").value, clearance_policy: {status: document.getElementById("clearance-status").value, willing_to_undergo_vetting: document.getElementById("clearance-status").value === "unknown" && !document.getElementById("clearance-vetting").checked ? null : document.getElementById("clearance-vetting").checked, explicitly_excluded_requirements: setupClearancePolicy.explicitly_excluded_requirements || [], credentials: setupClearancePolicy.credentials || []}},
+    preferences: {schema_version: "1.0", target_roles: lines("target-roles"), preferred_skills: lines("preferred-skills"), preferred_domains: lines("preferred-domains"), preferred_seniority: lines("preferred-seniority"), priority_companies: lines("priority-companies"), company_watchlist: lines("company-watchlist"), company_blocklist: lines("company-blocklist"), exclude_phrases: lines("exclude-phrases"), salary: {minimum: document.getElementById("salary-minimum").value ? Number(document.getElementById("salary-minimum").value) : null, currency: document.getElementById("salary-currency").value.trim().toUpperCase(), hard_filter: document.getElementById("salary-hard-filter").checked}, daily_review_limit: Number(document.getElementById("daily-review-limit").value), score_weights: scoreWeights()},
+    enabled_source_ids: [...document.querySelectorAll(".source-choice:checked")].map(item => item.value), llm: {mode: document.getElementById("llm-mode").value, base_url: document.getElementById("llm-base-url").value, model: document.getElementById("llm-model").value, api_key: document.getElementById("llm-api-key").value, api_key_action: removeLlmKey ? "remove" : document.getElementById("llm-api-key").value ? "replace" : "preserve"}, activate: document.getElementById("activate").checked});
   document.getElementById("copy-prompt").addEventListener("click", async () => { await navigator.clipboard.writeText({{ schemas.cv_conversion_prompt|tojson }} + "\nJSON SCHEMA:\n" + JSON.stringify({{ schemas.candidate|tojson }}, null, 2)); message("Conversion prompt copied.", true); });
   const applyImportedCandidate = () => {
       const imported = JSON.parse(document.getElementById("candidate-json").value.trim());
@@ -291,14 +329,20 @@
   };
   const setLines = (id, values = []) => { document.getElementById(id).value = values.join("\n"); };
   const hydrateSetup = setup => {
+    setupClearancePolicy = setup.mobility.clearance_policy || {};
     document.getElementById("candidate-json").value = JSON.stringify(setup.candidate, null, 2);
     applyImportedCandidate();
     setLines("authorizations", setup.mobility.work_authorizations);
-    setLines("relocation-targets", (setup.mobility.relocation_targets || []).map(item => `${item.country_code}:${item.country_name}`));
+    savedRelocationTargets = setup.mobility.relocation_targets || [];
+    setLines("relocation-targets", savedRelocationTargets.map(item => `${item.country_code}:${item.country_name}`));
     document.getElementById("remote-current").checked = setup.mobility.remote_from_current_country;
     document.getElementById("relocate").checked = setup.mobility.willing_to_relocate;
     document.getElementById("contractor").checked = setup.mobility.contractor_allowed;
     document.getElementById("eor").checked = setup.mobility.eor_allowed;
+    document.getElementById("sponsorship-required").checked = setup.mobility.sponsorship_required_outside_authorized_countries;
+    document.getElementById("timezone").value = setup.mobility.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+    document.getElementById("clearance-status").value = setupClearancePolicy.status || "unknown";
+    document.getElementById("clearance-vetting").checked = setupClearancePolicy.willing_to_undergo_vetting === true;
     setLines("target-roles", setup.preferences.target_roles);
     setLines("preferred-skills", setup.preferences.preferred_skills);
     setLines("preferred-domains", setup.preferences.preferred_domains);
@@ -307,6 +351,18 @@
     setLines("company-watchlist", setup.preferences.company_watchlist);
     setLines("company-blocklist", setup.preferences.company_blocklist);
     setLines("exclude-phrases", setup.preferences.exclude_phrases);
+    document.getElementById("salary-minimum").value = setup.preferences.salary?.minimum ?? "";
+    document.getElementById("salary-currency").value = setup.preferences.salary?.currency || "";
+    document.getElementById("salary-hard-filter").checked = Boolean(setup.preferences.salary?.hard_filter);
+    document.getElementById("daily-review-limit").value = setup.preferences.daily_review_limit || 15;
+    const weights = setup.preferences.score_weights || {role_domain: 30, stack: 20, domain_experience: 10, seniority: 15, location_authorization: 15, salary_employment: 10};
+    document.getElementById("weight-role-domain").value = weights.role_domain;
+    document.getElementById("weight-stack").value = weights.stack;
+    document.getElementById("weight-domain-experience").value = weights.domain_experience;
+    document.getElementById("weight-seniority").value = weights.seniority;
+    document.getElementById("weight-location-authorization").value = weights.location_authorization;
+    document.getElementById("weight-salary-employment").value = weights.salary_employment;
+    updateScoreWeightTotal();
     document.querySelectorAll(".source-choice").forEach(item => {
       const ids = item.dataset.sourceIds ? item.dataset.sourceIds.split(",").filter(Boolean) : [item.value];
       item.checked = ids.some(id => (setup.enabled_source_ids || []).includes(id));
@@ -315,6 +371,8 @@
     document.getElementById("llm-base-url").value = setup.llm?.base_url || "http://127.0.0.1:11434/v1";
     document.getElementById("llm-model").value = setup.llm?.model || "qwen3:8b";
     document.getElementById("llm-api-key").value = setup.llm?.api_key || "";
+    document.getElementById("llm-api-key").placeholder = setup.llm?.api_key_configured ? "Saved key configured — leave blank to keep it" : "Optional API key";
+    removeLlmKey = false;
     document.getElementById("activate").checked = Boolean(setup.activate);
     syncCountryPickers();
   };
@@ -382,6 +440,7 @@
   document.getElementById("start-model").addEventListener("click", async () => { try { const value = await post("/api/setup/model/start"); message(`Ollama started as process ${value.pid}.`, true); } catch (error) { message(error.message); } });
   document.getElementById("pull-model").addEventListener("click", async () => { try { message("Downloading the model. Keep this page open…"); const value = await post("/api/setup/model/pull", {model: document.getElementById("llm-model").value}); message(`Downloaded ${value.model}.`, true); } catch (error) { message(error.message); } });
   document.getElementById("test-model").addEventListener("click", async () => { try { const data = modelConfig(); const value = await post("/api/setup/model/test", data); const text = value.ok ? `Connected to ${data.base_url}. ${value.model_found ? `Model ${data.model} is ready.` : `The endpoint did not list ${data.model}.`}` : value.error; showModelConnection(text, value.ok && value.model_found ? "success" : "warning"); message(text, value.ok && value.model_found); } catch (error) { showModelConnection(error.message, "warning"); message(error.message); } });
+  document.getElementById("remove-llm-key").addEventListener("click", () => { removeLlmKey = true; document.getElementById("llm-api-key").value = ""; document.getElementById("llm-api-key").placeholder = "Saved key will be removed when you save"; message("The saved model API key will be removed when you save preferences.", true); });
   document.getElementById("save-company-search").addEventListener("click", async () => { try { const value = await post("/api/setup/company-search", {api_key: document.getElementById("company-search-api-key").value}); const status = document.getElementById("company-search-status"); status.className = `model-health ${value.configured ? "model-health-success" : "model-health-rules"}`; status.textContent = value.configured ? "Brave Search enrichment is configured." : "Brave Search disabled; no-key company research remains active."; document.getElementById("company-search-api-key").value = ""; message("Company research configuration saved.", true); } catch (error) { message(error.message); } });
   document.querySelectorAll(".model-pick").forEach(button => button.addEventListener("click", () => {
     document.getElementById("llm-model").value = button.dataset.model;

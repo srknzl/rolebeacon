@@ -11,6 +11,12 @@ Use GitHub's private vulnerability reporting feature on the RoleBeacon repositor
 affected version, reproduction steps, impact, and any suggested mitigation. Do not open a public
 issue until a fix and disclosure timeline have been agreed with the maintainer.
 
+Maintainers triage dependency alerts and private reports as release-blocking when they affect a
+reachable RoleBeacon path. Every pull request audits the locked runtime dependency set, and CI
+publishes a CycloneDX SBOM artifact. Dependency updates must regenerate `uv.lock`, pass the audit,
+and include normal regression coverage; a temporary exception requires a documented reachability
+assessment and an upstream remediation plan.
+
 ## Security boundaries
 
 - RoleBeacon binds to localhost by default.

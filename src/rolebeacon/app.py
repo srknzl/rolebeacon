@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import secrets
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request, status
@@ -20,7 +22,7 @@ from .database import JOB_SORTS, PIPELINE_COLUMNS, Database, JobFilters, company
 from .domain import CollectedJob, JobStatus, SourceConfig
 from .llm import LlmClient, LlmResponseRejected, LlmUnavailable
 from .profile import country_catalog, relocation_region_options
-from .scoring import DIMENSION_META, INELIGIBLE_SCORE_CAP, location_requirement
+from .scoring import INELIGIBLE_SCORE_CAP, dimension_metadata, location_requirement
 from .services import ArtifactService, ProfileValidationError, cover_letter_recommendation
 from .setup import LocalModelService, SetupService
 from .source_catalog import SourceCatalog, SourceCatalogError
@@ -43,6 +45,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     source_discovery = SourceDiscoveryService()
     source_catalog = SourceCatalog(app_settings)
     local_models = LocalModelService(app_settings)
+    csrf_token = secrets.token_urlsafe(32)
     templates = Jinja2Templates(directory=app_settings.resource_dir / "templates")
     templates.env.filters["repair_text"] = repair_text
     templates.env.filters["description_blocks"] = description_blocks
@@ -69,19 +72,46 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.source_discovery = source_discovery
     app.state.source_catalog = source_catalog
 
+    def guard_rejection(request: Request, detail: str) -> Response:
+        if _wants_html(request):
+            return templates.TemplateResponse(
+                request,
+                "error.html",
+                page_context(request, error_title="Request blocked", error_detail=detail),
+                status_code=403,
+            )
+        return JSONResponse({"detail": detail}, status_code=403)
+
     @app.middleware("http")
     async def local_origin_guard(request: Request, call_next: Any) -> Response:
-        host = request.url.hostname or ""
-        allowed_hosts = {"127.0.0.1", "localhost", "::1", "testserver", app_settings.host}
-        if host not in allowed_hosts:
-            return JSONResponse({"detail": "RoleBeacon accepts requests only from its configured local host"}, status_code=403)
+        configured_hosts = {app_settings.host}
+        if app_settings.host in {"127.0.0.1", "localhost", "::1"}:
+            configured_hosts.update({"127.0.0.1", "localhost", "::1"})
+        allowed_origins = {f"http://{host}:{app_settings.port}" for host in configured_hosts if host != "::1"}
+        allowed_origins.add(f"http://[::1]:{app_settings.port}")
+        # Starlette's in-process TestClient uses this synthetic peer and origin. A network
+        # request cannot acquire that ASGI client identity, so the test-only origin never enters
+        # the production allowlist merely because its Host header says "testserver".
+        if request.client and request.client.host == "testclient":
+            allowed_origins.add("http://testserver")
+        request_origin = f"{request.url.scheme}://{request.url.netloc}"
+        if request_origin not in allowed_origins:
+            return guard_rejection(request, "RoleBeacon accepts requests only from its configured local host")
         if request.method not in {"GET", "HEAD", "OPTIONS"}:
             origin = request.headers.get("origin")
-            if origin:
-                from urllib.parse import urlsplit
-
-                if (urlsplit(origin).hostname or "") not in allowed_hosts:
-                    return JSONResponse({"detail": "Cross-origin state changes are not allowed"}, status_code=403)
+            if origin and origin.rstrip("/") not in allowed_origins:
+                return guard_rejection(request, "Cross-origin state changes are not allowed")
+            supplied_token = request.headers.get("x-csrf-token", "")
+            if not supplied_token and "application/x-www-form-urlencoded" in request.headers.get("content-type", ""):
+                # Reading body() caches the bytes for the endpoint's later request.form() call.
+                # Native browser forms cannot set headers, so their server-rendered hidden field
+                # is the no-JavaScript equivalent of the fetch wrapper's X-CSRF-Token header.
+                form_values = parse_qs((await request.body()).decode("utf-8", errors="replace"))
+                supplied_token = form_values.get("csrf_token", [""])[-1]
+            if (origin or request.headers.get("sec-fetch-site")) and not secrets.compare_digest(
+                supplied_token, csrf_token
+            ):
+                return guard_rejection(request, "A valid CSRF token is required")
         return await call_next(request)
 
     def page_context(request: Request, **values: Any) -> dict[str, Any]:
@@ -95,6 +125,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "llm_enabled": app_settings.llm_enabled,
             "llm_model": app_settings.llm_model,
             "ineligible_score_cap": INELIGIBLE_SCORE_CAP,
+            "csrf_token": csrf_token,
             **values,
         }
 
@@ -108,7 +139,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             page_context(
                 request,
                 stats=database.dashboard_stats(),
-                jobs=database.list_jobs(JobFilters(min_score=65, exclude_ineligible=True), limit=15),
+                jobs=database.list_jobs(
+                    JobFilters(min_score=65, exclude_ineligible=True),
+                    limit=int(app_settings.load_search_profile().get("daily_review_limit", 15)),
+                ),
                 sources=database.list_sources(),
             ),
         )
@@ -180,7 +214,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 cover_letter_recommended=recommended,
                 cover_letter_reason=recommendation_reason,
                 cover_letter_text=cover_letter_text,
-                dimension_meta=DIMENSION_META,
+                dimension_meta=dimension_metadata(app_settings.load_search_profile()),
             ),
         )
 
@@ -382,8 +416,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/sync", status_code=status.HTTP_202_ACCEPTED)
     async def trigger_sync(background_tasks: BackgroundTasks) -> dict[str, Any]:
-        if not app_settings.setup_complete:
-            raise HTTPException(status_code=409, detail="Complete setup before syncing")
+        if not app_settings.setup_complete or not app_settings.activated:
+            raise HTTPException(status_code=409, detail="Complete and activate setup before syncing")
         if sync_service.status.running:
             return {"accepted": False, "reason": "already_running", "status": sync_service.status.to_dict()}
         background_tasks.add_task(sync_service.run, False, True)
@@ -568,6 +602,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/sources/discover")
     async def discover_source(request: Request) -> dict[str, Any]:
+        if not app_settings.activated:
+            raise HTTPException(status_code=409, detail="Activate setup before contacting a source for preview")
         payload = await _payload(request)
         try:
             preview = await source_discovery.preview(
@@ -587,6 +623,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/sources")
     async def add_source(request: Request) -> Response:
         payload = await _payload(request)
+        if "enabled" in payload and not isinstance(payload["enabled"], bool):
+            raise HTTPException(status_code=422, detail="enabled must be true or false")
         try:
             source = detect_source(str(payload.get("careers_url", "")), str(payload.get("company", "")))
         except SourceDiscoveryError as error:
@@ -623,11 +661,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/duplicates/{candidate_id}/merge")
     async def merge_duplicate(candidate_id: int, request: Request) -> Response:
         payload = await _payload(request)
-        keep_job_id = int(payload["keep_job_id"]) if payload.get("keep_job_id") else None
+        try:
+            keep_job_id = int(payload["keep_job_id"]) if payload.get("keep_job_id") is not None else None
+        except (TypeError, ValueError) as error:
+            raise HTTPException(status_code=422, detail="keep_job_id must be an integer") from error
         try:
             winner = database.merge_duplicate(candidate_id, keep_job_id)
         except LookupError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
         if _wants_html(request):
             return RedirectResponse("/duplicates", status_code=303)
         return JSONResponse({"candidate_id": candidate_id, "status": "merged", "job_id": winner})
@@ -642,6 +685,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         missing = [key for key in ("title", "company", "url") if not values.get(key)]
         if missing:
             raise HTTPException(status_code=422, detail=f"Missing required fields: {', '.join(missing)}")
+        parsed_url = urlsplit(str(values["url"]))
+        if parsed_url.scheme not in {"http", "https"} or not parsed_url.hostname:
+            raise HTTPException(status_code=422, detail="Job URLs must use http or https")
         source_job_id = hashlib.sha256(str(values["url"]).encode()).hexdigest()
         job_id, _ = database.upsert_job(
             CollectedJob(
@@ -833,8 +879,16 @@ def _active_filter_chips(params: Any, sources: list[SourceConfig] | None = None)
 async def _payload(request: Request) -> dict[str, Any]:
     content_type = request.headers.get("content-type", "")
     if "application/json" in content_type:
-        return await request.json()
-    return dict(await request.form())
+        try:
+            value = await request.json()
+        except json.JSONDecodeError as error:
+            raise HTTPException(status_code=422, detail="Request body must be valid JSON") from error
+        if not isinstance(value, dict):
+            raise HTTPException(status_code=422, detail="Request body must be a JSON object")
+        return value
+    value = dict(await request.form())
+    value.pop("csrf_token", None)
+    return value
 
 
 def _wants_html(request: Request) -> bool:

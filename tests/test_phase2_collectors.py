@@ -9,9 +9,11 @@ import pytest
 from rolebeacon.collectors import (
     ArbeitnowCollector,
     AshbyCollector,
+    GreenhouseCollector,
     HimalayasCollector,
     JobicyCollector,
     PersonioCollector,
+    RemoteOkCollector,
     RemotiveCollector,
     SmartRecruitersCollector,
     description_blocks,
@@ -59,6 +61,26 @@ async def test_full_board_collector_keeps_current_jobs_without_provider_timestam
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("collector_type", "payload"),
+    [
+        (GreenhouseCollector, {"unexpected": []}),
+        (AshbyCollector, {"unexpected": []}),
+    ],
+)
+async def test_complete_json_collectors_reject_missing_job_arrays(collector_type, payload) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    config = SourceConfig.from_dict(
+        {"id": "board", "kind": "greenhouse", "name": "Example", "slug": "example"}
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ValueError, match="invalid"):
+            await collector_type(config, client).collect(datetime.now(UTC))
+
+
+@pytest.mark.asyncio
 async def test_himalayas_placeholder_company_name_falls_back_to_company_slug() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"jobs": [{
@@ -72,6 +94,22 @@ async def test_himalayas_placeholder_company_name_falls_back_to_company_slug() -
         jobs = await HimalayasCollector(config, client).collect(datetime.now(UTC) - timedelta(days=1))
 
     assert jobs[0].company == "actual-company"
+
+
+@pytest.mark.asyncio
+async def test_missing_remote_geography_remains_unknown_not_worldwide() -> None:
+    def remote_ok_handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[{}, {
+            "id": "1", "position": "Backend Engineer", "company": "Example",
+            "description": "Build systems", "url": "https://example.test/1",
+        }])
+
+    config = SourceConfig.from_dict({"id": "remoteok", "kind": "remoteok", "name": "Remote OK"})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(remote_ok_handler)) as client:
+        jobs = await RemoteOkCollector(config, client).collect(datetime(2020, 1, 1, tzinfo=UTC))
+
+    assert jobs[0].location == ""
+    assert jobs[0].remote_scope == ""
 
 
 @pytest.mark.asyncio

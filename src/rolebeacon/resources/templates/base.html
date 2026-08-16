@@ -6,6 +6,7 @@
     <title>{% block title %}RoleBeacon{% endblock %}</title>
     <link rel="icon" href="{{ url_for('static', path='favicon.svg') }}" type="image/svg+xml">
     <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+    <meta name="csrf-token" content="{{ csrf_token }}">
   </head>
   <body>
     <header class="topbar">
@@ -60,6 +61,18 @@
       {% block content %}{% endblock %}
     </main>
     <script>
+      const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || "";
+      const roleBeaconFetch = window.fetch.bind(window);
+      window.fetch = (input, init = {}) => {
+        const url = new URL(typeof input === "string" ? input : input.url, window.location.href);
+        const method = String(init.method || (typeof input !== "string" && input.method) || "GET").toUpperCase();
+        if (url.origin === window.location.origin && !["GET", "HEAD", "OPTIONS"].includes(method)) {
+          const headers = new Headers(init.headers || (typeof input !== "string" ? input.headers : undefined));
+          headers.set("X-CSRF-Token", csrfToken);
+          init = {...init, headers};
+        }
+        return roleBeaconFetch(input, init);
+      };
       const navToggle = document.getElementById("nav-toggle");
       const primaryNav = document.getElementById("primary-nav");
       navToggle?.addEventListener("click", () => {
@@ -101,6 +114,8 @@
       function showSyncPanel() { syncPanel.hidden = false; }
       function stepState(phase, step) {
         if (phase === "failed") return step === "complete" ? "error" : "complete";
+        if (phase === "completed_with_errors") return step === "complete" ? "error" : "complete";
+        if (phase === "complete") return "complete";
         const current = phaseOrder.indexOf(phase);
         const index = phaseOrder.indexOf(step);
         return current > index ? "complete" : current === index ? "active" : "pending";
@@ -109,7 +124,8 @@
         syncStrip.classList.toggle("is-running", state.running);
         syncLabel.textContent = state.running
           ? `Syncing ${state.current_source || state.phase_message || "jobs"} · ${state.sources_completed}/${state.sources_total}`
-          : state.error ? `Last sync error: ${state.error}` : "Ready";
+          : state.error ? `Last sync error: ${state.error}`
+          : state.phase === "completed_with_errors" ? `Refresh finished with ${state.source_errors} source error(s)` : "Ready";
         if (syncButton) syncButton.disabled = state.running;
         if (state.running) showSyncPanel();
         syncPhase.textContent = state.phase_message || "Ready";
