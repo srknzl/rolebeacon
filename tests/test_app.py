@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import replace
 from datetime import UTC, datetime
 from time import sleep
@@ -206,6 +207,47 @@ def test_llm_score_total_is_derived_from_dimensions(tmp_path) -> None:
     assert value["total"] == 73
     assert value["confidence"] == 0.8
     assert value["verdict"] == "review"
+
+
+def test_custom_score_weights_normalize_and_validate_against_the_same_distribution() -> None:
+    preferences = {
+        "score_weights": {
+            "role_domain": 35,
+            "stack": 20,
+            "domain_experience": 10,
+            "seniority": 15,
+            "location_authorization": 15,
+            "salary_employment": 5,
+        }
+    }
+    value = {
+        "dimensions": {
+            "role_domain": 30,
+            "stack": 20,
+            "domain_experience": 10,
+            "seniority": 15,
+            "salary_employment": 10,
+        },
+        "confidence": 0.8,
+        "evidence": [],
+        "gaps": [],
+    }
+    eligibility = EligibilityResult(
+        status=EligibilityStatus.ELIGIBLE,
+        route="authorized-tr",
+        sponsorship="unknown",
+        relocation="unknown",
+        location_fit="authorized:TR",
+        reasons=[],
+        risks=[],
+    )
+
+    LlmClient._normalize_score(value, eligibility, preferences)
+    LlmClient._validate_score(value, preferences)
+
+    assert value["dimensions"]["role_domain"] == 35
+    assert value["dimensions"]["salary_employment"] == 5
+    assert value["total"] == 100
 
 
 def test_llm_rubric_uses_full_point_ranges_and_positive_evidence() -> None:
@@ -1063,6 +1105,53 @@ def test_manual_import_does_not_fetch_and_creates_job(tmp_path) -> None:
 
     assert response.status_code == 201
     assert app.state.database.get_job(response.json()["job_id"])["company"] == "Example"
+
+
+def test_native_form_csrf_hidden_field_succeeds_without_header(tmp_path) -> None:
+    app = create_app(configured_settings(tmp_path))
+
+    with TestClient(app) as client:
+        page = client.get("/imports")
+        token_match = re.search(r'name="csrf_token" value="([^"]+)"', page.text)
+        assert token_match is not None
+        response = client.post(
+            "/api/imports",
+            data={
+                "csrf_token": token_match.group(1),
+                "title": "Senior Platform Engineer",
+                "company": "Example",
+                "url": "https://example.test/jobs/form-import",
+            },
+            headers={"Sec-Fetch-Site": "same-origin", "Accept": "text/html"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert app.state.database.list_jobs()[0]["title"] == "Senior Platform Engineer"
+
+
+def test_browser_csrf_rejection_renders_html_error_page(tmp_path) -> None:
+    with TestClient(create_app(configured_settings(tmp_path))) as client:
+        response = client.post(
+            "/api/imports",
+            data={"title": "Unsaved", "company": "Example", "url": "https://example.test/jobs/unsaved"},
+            headers={"Sec-Fetch-Site": "same-origin", "Accept": "text/html"},
+        )
+
+    assert response.status_code == 403
+    assert response.headers["content-type"].startswith("text/html")
+    assert "A valid CSRF token is required" in response.text
+    assert not response.text.startswith("{")
+
+
+def test_synthetic_testserver_origin_is_allowed_only_for_the_test_client_peer(tmp_path) -> None:
+    app = create_app(configured_settings(tmp_path))
+
+    with TestClient(app, client=("network-peer", 50000)) as client:
+        response = client.get("/", headers={"Accept": "text/html"})
+
+    assert response.status_code == 403
+    assert "configured local host" in response.text
 
 
 def test_company_research_can_be_refreshed_from_the_company_profile(tmp_path, monkeypatch) -> None:

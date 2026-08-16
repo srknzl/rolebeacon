@@ -611,6 +611,14 @@ class Database:
                 connection.execute("UPDATE jobs SET active = ? WHERE id = ?", (1 if active else 0, job_id))
             return len(missing)
 
+    def active_source_job_count(self, source_id: str) -> int:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS count FROM job_sources WHERE source_id = ? AND active = 1",
+                (source_id,),
+            ).fetchone()
+            return int(row["count"]) if row else 0
+
     @staticmethod
     def _dates_compatible(existing: str | None, incoming: datetime | None) -> bool:
         if not existing or not incoming:

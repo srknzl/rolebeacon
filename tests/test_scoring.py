@@ -161,6 +161,7 @@ def test_location_requirement_renders_a_plain_sentence_per_prefix() -> None:
     assert "already authorized" in location_requirement("authorized:DE")
     assert "scoped to United States" in location_requirement("remote-scoped:US")
     assert location_requirement("") == "Location requirement could not be determined from the posting."
+    assert "visa sponsorship is evaluated separately" in location_requirement("relocation:DE")
 
 
 def test_country_scoped_remote_is_not_assumed_worldwide() -> None:
@@ -199,11 +200,26 @@ def test_company_blocklist_uses_identity_equality_not_substrings() -> None:
 
     metabase = evaluate_eligibility(job(company="Metabase"), preferences, MOBILITY.model_dump(mode="json"), STRATEGIES)
     google = evaluate_eligibility(job(company="Google"), preferences, MOBILITY.model_dump(mode="json"), STRATEGIES)
-    meta = evaluate_eligibility(job(company="Meta"), preferences, MOBILITY.model_dump(mode="json"), STRATEGIES)
+    meta = evaluate_eligibility(job(company="Meta Platforms, Inc."), preferences, MOBILITY.model_dump(mode="json"), STRATEGIES)
 
     assert metabase.status != EligibilityStatus.INELIGIBLE
     assert google.status != EligibilityStatus.INELIGIBLE
     assert meta.status == EligibilityStatus.INELIGIBLE
+
+
+@pytest.mark.parametrize("phrase", ["medical clearance", "invoice clearance", "clearance sale"])
+def test_non_security_clearance_wording_does_not_override_local_authorization(phrase: str) -> None:
+    value = job(
+        location="Istanbul, Türkiye",
+        remote_scope="",
+        description=f"New hires complete a {phrase} before onboarding.",
+    )
+
+    result = evaluate(value)
+
+    assert result.status == EligibilityStatus.ELIGIBLE
+    assert result.location_fit == "authorized:TR"
+    assert any("work authorization" in reason for reason in result.reasons)
 
 
 def test_country_aliases_match_turkey_and_uk_without_short_code_substrings() -> None:
@@ -262,7 +278,7 @@ def test_clearance_classifier_distinguishes_requirement_kinds_and_preserves_evid
         "A TS/SCI clearance is preferred but not required.": "preferred",
         "You must have the ability to obtain a security clearance.": "ability_to_obtain",
         "An active top-secret clearance is required.": "active_required",
-        "We build tools used in clearance workflows.": "ambiguous",
+        "We build tools used in security clearance workflows.": "ambiguous",
     }
     for evidence, expected in cases.items():
         result = clearance_requirements(evidence)

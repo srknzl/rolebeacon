@@ -9,6 +9,7 @@ import pytest
 from rolebeacon.collectors import (
     ArbeitnowCollector,
     AshbyCollector,
+    GreenhouseCollector,
     HimalayasCollector,
     JobicyCollector,
     PersonioCollector,
@@ -57,6 +58,26 @@ async def test_full_board_collector_keeps_current_jobs_without_provider_timestam
         jobs = await AshbyCollector(config, client).collect(datetime.now(UTC))
 
     assert [job.source_job_id for job in jobs] == ["1"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("collector_type", "payload"),
+    [
+        (GreenhouseCollector, {"unexpected": []}),
+        (AshbyCollector, {"unexpected": []}),
+    ],
+)
+async def test_complete_json_collectors_reject_missing_job_arrays(collector_type, payload) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    config = SourceConfig.from_dict(
+        {"id": "board", "kind": "greenhouse", "name": "Example", "slug": "example"}
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ValueError, match="invalid"):
+            await collector_type(config, client).collect(datetime.now(UTC))
 
 
 @pytest.mark.asyncio

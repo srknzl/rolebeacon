@@ -9,7 +9,7 @@ from typing import Any
 from .domain import EligibilityResult, EligibilityStatus, ScoreResult
 from .profile import CONTINENT_COUNTRY_CODES, DEFAULT_SCORE_WEIGHTS, country_names_by_code
 
-SCORING_PROMPT_VERSION = "job-fit-v12"
+SCORING_PROMPT_VERSION = "job-fit-v13"
 
 # Ineligibility is a hard gate: no combination of fit signals may push a total above this cap.
 # LLM scoring is only ever invoked for eligible jobs (see sync.py), so every ineligible job's
@@ -59,7 +59,7 @@ def dimension_metadata(preferences: dict[str, Any] | None = None) -> list[tuple[
     return [(key, label, weights[key], hint) for key, label, _maximum, hint in DIMENSION_META]
 
 
-def _apply_score_weights(dimensions: dict[str, int], preferences: dict[str, Any]) -> dict[str, int]:
+def apply_score_weights(dimensions: dict[str, int], preferences: dict[str, Any]) -> dict[str, int]:
     weights = configured_score_weights(preferences)
     return {
         key: round(int(value) * weights[key] / DEFAULT_SCORE_WEIGHTS[key])
@@ -229,16 +229,33 @@ def _contains(text: str, patterns: tuple[str, ...]) -> bool:
 
 
 def _company_in(company: str, values: list[str]) -> bool:
-    def normalized(value: str) -> str:
+    legal_suffixes = {
+        "ab", "ag", "as", "bv", "co", "company", "corp", "corporation", "gmbh", "inc",
+        "incorporated", "limited", "llc", "ltd", "nv", "oy", "plc", "sa", "ş",
+    }
+
+    def normalized(value: str) -> tuple[str, ...]:
         folded = unicodedata.normalize("NFKC", value).casefold()
-        return " ".join(re.findall(r"[^\W_]+", folded, re.UNICODE))
+        tokens = re.findall(r"[^\W_]+", folded, re.UNICODE)
+        while tokens and tokens[-1] in legal_suffixes:
+            tokens.pop()
+        return tuple(tokens)
+
+    def contains_tokens(longer: tuple[str, ...], shorter: tuple[str, ...]) -> bool:
+        return any(longer[index : index + len(shorter)] == shorter for index in range(len(longer) - len(shorter) + 1))
 
     company_name = normalized(company)
-    return bool(company_name) and any(normalized(value) == company_name for value in values if normalized(value))
+    for value in values:
+        configured_name = normalized(value)
+        if not company_name or not configured_name:
+            continue
+        if contains_tokens(company_name, configured_name) or contains_tokens(configured_name, company_name):
+            return True
+    return False
 
 
 _CLEARANCE_MENTION = re.compile(
-    r"\b(?:security[- ]clearance|clearance|public[- ]trust|ts/sci|top[- ]secret|secret[- ]clearance)\b",
+    r"\b(?:security[- ]clearance|public[- ]trust|ts/sci|top[- ]secret|secret[- ]clearance)\b",
     re.IGNORECASE,
 )
 _CLEARANCE_NEGATED = re.compile(
@@ -361,7 +378,7 @@ def evaluate_eligibility(
         if str(phrase).strip() and str(phrase).casefold() in text.casefold()
     ]
     gating_clearance = next(
-        (item for item in clearance if item["kind"] in {"active_required", "ability_to_obtain", "ambiguous"}),
+        (item for item in clearance if item["kind"] in {"active_required", "ability_to_obtain"}),
         None,
     )
     matched_clearance = bool(
@@ -525,7 +542,7 @@ def location_requirement(location_fit: str) -> str:
         "sponsorship-unavailable": f"Would need sponsorship in {name}, which the posting excludes.",
         "sponsorship": f"The posting explicitly supports required visa sponsorship in {name}.",
         "sponsorship-unknown": f"Would need sponsorship in {name}, but the posting does not confirm it.",
-        "relocation": f"The posting supports relocation or sponsorship to {name}.",
+        "relocation": f"The posting explicitly supports relocation to {name}; visa sponsorship is evaluated separately.",
         "worldwide": "The posting explicitly supports worldwide remote work.",
         "remote": f"The posting explicitly includes remote work from {name}.",
         "remote-scoped": f"Remote, but appears scoped to {name} rather than worldwide.",
@@ -635,7 +652,7 @@ def rule_score(
         "location_authorization": location_score,
         "salary_employment": salary_score,
     }
-    dimensions = _apply_score_weights(dimensions, preferences)
+    dimensions = apply_score_weights(dimensions, preferences)
     maximums = configured_score_weights(preferences)
     strategy = next((item for item in strategies if item.get("id") == eligibility.route), None)
     # A priority/watchlist company is a reason to look at its engineering roles, not at its

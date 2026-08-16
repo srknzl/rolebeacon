@@ -199,6 +199,8 @@ deterministic eligibility result, and eligibility remains a separate hard gate r
 Remote wording such as “EMEA” or “within your country of employment” is not treated as worldwide.
 Unknown eligibility remains visible as a risk. Explicit no-sponsorship, clearance, blocklist, and
 geographic restrictions cannot be overridden by company reputation or a high skills score.
+Ordinary phrases such as “medical clearance” are not security-clearance requirements, and ambiguous
+security-context mentions do not override work authorization on their own.
 
 ### What the optional LLM adds
 

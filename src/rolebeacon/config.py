@@ -43,12 +43,18 @@ def _write_private_json(path: Path, value: Any) -> None:
     payload = (json.dumps(value, indent=2, ensure_ascii=False) + "\n").encode()
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     try:
-        os.fchmod(descriptor, stat.S_IRUSR | stat.S_IWUSR)
+        fchmod = getattr(os, "fchmod", None)
+        if fchmod is not None:
+            fchmod(descriptor, stat.S_IRUSR | stat.S_IWUSR)
         with os.fdopen(descriptor, "wb") as temporary:
             temporary.write(payload)
             temporary.flush()
             os.fsync(temporary.fileno())
         os.replace(temporary_name, path)
+        try:
+            os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+        except OSError:
+            pass
         try:
             directory = os.open(path.parent, os.O_RDONLY)
             try:
@@ -277,6 +283,12 @@ class Settings:
         return _read_json(self.search_profile_path, {})
 
     def save_search_profile(self, value: dict[str, Any]) -> Path:
+        setup = _read_json(self.setup_state_path, {})
+        configuration = setup.get("configuration") if isinstance(setup, dict) else None
+        if isinstance(configuration, dict) and isinstance(configuration.get("preferences"), dict):
+            updated_configuration = {**configuration, "preferences": value}
+            _write_private_json(self.setup_state_path, {**setup, "configuration": updated_configuration})
+            return self.setup_state_path
         _write_private_json(self.search_profile_path, value)
         return self.search_profile_path
 

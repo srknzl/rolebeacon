@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request, status
@@ -72,23 +72,46 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.source_discovery = source_discovery
     app.state.source_catalog = source_catalog
 
+    def guard_rejection(request: Request, detail: str) -> Response:
+        if _wants_html(request):
+            return templates.TemplateResponse(
+                request,
+                "error.html",
+                page_context(request, error_title="Request blocked", error_detail=detail),
+                status_code=403,
+            )
+        return JSONResponse({"detail": detail}, status_code=403)
+
     @app.middleware("http")
     async def local_origin_guard(request: Request, call_next: Any) -> Response:
-        configured_hosts = {app_settings.host, "testserver"}
+        configured_hosts = {app_settings.host}
         if app_settings.host in {"127.0.0.1", "localhost", "::1"}:
             configured_hosts.update({"127.0.0.1", "localhost", "::1"})
         allowed_origins = {f"http://{host}:{app_settings.port}" for host in configured_hosts if host != "::1"}
         allowed_origins.add(f"http://[::1]:{app_settings.port}")
-        allowed_origins.add("http://testserver")
+        # Starlette's in-process TestClient uses this synthetic peer and origin. A network
+        # request cannot acquire that ASGI client identity, so the test-only origin never enters
+        # the production allowlist merely because its Host header says "testserver".
+        if request.client and request.client.host == "testclient":
+            allowed_origins.add("http://testserver")
         request_origin = f"{request.url.scheme}://{request.url.netloc}"
         if request_origin not in allowed_origins:
-            return JSONResponse({"detail": "RoleBeacon accepts requests only from its configured local host"}, status_code=403)
+            return guard_rejection(request, "RoleBeacon accepts requests only from its configured local host")
         if request.method not in {"GET", "HEAD", "OPTIONS"}:
             origin = request.headers.get("origin")
             if origin and origin.rstrip("/") not in allowed_origins:
-                return JSONResponse({"detail": "Cross-origin state changes are not allowed"}, status_code=403)
-            if (origin or request.headers.get("sec-fetch-site")) and request.headers.get("x-csrf-token") != csrf_token:
-                return JSONResponse({"detail": "A valid CSRF token is required"}, status_code=403)
+                return guard_rejection(request, "Cross-origin state changes are not allowed")
+            supplied_token = request.headers.get("x-csrf-token", "")
+            if not supplied_token and "application/x-www-form-urlencoded" in request.headers.get("content-type", ""):
+                # Reading body() caches the bytes for the endpoint's later request.form() call.
+                # Native browser forms cannot set headers, so their server-rendered hidden field
+                # is the no-JavaScript equivalent of the fetch wrapper's X-CSRF-Token header.
+                form_values = parse_qs((await request.body()).decode("utf-8", errors="replace"))
+                supplied_token = form_values.get("csrf_token", [""])[-1]
+            if (origin or request.headers.get("sec-fetch-site")) and not secrets.compare_digest(
+                supplied_token, csrf_token
+            ):
+                return guard_rejection(request, "A valid CSRF token is required")
         return await call_next(request)
 
     def page_context(request: Request, **values: Any) -> dict[str, Any]:
@@ -863,7 +886,9 @@ async def _payload(request: Request) -> dict[str, Any]:
         if not isinstance(value, dict):
             raise HTTPException(status_code=422, detail="Request body must be a JSON object")
         return value
-    return dict(await request.form())
+    value = dict(await request.form())
+    value.pop("csrf_token", None)
+    return value
 
 
 def _wants_html(request: Request) -> bool:

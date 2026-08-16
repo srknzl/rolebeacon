@@ -142,7 +142,7 @@ REMOTE_POLICY_WORDING = {
     "unknown": "not stated in the fetched sources",
 }
 
-_TLD_EXTRACT = tldextract.TLDExtract(suffix_list_urls=())
+_TLD_EXTRACT = tldextract.TLDExtract(suffix_list_urls=(), include_psl_private_domains=True)
 
 
 @dataclass(slots=True)

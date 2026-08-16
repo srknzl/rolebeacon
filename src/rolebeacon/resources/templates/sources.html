@@ -131,7 +131,7 @@
         <td>{{ row.state.last_successful_sync_at or '—' }}</td>
         <td>{{ row.state.jobs_seen or 0 }} / {{ row.state.last_jobs_new or 0 }} / {{ row.state.jobs_changed or 0 }}</td>
         <td>{{ row.state.last_requests_made or 0 }} / {{ row.state.last_duration_ms or 0 }} ms</td>
-        <td class="{% if row.state.status == 'error' or row.state.last_truncated %}error-cell{% elif row.state.status == 'skipped' %}muted-cell{% endif %}">{% if row.state.last_truncated %}Coverage truncated at the configured page limit; this run was not used to close missing jobs.{% else %}{{ (row.state.last_error or row.state.last_skipped_reason or '')|replace('_', ' ') }}{% endif %}</td>
+        <td class="{% if row.state.status == 'error' or row.state.last_truncated %}error-cell{% elif row.state.status == 'skipped' %}muted-cell{% endif %}">{% if row.state.last_truncated %}Coverage was incomplete or implausible; this run was not used to close missing jobs.{% else %}{{ (row.state.last_error or row.state.last_skipped_reason or '')|replace('_', ' ') }}{% endif %}</td>
         <td><button class="button button-quiet source-toggle" type="button" data-source-toggle="{{ row.config.id }}" data-enabled="{{ 'false' if row.config.enabled else 'true' }}">{{ 'Disable' if row.config.enabled else 'Enable' }}</button></td>
       </tr>
       {% endfor %}

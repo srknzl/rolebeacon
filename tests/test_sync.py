@@ -243,7 +243,7 @@ async def test_llm_response_rejected_falls_back_to_rules_for_just_that_job(tmp_p
     assert database.get_job(job_id)["provider"] == "rules"
 
 
-async def test_complete_snapshot_sync_deactivates_removed_posting(tmp_path, monkeypatch) -> None:
+async def test_empty_complete_snapshot_preserves_previously_active_posting(tmp_path, monkeypatch) -> None:
     payload = {
         "candidate": {"schema_version": "1.0", "name": "Candidate", "location": {"country_code": "TR", "country_name": "Türkiye"}, "skills": {}},
         "mobility": {"schema_version": "1.0", "current_country_code": "TR", "work_authorizations": ["TR"]},
@@ -268,7 +268,8 @@ async def test_complete_snapshot_sync_deactivates_removed_posting(tmp_path, monk
     job_id = database.list_jobs()[0]["id"]
     await service.run(force=True)
 
-    assert database.get_job(job_id)["active"] == 0
+    assert database.get_job(job_id)["active"] == 1
+    assert database.source_state("arbeitnow")["last_truncated"] == 1
 
 
 async def test_process_lock_prevents_two_refresh_processes_from_racing(tmp_path) -> None:

@@ -17,16 +17,20 @@ This report records the findings from the pre-production code review. The cleara
 | Findings | Resolution |
 | --- | --- |
 | 1–3 | Sponsorship and relocation are independent; clearance uses a structured candidate conflict matrix; absent remote geography remains unknown. |
-| 4–5 | Non-truncated complete snapshots reconcile source associations, and eligibility signals participate in content identity while mutable links update independently. |
+| 4–5 | Non-truncated, structurally valid, non-empty complete snapshots reconcile source associations; implausible empty snapshots preserve active jobs. Eligibility signals participate in content identity while mutable links update independently. |
 | 6–7 | Setup round-trips all values with explicit secret preserve/replace/remove actions; migration dispatches before destination initialization. |
-| 8–10 | Company lists use Unicode exact identity and explicit aliases; company keys are Unicode-safe; ambiguous opening collisions enter duplicate review instead of auto-merging. |
+| 8–10 | Company lists use Unicode whole-token identity with legal-suffix normalization and explicit aliases; company keys are Unicode-safe; ambiguous opening collisions enter duplicate review instead of auto-merging. |
 | 11 | Source preview, manual refresh, and scheduled refresh all require explicit activation. |
 | 12–15 | Ineligible jobs cannot receive company-score blending; country aliases, salary hard filters, review limits, and complete verified-profile vocabulary are enforced. |
-| 16–17 | Official-domain comparison uses the Public Suffix List and validates redirects; model results require exact keys, bounds, totals, official citation membership, and evidence coverage. |
-| 18–20 | Mutations use exact-origin plus CSRF protection; Gmail tokens use injected app-data storage with owner-only atomic writes; duplicate merge refuses to discard competing user artifacts. |
+| 16–17 | Official-domain comparison uses ICANN and private Public Suffix List entries and validates redirects; model results require exact keys, configured-weight bounds, totals, official citation membership, and evidence coverage. |
+| 18–20 | Mutations use exact-origin plus header-or-hidden-field CSRF protection, with HTML errors for browser navigation; Gmail tokens use injected app-data storage with owner-only atomic writes; duplicate merge refuses to discard competing user artifacts. |
 | 21–24 | FTS input is literal-safe; setup persistence uses atomic files and an atomic generation manifest; synchronization has a process lock; pagination truncation is recorded, displayed, and excluded from closure. |
 | 26–29 | External URL schemes are allow-listed, startup rewrites only changed rows, version/docs derive from canonical values, and partial source failures finish as `completed_with_errors`. |
 | 30 | CI audits the exported locked runtime dependency set and publishes a CycloneDX SBOM; `SECURITY.md` defines vulnerability and dependency-update handling. |
+
+Reviewer follow-up also verified that CLI host/port overrides are resolved before app construction,
+private writes tolerate platforms without `os.fchmod`, saved preferences update the setup manifest,
+and tests ignore ambient RoleBeacon environment values and use temporary application data.
 
 Finding 25 is partially resolved and deliberately deferred as Tier 3 follow-up. All payloads now reject
 invalid JSON and non-object bodies consistently, affected boolean and integer mutations reject coercion,

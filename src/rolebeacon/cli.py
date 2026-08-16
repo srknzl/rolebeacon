@@ -82,13 +82,18 @@ def main() -> None:
             )
         )
         return
+    if args.command == "serve":
+        # Resolve overrides once so uvicorn's listener and the app's local-origin allowlist use
+        # exactly the same host and port.
+        settings = replace(settings, host=args.host or settings.host, port=args.port or settings.port)
+
     database = Database(settings.database_path)
     database.initialize()
 
     if args.command == "serve":
         from .app import create_app
 
-        uvicorn.run(create_app(settings), host=args.host or settings.host, port=args.port or settings.port)
+        uvicorn.run(create_app(settings), host=settings.host, port=settings.port)
     elif args.command == "sync":
         sync_service = SyncService(settings, database, LlmClient(settings))
         sync_result = asyncio.run(sync_service.run())

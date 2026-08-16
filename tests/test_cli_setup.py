@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 import sys
 
+from fastapi.testclient import TestClient
+
 from rolebeacon.cli import main
+from rolebeacon.config import Settings
+from rolebeacon.setup import SetupService
 
 
 def _payload() -> dict:
@@ -41,3 +45,23 @@ def test_cli_setup_import_uses_shared_schema_and_requires_explicit_activation(
     assert result["setup_complete"] is True
     assert result["activated"] is False
     assert json.loads((destination / "setup.json").read_text(encoding="utf-8"))["activated"] is False
+
+
+def test_cli_port_override_updates_the_app_origin_allowlist(tmp_path, monkeypatch) -> None:
+    payload = _payload()
+    payload["activate"] = False
+    settings = SetupService(Settings.load(tmp_path)).complete(payload)
+    observed: dict[str, object] = {}
+
+    def run(app, *, host: str, port: int) -> None:
+        observed.update(host=host, port=port, configured_port=app.state.settings.port)
+        with TestClient(app, base_url=f"http://{host}:{port}") as client:
+            observed["status_code"] = client.get("/").status_code
+
+    monkeypatch.setattr("rolebeacon.cli.Settings.load", lambda: settings)
+    monkeypatch.setattr("rolebeacon.cli.uvicorn.run", run)
+    monkeypatch.setattr(sys, "argv", ["rolebeacon", "serve", "--port", "9911"])
+
+    main()
+
+    assert observed == {"host": "127.0.0.1", "port": 9911, "configured_port": 9911, "status_code": 200}

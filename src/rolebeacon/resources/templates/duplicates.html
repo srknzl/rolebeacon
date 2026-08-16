@@ -8,7 +8,7 @@
   <td><a href="/jobs/{{ item.job_id }}"><strong>{{ item.job_title }}</strong></a><small>{{ item.job_company }} · {{ item.job_location }}</small></td>
   <td><a href="/jobs/{{ item.candidate_job_id }}"><strong>{{ item.candidate_title }}</strong></a><small>{{ item.candidate_company }} · {{ item.candidate_location }}</small></td>
   <td>{{ (item.similarity * 100)|round|int }}%</td>
-  <td><form class="inline-form" method="post" action="/api/duplicates/{{ item.id }}/merge"><button class="button button-primary" name="keep_job_id" value="{{ item.job_id }}">Merge, keep first</button></form><form class="inline-form" method="post" action="/api/duplicates/{{ item.id }}/dismiss"><button class="button">Keep separate</button></form></td>
+  <td><form class="inline-form" method="post" action="/api/duplicates/{{ item.id }}/merge"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button-primary" name="keep_job_id" value="{{ item.job_id }}">Merge, keep first</button></form><form class="inline-form" method="post" action="/api/duplicates/{{ item.id }}/dismiss"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button">Keep separate</button></form></td>
 </tr>{% endfor %}
 </tbody></table></div>
 {% else %}<div class="empty-state"><h2>No duplicates to review</h2><p>Probable cross-source matches will appear here.</p></div>{% endif %}

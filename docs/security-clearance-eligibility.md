@@ -7,7 +7,10 @@ an explicit candidate-side conflict or user-owned exclusion. Unknown facts remai
 
 Date: 2026-08-16
 
-Status: proposed corrective design. This document describes the current deterministic behavior and the requirements for making clearance handling safe, explainable, and profile-aware.
+Status: implemented corrective design. The problem-analysis sections below preserve the pre-remediation
+audit trail; the decision matrix and acceptance criteria describe the shipped deterministic behavior.
+Recognition now requires security context, ambiguous mentions never gate eligibility, and only an
+explicit posting requirement can be compared with an explicit candidate policy or user exclusion.
 
 This note expands the clearance finding from the broader [Production-readiness review](production-readiness-review.md).
 

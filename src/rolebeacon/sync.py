@@ -301,7 +301,16 @@ class SyncService:
                 if did_change:
                     changed_ids.add(job_id)
                     changed += 1
-            if batch.complete_snapshot and not batch.truncated:
+            active_before_reconciliation = self.database.active_source_job_count(source.id)
+            implausible_empty_snapshot = bool(
+                batch.complete_snapshot and not batch.truncated and not jobs and active_before_reconciliation
+            )
+            if implausible_empty_snapshot:
+                # A successful-but-empty provider response is indistinguishable from a schema
+                # change or transient board failure. Preserve the last known active snapshot and
+                # surface incomplete coverage instead of closing every posting in one run.
+                batch.truncated = True
+            elif batch.complete_snapshot and not batch.truncated:
                 self.database.reconcile_source_snapshot(
                     source.id, {job.source_job_id for job in jobs}
                 )

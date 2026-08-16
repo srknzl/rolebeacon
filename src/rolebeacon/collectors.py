@@ -307,8 +307,11 @@ class GreenhouseCollector(Collector):
             params={"content": "true"},
         )
         response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict) or not isinstance(payload.get("jobs"), list):
+            raise ValueError("Greenhouse returned an invalid jobs payload")
         result = []
-        for item in response.json().get("jobs", []):
+        for item in payload["jobs"]:
             metadata = item.get("metadata") or []
             job = CollectedJob(
                 source=self.config.id,
@@ -386,8 +389,13 @@ class AshbyCollector(Collector):
         )
         response.raise_for_status()
         payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("Ashby returned an invalid job-board payload")
+        items = payload.get("jobs", payload.get("jobPostings"))
+        if not isinstance(items, list):
+            raise ValueError("Ashby returned an invalid jobs payload")
         result = []
-        for item in payload.get("jobs", payload.get("jobPostings", [])):
+        for item in items:
             compensation = item.get("compensation") or {}
             location = item.get("location", "")
             job = CollectedJob(
@@ -565,7 +573,12 @@ class PersonioCollector(Collector):
         base = self.config.host.rstrip("/")
         response = await self.client.get(f"{base}/xml")
         response.raise_for_status()
-        root = ElementTree.fromstring(response.content)
+        try:
+            root = ElementTree.fromstring(response.content)
+        except ElementTree.ParseError as error:
+            raise ValueError("Personio returned invalid XML") from error
+        if root.tag.rsplit("}", 1)[-1] != "workzag-jobs":
+            raise ValueError("Personio returned an unexpected XML payload")
         result: list[CollectedJob] = []
         for item in root.findall("./position"):
             source_job_id = _xml_text(item, "id")
@@ -1145,12 +1158,18 @@ class GmailLinkedInCollector(Collector):
             token_path.parent.mkdir(parents=True, exist_ok=True)
             descriptor, temporary_name = tempfile.mkstemp(prefix=".gmail-token.", dir=token_path.parent)
             try:
-                os.fchmod(descriptor, stat.S_IRUSR | stat.S_IWUSR)
+                fchmod = getattr(os, "fchmod", None)
+                if fchmod is not None:
+                    fchmod(descriptor, stat.S_IRUSR | stat.S_IWUSR)
                 with os.fdopen(descriptor, "w", encoding="utf-8") as token_file:
                     token_file.write(credentials.to_json())
                     token_file.flush()
                     os.fsync(token_file.fileno())
                 os.replace(temporary_name, token_path)
+                try:
+                    os.chmod(token_path, stat.S_IRUSR | stat.S_IWUSR)
+                except OSError:
+                    pass
             finally:
                 Path(temporary_name).unlink(missing_ok=True)
         service = build("gmail", "v1", credentials=credentials, cache_discovery=False)

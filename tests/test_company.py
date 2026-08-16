@@ -513,6 +513,8 @@ async def test_configured_llm_company_research_never_silently_falls_back_to_rule
 def test_registrable_host_uses_public_suffix_rules() -> None:
     assert CompanyResearchService._registrable_host("careers.example.co.uk") == "example.co.uk"
     assert CompanyResearchService._registrable_host("jobs.example.com.tr") == "example.com.tr"
+    assert CompanyResearchService._registrable_host("acme.github.io") == "acme.github.io"
+    assert CompanyResearchService._registrable_host("globex.github.io") == "globex.github.io"
 
 
 def test_operational_within_region_wording_does_not_establish_remote_policy(tmp_path) -> None:
