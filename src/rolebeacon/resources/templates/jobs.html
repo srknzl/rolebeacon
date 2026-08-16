@@ -7,7 +7,7 @@
 {% block content %}
 <section class="page-heading">
   <div><p class="eyebrow">DISCOVERY</p><h1>Jobs</h1></div>
-  <span>{% if total %}{{ total }} of {{ all_matches_total }} jobs shown{% elif all_matches_total %}No visible matches of {{ all_matches_total }} jobs{% else %}No matches{% endif %}{% if hidden_title_count %} · {{ hidden_title_count }} different-role title{{ '' if hidden_title_count == 1 else 's' }} hidden{% endif %}</span>
+  <span>{% if total %}{{ total }} of {{ all_matches_total }} jobs match{% elif all_matches_total %}No visible matches of {{ all_matches_total }} jobs{% else %}No matches{% endif %}{% if hidden_title_count %} · {{ hidden_title_count }} different-role title{{ '' if hidden_title_count == 1 else 's' }} hidden{% endif %}</span>
 </section>
 
 <form class="filters" method="get">

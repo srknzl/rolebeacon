@@ -625,6 +625,7 @@ class Database:
         seen_source_job_ids: set[str],
         *,
         provider_total: int | None = None,
+        returned_count: int | None = None,
         drop_ratio: float = 0.5,
         minimum_baseline: int = 20,
     ) -> SnapshotReconciliationResult:
@@ -635,6 +636,15 @@ class Database:
         apply closures without recording the accepted count.
         """
         observed_count = len(seen_source_job_ids)
+        received_count = observed_count if returned_count is None else returned_count
+        if (
+            isinstance(received_count, bool)
+            or not isinstance(received_count, int)
+            or received_count < observed_count
+        ):
+            raise ValueError(
+                "returned_count must be an integer at least as large as the unique source-job ID count"
+            )
         snapshot_fingerprint = hashlib.sha256(
             "\n".join(sorted(seen_source_job_ids)).encode("utf-8")
         ).hexdigest()
@@ -655,9 +665,9 @@ class Database:
             stored_baseline = state["last_complete_snapshot_count"] if state else None
             baseline_count = int(stored_baseline) if stored_baseline is not None else active_count
 
-            if provider_total is not None and provider_total > observed_count:
+            if provider_total is not None and provider_total > received_count:
                 warning = (
-                    f"Provider reported {provider_total} jobs but returned {observed_count}; "
+                    f"Provider reported {provider_total} jobs but returned {received_count}; "
                     "missing jobs were preserved because the snapshot is incomplete."
                 )
                 connection.execute(
@@ -1239,21 +1249,30 @@ class Database:
                 "SELECT * FROM api_usage ORDER BY period DESC, provider"
             ).fetchall()]
 
-    def finish_source(self, source_id: str, seen: int, changed: int, cursor: str = "", truncated: bool = False) -> None:
+    def finish_source(
+        self,
+        source_id: str,
+        seen: int,
+        changed: int,
+        cursor: str = "",
+        truncated: bool = False,
+        snapshot_warning: str = "",
+    ) -> None:
         with self.connect() as connection:
             connection.execute(
                 """
                 INSERT INTO source_state (
                     source_id, status, last_started_at, last_successful_sync_at, cursor, jobs_seen, jobs_changed,
-                    last_truncated
-                ) VALUES (?, 'idle', ?, ?, ?, ?, ?, ?)
+                    last_truncated, last_snapshot_warning
+                ) VALUES (?, 'idle', ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(source_id) DO UPDATE SET
                     status = 'idle', last_successful_sync_at = excluded.last_successful_sync_at,
                     last_error = '', cursor = excluded.cursor, jobs_seen = excluded.jobs_seen,
                     jobs_changed = excluded.jobs_changed, next_eligible_sync_at = NULL,
-                    last_skipped_reason = '', last_truncated = excluded.last_truncated
+                    last_skipped_reason = '', last_truncated = excluded.last_truncated,
+                    last_snapshot_warning = excluded.last_snapshot_warning
                 """,
-                (source_id, _iso(), _iso(), cursor, seen, changed, int(truncated)),
+                (source_id, _iso(), _iso(), cursor, seen, changed, int(truncated), snapshot_warning[:1000]),
             )
 
     def fail_source(self, source_id: str, error: str, retry_seconds: int = 900) -> None:

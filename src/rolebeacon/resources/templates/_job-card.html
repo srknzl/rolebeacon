@@ -21,7 +21,7 @@
       <span>{{ job.route or 'Unclassified' }}</span>
       <span>{{ job.sponsorship or 'sponsorship unknown' }}</span>
       {% if job.source_name %}<span>{{ job.source_name }}</span>{% endif %}
-      {% if job.company_score %}<span>company {{ job.company_score }}</span>{% endif %}
+      {% if job.company_score %}<span>company fit {{ job.company_score }}</span>{% endif %}
       {% set age = job.published_at or job.first_seen_at %}
       {% if age %}<span title="{{ 'Posted ' + job.published_at if job.published_at else 'First collected ' + job.first_seen_at }}">{{ age[:10] }}</span>{% endif %}
     </div>

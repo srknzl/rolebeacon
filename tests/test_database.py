@@ -682,6 +682,50 @@ def test_provider_total_mismatch_never_confirms_an_incomplete_snapshot(tmp_path)
     assert state["pending_snapshot_count"] is None
 
 
+def test_provider_total_accepts_complete_raw_records_that_deduplicate_to_fewer_ids(tmp_path) -> None:
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    source_job_ids: set[str] = set()
+    for index in range(30):
+        value = sample_job()
+        value.source_job_id = f"job-{index}"
+        value.title = f"Backend Engineer {index}"
+        value.url = f"https://example.com/jobs/{index}"
+        database.upsert_job(value)
+        source_job_ids.add(value.source_job_id)
+
+    result = database.reconcile_source_snapshot_guarded(
+        "source-a",
+        source_job_ids,
+        provider_total=33,
+        returned_count=33,
+    )
+
+    assert result.reconciled is True
+    assert result.observed_count == 30
+    assert result.warning == ""
+    state = database.source_state("source-a")
+    assert state is not None
+    assert state["last_complete_snapshot_count"] == 30
+
+
+def test_successful_non_guarded_finish_clears_an_old_snapshot_warning(tmp_path) -> None:
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    value = sample_job()
+    database.upsert_job(value)
+    database.reconcile_source_snapshot_guarded("source-a", {value.source_job_id})
+    quarantined = database.reconcile_source_snapshot_guarded("source-a", set())
+    assert quarantined.warning
+
+    database.finish_source("source-a", seen=1, changed=0, truncated=True)
+
+    state = database.source_state("source-a")
+    assert state is not None
+    assert state["last_snapshot_warning"] == ""
+    assert state["last_truncated"] == 1
+
+
 def test_literal_fts_search_handles_unmatched_quotes(tmp_path) -> None:
     database = Database(tmp_path / "jobs.sqlite3")
     database.initialize()

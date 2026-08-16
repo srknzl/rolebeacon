@@ -685,6 +685,8 @@ def test_jobs_page_supports_page_size_and_location_filter_and_company_suggest(tm
 
     assert paged.status_code == 200
     assert "Page 1 of 2" in paged.text
+    assert "12 of 12 jobs match" in paged.text
+    assert paged.text.count('class="job-card"') == 10
     assert unpaged.status_code == 200
     assert "Page 1 of 2" not in unpaged.text
     assert located.status_code == 200
@@ -974,13 +976,13 @@ def test_jobs_page_hides_mismatched_titles_by_default(tmp_path) -> None:
 
     assert "Backend Engineer" in default_view.text
     assert "Talent Acquisition Specialist" not in default_view.text
-    assert "1 of 2 jobs shown" in default_view.text
+    assert "1 of 2 jobs match" in default_view.text
     assert "1 different-role title hidden" in default_view.text
     assert "Hiding different-role titles: 1 job" in default_view.text
     assert "show_mismatched_titles=1" in default_view.text
     assert "Backend Engineer" in shown.text
     assert "Talent Acquisition Specialist" in shown.text
-    assert "2 of 2 jobs shown" in shown.text
+    assert "2 of 2 jobs match" in shown.text
     assert "Hiding different-role titles" not in shown.text
 
 
@@ -1004,11 +1006,15 @@ def test_sources_page_explains_a_quarantined_snapshot_drop(tmp_path) -> None:
 
     with TestClient(app) as client:
         page = client.get("/sources")
+        app.state.database.finish_source(source_id, seen=1, changed=0, truncated=True)
+        later_page = client.get("/sources")
 
     assert result.reconciled is False
     assert page.status_code == 200
     assert "Snapshot count fell from 1 to 0" in page.text
     assert "second consistent complete snapshot" in page.text
+    assert "Snapshot count fell from 1 to 0" not in later_page.text
+    assert "Coverage was incomplete; this run was not used to close missing jobs." in later_page.text
 
 
 def test_job_detail_decisions_are_in_place_and_cover_letter_requires_llm(tmp_path) -> None:

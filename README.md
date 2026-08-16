@@ -281,7 +281,8 @@ but upstream ATS ownership can still change, so failures remain isolated per sou
 Complete provider snapshots are reconciled defensively. A sharp fall from the last accepted baseline is
 preserved as an incomplete run and shown on the Sources page; RoleBeacon closes missing jobs only after the
 same complete set of source job IDs is observed again. A response whose declared provider total exceeds the
-returned unique jobs is never accepted as complete. See [docs/data-sources.md](docs/data-sources.md) for the
+raw returned records is never accepted as complete. Baselines and confirmation fingerprints use unique
+source job IDs. See [docs/data-sources.md](docs/data-sources.md) for the
 default thresholds and per-source overrides.
 
 Job descriptions are normalized without an LLM. The ingestion layer repairs common encoding damage,

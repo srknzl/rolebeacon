@@ -333,12 +333,24 @@ class SyncService:
                     source.id,
                     {job.source_job_id for job in jobs},
                     provider_total=batch.provider_total,
+                    returned_count=raw_count,
                     drop_ratio=drop_ratio,
                     minimum_baseline=minimum_baseline,
                 )
                 if not reconciliation.reconciled:
                     batch.truncated = True
-            self.database.finish_source(source.id, len(jobs), changed, batch.cursor, batch.truncated)
+            else:
+                reconciliation = None
+            self.database.finish_source(
+                source.id,
+                len(jobs),
+                changed,
+                batch.cursor,
+                batch.truncated,
+                snapshot_warning=(
+                    reconciliation.warning if reconciliation and not reconciliation.reconciled else ""
+                ),
+            )
             self.database.finish_sync_run(
                 run_id, status="success", started_at=run_started, jobs_seen=len(jobs),
                 jobs_new=created, jobs_changed=changed, jobs_filtered=filtered,
