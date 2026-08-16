@@ -83,8 +83,13 @@ whether the configured model is reachable. When an LLM is selected but unavailab
 collection or scoring; fix the endpoint/model or explicitly switch to Rules only, then refresh again.
 RoleBeacon never installs Ollama or downloads a model silently.
 
-The default recommendation is `qwen3:8b`. `qwen3:14b` is the higher-quality option for machines
-with enough memory, including a 16 GB RTX-class desktop when using an appropriate quantization.
+The default recommendation is `qwen3:8b`. For machines with enough memory,
+`qwen2.5:14b-instruct-q6_k` is the measured higher-quality option (see `docs/local-model-guide.md`):
+in a 25-job rubric evaluation it reached 0.87 rank correlation with deterministic scoring and 97%
+evidence grounding, against `qwen3:14b`'s 0.32 correlation and more frequent generic-evidence and
+empty-response rejections. Prefer instruct models over reasoning models for this task - the scoring
+rubric is a shallow structured-output job, and reasoning spent tokens fighting the JSON schema
+instead of reliably filling it.
 
 Model quality is measured with a synthetic, privacy-safe scoring evaluation covering a strong backend
 match, a frontend stack mismatch, transferable big-tech experience, ambiguous EMEA eligibility, and a
