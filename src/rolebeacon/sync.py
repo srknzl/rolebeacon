@@ -215,8 +215,13 @@ class SyncService:
     def _acquire_process_lock(self) -> Any | None:
         path = self.settings.data_dir / "sync.lock"
         path.parent.mkdir(parents=True, exist_ok=True)
-        handle = path.open("a+", encoding="utf-8")
+        handle = path.open("a+b")
         try:
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"\0")
+                handle.flush()
+            handle.seek(0)
             if os.name == "nt":
                 import msvcrt
 
@@ -227,9 +232,11 @@ class SyncService:
                 getattr(fcntl, "flock")(
                     handle.fileno(), getattr(fcntl, "LOCK_EX") | getattr(fcntl, "LOCK_NB")
                 )
-            handle.seek(0)
+            # Byte zero stays untouched while locked because Windows denies even the lock
+            # owner writes that overlap it. Human-readable ownership metadata starts at byte one.
+            handle.seek(1)
             handle.truncate()
-            handle.write(f"pid={os.getpid()} started={datetime.now(UTC).isoformat()}\n")
+            handle.write(f"pid={os.getpid()} started={datetime.now(UTC).isoformat()}\n".encode())
             handle.flush()
             return handle
         except OSError:
