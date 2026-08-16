@@ -200,13 +200,14 @@ After deterministic authorization and geography checks, it adds:
 The LLM cannot invent work authorization, sponsorship, salary, skills, experience, or candidate facts.
 It cannot override a deterministic blocker. RoleBeacon calculates totals from bounded dimensions,
 rejects generic or duplicate gaps and negative statements disguised as positive evidence, and asks the
-model for one corrected response. If that response still fails validation, refresh reports an LLM error;
-it does not silently accept the answer or switch scoring modes.
+model for one corrected response. If that response still fails validation, only that job keeps its
+deterministic rules score; a genuine endpoint failure still stops LLM scoring and is reported.
 
 The tradeoffs are model memory, latency, and an extra inference call when repair is required. For large
 source packs, add the sources disabled, enable only the useful boards, and run the first collection in
 rules-only mode before turning on LLM scoring. Use Ollama mode for local or LAN Ollama because it supports
-the native JSON-schema and `think: false` controls used by RoleBeacon.
+native JSON Schema and a per-request context length. RoleBeacon leaves model-specific reasoning at
+Ollama's default; forcing Qwen3 thinking off produced materially worse scores in the measured sample.
 
 ## Sources
 
@@ -218,7 +219,7 @@ Built-in source adapters include:
 - Remote OK
 - Himalayas
 - We Work Remotely
-- Greenhouse, Lever, Ashby, SmartRecruiters, and Workday public career endpoints
+- Greenhouse, Lever, Ashby, SmartRecruiters, Workday, and Personio public career endpoints
 - Google Careers and Amazon Jobs first-party public-site connectors
 - optional Adzuna, Jooble, and SerpApi adapters
 - optional LinkedIn Job Alert ingestion through a user-owned Gmail label
@@ -351,6 +352,11 @@ uv run python -m build
 
 ## Phase 2 roadmap
 
+- User-configurable distribution of the 100 fit-score points, while preserving deterministic
+  eligibility hard gates and rules-only repeatability.
+- A complete web and CLI setup wizard that collects critical matching and mobility facts,
+  includes explicit source selection, and requires confirmation before activation. See the
+  [product backlog](docs/product-backlog.md) for acceptance criteria.
 - Gmail OAuth setup and LinkedIn Job Alert ingestion in the web wizard.
 - Managed, checksum-verified `llama.cpp` runtime as an Ollama-free optional path.
 - User-editable ATS and company registries.

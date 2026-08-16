@@ -26,6 +26,11 @@ class FixtureScorer:
         return _score(70, [23, 18, 17, 9, 3, 0], evidence="Java and Kafka")
 
 
+class RejectingScorer:
+    async def score(self, job: dict[str, Any], *_args: Any) -> ScoreResult:
+        raise ValueError(f"Rejected {job['title']}")
+
+
 def _score(total: int, values: list[int], *, evidence: str = "", gap: str = "") -> ScoreResult:
     dimensions = dict(
         zip(
@@ -72,6 +77,16 @@ async def test_model_evaluation_checks_scores_evidence_gaps_ranking_and_model_sk
     assert all(report["ranking_checks"].values())
     blocker = next(item for item in report["cases"] if item["id"] == "no_sponsorship_blocker")
     assert blocker["model_skipped"] is True
+
+
+async def test_model_evaluation_reports_rejected_responses_instead_of_aborting() -> None:
+    report = await run_model_evaluation(RejectingScorer())
+
+    assert report["passed"] is False
+    assert report["summary"]["model_calls"] == 4
+    first_run = report["cases"][0]["runs"][0]
+    assert first_run["checks"] == {"response": False}
+    assert first_run["error"].startswith("ValueError: Rejected")
 
 
 def test_rules_evaluation_checks_quality_invariants_and_repeatability() -> None:

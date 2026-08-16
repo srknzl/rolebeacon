@@ -321,8 +321,7 @@ class GreenhouseCollector(Collector):
                 employment_type=_metadata_value(metadata, "employment type"),
                 metadata={"departments": item.get("departments", []), "offices": item.get("offices", [])},
             )
-            if is_recent(job, since):
-                result.append(job)
+            result.append(job)
         return result
 
 
@@ -366,8 +365,7 @@ class LeverCollector(Collector):
                 updated_at=parse_datetime(item.get("updatedAt")),
                 metadata={"team": categories.get("team", ""), "department": categories.get("department", "")},
             )
-            if is_recent(job, since):
-                result.append(job)
+            result.append(job)
         return result
 
 
@@ -403,8 +401,7 @@ class AshbyCollector(Collector):
                 updated_at=parse_datetime(item.get("updatedAt")),
                 metadata={"department": item.get("department", ""), "team": item.get("team", "")},
             )
-            if is_recent(job, since):
-                result.append(job)
+            result.append(job)
         return result
 
 
@@ -477,11 +474,19 @@ class HimalayasCollector(Collector):
                 source_job_id = str(item.get("id") or item.get("guid") or item.get("applicationLink") or item.get("slug") or "")
                 if not source_job_id:
                     continue
+                raw_company = (
+                    (item.get("company") or {}).get("name", "")
+                    if isinstance(item.get("company"), dict)
+                    else item.get("companyName") or item.get("company") or ""
+                )
+                company = str(raw_company).strip()
+                if company.casefold() in {"", "name"}:
+                    company = str(item.get("companySlug") or "").strip()
                 job = CollectedJob(
                     source=self.config.id,
                     source_job_id=source_job_id,
                     title=item.get("title", ""),
-                    company=(item.get("company") or {}).get("name", "") if isinstance(item.get("company"), dict) else str(item.get("companyName") or item.get("company") or ""),
+                    company=company,
                     location=str(restrictions or "Worldwide"),
                     description=plain_text(item.get("description") or item.get("descriptionHtml")),
                     url=item.get("applicationLink") or item.get("guid") or item.get("url", ""),
@@ -544,6 +549,64 @@ def _xml_text(item: ElementTree.Element, tag: str) -> str:
     return (node.text or "").strip() if node is not None else ""
 
 
+class PersonioCollector(Collector):
+    """Collect a complete current Personio board from its public, no-key XML feed."""
+
+    async def collect(self, since: datetime, cursor: str = "") -> list[CollectedJob]:
+        if not self.config.host:
+            raise ValueError("Personio source requires a board host")
+        base = self.config.host.rstrip("/")
+        response = await self.client.get(f"{base}/xml")
+        response.raise_for_status()
+        root = ElementTree.fromstring(response.content)
+        result: list[CollectedJob] = []
+        for item in root.findall("./position"):
+            source_job_id = _xml_text(item, "id")
+            if not source_job_id:
+                continue
+            offices = [_xml_text(item, "office")]
+            offices.extend(
+                (node.text or "").strip()
+                for node in item.findall("./additionalOffices/office")
+                if (node.text or "").strip()
+            )
+            description_parts = []
+            for section in item.findall("./jobDescriptions/jobDescription"):
+                heading = _xml_text(section, "name")
+                value = _xml_text(section, "value")
+                description_parts.append(plain_text(f"<h2>{html.escape(heading)}</h2>{value}"))
+            public_url = f"{base}/job/{quote(source_job_id)}?display=en"
+            result.append(
+                CollectedJob(
+                    source=self.config.id,
+                    source_job_id=source_job_id,
+                    title=_xml_text(item, "name"),
+                    company=self.config.company or self.config.name,
+                    location=", ".join(dict.fromkeys(value for value in offices if value)),
+                    description="\n\n".join(value for value in description_parts if value),
+                    url=public_url,
+                    apply_url=public_url,
+                    employment_type=_xml_text(item, "recruitingCategory") or _xml_text(item, "employmentType"),
+                    published_at=parse_datetime(_xml_text(item, "createdAt")),
+                    metadata={
+                        "department": _xml_text(item, "department"),
+                        "seniority": _xml_text(item, "seniority"),
+                        "schedule": _xml_text(item, "schedule"),
+                        "categories": [
+                            value
+                            for value in (
+                                _xml_text(item, "department"),
+                                _xml_text(item, "occupationCategory"),
+                                _xml_text(item, "keywords"),
+                            )
+                            if value
+                        ],
+                    },
+                )
+            )
+        return result
+
+
 class SmartRecruitersCollector(Collector):
     async def collect(self, since: datetime, cursor: str = "") -> list[CollectedJob]:
         if not self.config.slug:
@@ -585,8 +648,7 @@ class SmartRecruitersCollector(Collector):
                     updated_at=parse_datetime(item.get("lastUpdatedDate")),
                     metadata={"department": (item.get("department") or {}).get("label", "")},
                 )
-                if is_recent(job, since):
-                    result.append(job)
+                result.append(job)
             offset += len(items)
             if not items or offset >= payload.get("totalFound", 0):
                 break
@@ -629,8 +691,7 @@ class WorkdayCollector(Collector):
                     published_at=parse_datetime(item.get("startDate")),
                     metadata={"job_req_id": item.get("jobReqId", "")},
                 )
-                if is_recent(job, since):
-                    result.append(job)
+                result.append(job)
             offset += len(items)
             if not items or offset >= payload.get("total", 0):
                 break
@@ -1132,6 +1193,7 @@ COLLECTORS: dict[str, type[Collector]] = {
     "remoteok": RemoteOkCollector,
     "himalayas": HimalayasCollector,
     "wwr": WwrCollector,
+    "personio": PersonioCollector,
     "smartrecruiters": SmartRecruitersCollector,
     "workday": WorkdayCollector,
     "google_careers": GoogleCareersCollector,
@@ -1158,5 +1220,5 @@ def default_http_client() -> httpx.AsyncClient:
         headers={"User-Agent": USER_AGENT, "Accept": "application/json, application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.8"},
         follow_redirects=True,
         timeout=httpx.Timeout(30, connect=10),
-        limits=httpx.Limits(max_connections=12, max_keepalive_connections=6),
+        limits=httpx.Limits(max_connections=30, max_keepalive_connections=20),
     )

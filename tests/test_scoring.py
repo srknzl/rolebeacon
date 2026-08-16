@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from rolebeacon.domain import EligibilityStatus
 from rolebeacon.profile import CandidateProfileV1, MobilityProfileV1, SearchPreferencesV1, generate_strategies
-from rolebeacon.scoring import evaluate_eligibility, extract_experience_requirements, rule_score
+from rolebeacon.scoring import evaluate_eligibility, extract_experience_requirements, location_requirement, rule_score
 
 CANDIDATE = CandidateProfileV1.model_validate(
     {
@@ -102,6 +102,56 @@ def test_europe_relocation_target_matches_european_roles_but_requires_sponsorshi
     assert eligible.route == "relocate-europe"
     assert rejected.status == EligibilityStatus.INELIGIBLE
     assert rejected.route == "relocate-europe"
+
+
+def test_north_america_relocation_target_matches_a_us_state_and_city_location() -> None:
+    # Regression guard for the region-match rewrite: NORTH_AMERICA used to be dead (only
+    # "EUROPE" was special-cased), so "US, WA, Seattle" fell through to route=other/unknown.
+    mobility = MobilityProfileV1.model_validate(
+        {
+            **MOBILITY.model_dump(mode="json"),
+            "relocation_targets": [{"country_code": "NORTH_AMERICA", "country_name": "North America", "cities": []}],
+        }
+    )
+    strategies = [item.model_dump(mode="json") for item in generate_strategies(CANDIDATE, mobility, PREFERENCES)]
+    result = evaluate_eligibility(
+        job(location="US, WA, Seattle", remote_scope="", description="Build backend systems."),
+        PREFERENCES.model_dump(mode="json"), mobility.model_dump(mode="json"), strategies,
+    )
+
+    assert result.location_fit == "mobility-unknown:NORTH_AMERICA"
+
+
+def test_remote_job_scoped_to_a_non_home_country_is_flagged_remote_scoped() -> None:
+    # "Remote, United States" must not silently take on the candidate's own remote-from-tr
+    # route/fit - it is scoped to a country the candidate hasn't confirmed sponsorship for.
+    result = evaluate(job(location="Remote, United States", remote_scope="US only"))
+
+    assert result.location_fit == "remote-scoped:US"
+    assert result.route != "remote-from-tr"
+
+
+def test_gb_alias_matches_a_constituent_nation_name() -> None:
+    mobility = MobilityProfileV1.model_validate(
+        {
+            **MOBILITY.model_dump(mode="json"),
+            "relocation_targets": [{"country_code": "GB", "country_name": "United Kingdom", "cities": []}],
+        }
+    )
+    strategies = [item.model_dump(mode="json") for item in generate_strategies(CANDIDATE, mobility, PREFERENCES)]
+    result = evaluate_eligibility(
+        job(location="London, England", remote_scope="", description="Visa sponsorship available."),
+        PREFERENCES.model_dump(mode="json"), mobility.model_dump(mode="json"), strategies,
+    )
+
+    assert result.route == "relocate-gb"
+    assert result.status == EligibilityStatus.ELIGIBLE
+
+
+def test_location_requirement_renders_a_plain_sentence_per_prefix() -> None:
+    assert "already authorized" in location_requirement("authorized:DE")
+    assert "scoped to United States" in location_requirement("remote-scoped:US")
+    assert location_requirement("") == "Location requirement could not be determined from the posting."
 
 
 def test_country_scoped_remote_is_not_assumed_worldwide() -> None:
@@ -215,14 +265,14 @@ def test_extract_experience_requirements_parses_years_and_skill() -> None:
         "General software background is a plus."
     )
 
-    assert {"skill": "Java", "years": 5} in found
-    assert {"skill": "Kafka", "years": 3} in found
+    assert {"skill": "Java", "years": 5, "unmet": True} in found
+    assert {"skill": "Kafka", "years": 3, "unmet": True} in found
 
 
 def test_extract_experience_requirements_keeps_the_longest_years_per_skill() -> None:
     found = extract_experience_requirements("2 years of Go required, though 5 years of Go is preferred.")
 
-    assert found == [{"skill": "Go", "years": 5}]
+    assert found == [{"skill": "Go", "years": 5, "unmet": True}]
 
 
 def test_extract_experience_requirements_finds_nothing_in_plain_text() -> None:
@@ -276,6 +326,43 @@ def test_extract_experience_requirements_does_not_capture_a_verb_before_the_real
     for description in cases:
         found = extract_experience_requirements(description)
         assert all(not item["skill"].casefold().split()[0].endswith("ing") for item in found), description
+
+
+def test_extract_experience_requirements_captures_the_object_after_a_connector_verb() -> None:
+    # "experience building/developing/working with/designing/leading X" has no bare "of X" or
+    # "with X" shape at all, so it used to miss entirely; the connector verb is consumed and X
+    # (not the verb) is the captured skill.
+    found = extract_experience_requirements("5+ years of experience building distributed systems.")
+
+    assert found == [{"skill": "distributed systems", "years": 5, "unmet": True}]
+
+
+def test_extract_experience_requirements_accepts_a_possessive_years_phrasing() -> None:
+    found = extract_experience_requirements("5 years' experience with Python.")
+
+    assert found == [{"skill": "Python", "years": 5, "unmet": True}]
+
+
+def test_extract_experience_requirements_drops_single_word_filler_not_in_known_terms() -> None:
+    # "related"/"modern"/"quota" sit where a skill would go but are never a skill themselves, and
+    # unlike "data structures" or "Object Oriented" they are a single lowercase word with nothing
+    # (multi-word, a symbol, capitalization, or the candidate's own vocabulary) to redeem them.
+    for description in ("3+ years of related experience.", "3+ years of modern experience.", "5+ years of quota experience."):
+        assert extract_experience_requirements(description) == [], description
+
+
+def test_extract_experience_requirements_keeps_multiword_and_capitalized_skills() -> None:
+    found = extract_experience_requirements("5+ years of experience with data structures and 3+ years of Kubernetes.")
+
+    assert {"skill": "data structures", "years": 5, "unmet": True} in found
+    assert {"skill": "Kubernetes", "years": 3, "unmet": True} in found
+
+
+def test_extract_experience_requirements_marks_a_skill_in_known_terms_as_met() -> None:
+    found = extract_experience_requirements("5 years of Python and 5 years of Rust required.", {"python"})
+
+    assert {"skill": "Python", "years": 5, "unmet": False} in found
+    assert {"skill": "Rust", "years": 5, "unmet": True} in found
 
 
 def test_rule_score_flags_an_experience_requirement_the_candidate_profile_does_not_show() -> None:

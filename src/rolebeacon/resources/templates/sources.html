@@ -75,12 +75,12 @@
     </div>
     <span>Nothing is saved until you confirm the preview.</span>
   </div>
-  <p class="muted">Paste the public board URL, not a LinkedIn company page. Greenhouse, Lever, Ashby, SmartRecruiters, Workday, Google Careers, and Amazon Jobs are detected automatically.</p>
+  <p class="muted">Paste the public board URL, not a LinkedIn company page. Greenhouse, Lever, Ashby, SmartRecruiters, Workday, Personio, Google Careers, and Amazon Jobs are detected automatically.</p>
   <form id="source-discovery-form" class="source-discovery-form">
     <label>Company name {{ tip("The employer name RoleBeacon should use when normalizing and matching jobs from this board.") }}
       <input id="source-company" maxlength="120" placeholder="Example: Cloudflare" autocomplete="organization">
     </label>
-    <label>Careers or ATS board URL {{ tip("Use a public Greenhouse, Lever, Ashby, SmartRecruiters, Workday, Google Careers, or Amazon Jobs URL. RoleBeacon derives an allow-listed read endpoint from it.") }}
+    <label>Careers or ATS board URL {{ tip("Use a public Greenhouse, Lever, Ashby, SmartRecruiters, Workday, Personio, Google Careers, or Amazon Jobs URL. RoleBeacon derives an allow-listed read endpoint from it.") }}
       <input id="source-url" type="url" required placeholder="https://boards.greenhouse.io/company" autocomplete="url">
     </label>
     <button id="source-preview-button" class="button button-primary" type="submit">Detect and preview</button>

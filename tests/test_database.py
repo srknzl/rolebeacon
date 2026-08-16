@@ -178,11 +178,18 @@ def test_v1_database_is_migrated_in_place(tmp_path) -> None:
     assert version["version"] == 2
 
 
-def _score(database: Database, job_id: int, total: int, role_domain: int, stack: int) -> None:
+def _score(
+    database: Database,
+    job_id: int,
+    total: int,
+    role_domain: int,
+    stack: int,
+    status: EligibilityStatus = EligibilityStatus.ELIGIBLE,
+) -> None:
     database.save_evaluation(
         job_id,
         EligibilityResult(
-            status=EligibilityStatus.ELIGIBLE,
+            status=status,
             route="remote-from-tr",
             sponsorship="unknown",
             relocation="unknown",
@@ -248,6 +255,32 @@ def test_an_unknown_sort_key_falls_back_instead_of_reaching_the_query(tmp_path) 
     assert [job["id"] for job in jobs] == [generalist_id, specialist_id]
 
 
+def test_decision_ready_sort_puts_eligible_before_unknown_before_ineligible(tmp_path) -> None:
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    ids: dict[str, int] = {}
+    for index, (label, status, score) in enumerate(
+        (
+            ("unknown", EligibilityStatus.UNKNOWN, 95),
+            ("ineligible", EligibilityStatus.INELIGIBLE, 99),
+            ("eligible", EligibilityStatus.ELIGIBLE, 60),
+        ),
+        start=1,
+    ):
+        job = sample_job(source=f"source-{index}")
+        job.source_job_id = label
+        job.title = f"{label.title()} Backend Engineer"
+        job.url = f"https://example.com/jobs/{label}"
+        ids[label], _ = database.upsert_job(job)
+        _score(database, ids[label], total=score, role_domain=20, stack=10, status=status)
+
+    assert [job["id"] for job in database.list_jobs()] == [
+        ids["eligible"],
+        ids["unknown"],
+        ids["ineligible"],
+    ]
+
+
 def test_filters_narrow_the_set_and_the_count_agrees_with_the_page(tmp_path) -> None:
     database, _, specialist_id = _two_scored_jobs(tmp_path)
     filters = JobFilters(title="platform")
@@ -289,19 +322,47 @@ def test_experience_requirements_are_stored_and_hide_unmet_experience_filters_th
         )
 
     database.save_evaluation(
-        clean_id, eligibility(), result([]), "scored", requirements=[{"skill": "Java", "years": 5}]
+        clean_id, eligibility(), result([]), "scored", requirements=[{"skill": "Java", "years": 5, "unmet": False}]
     )
     database.save_evaluation(
         gapped_id,
         eligibility(),
         result([{"requirement": "Posting asks for 6+ years of Rust, not found in your profile", "severity": "medium"}]),
         "scored",
-        requirements=[{"skill": "Rust", "years": 6}],
+        requirements=[{"skill": "Rust", "years": 6, "unmet": True}],
     )
 
-    assert database.get_job(clean_id)["requirements"] == [{"skill": "Java", "years": 5}]
-    assert database.get_job(gapped_id)["requirements"] == [{"skill": "Rust", "years": 6}]
+    assert database.get_job(clean_id)["requirements"] == [{"skill": "Java", "years": 5, "unmet": False}]
+    assert database.get_job(gapped_id)["requirements"] == [{"skill": "Rust", "years": 6, "unmet": True}]
     assert [job["id"] for job in database.list_jobs(JobFilters(hide_unmet_experience=True))] == [clean_id]
+
+
+def test_hide_unmet_experience_works_on_llm_scored_jobs_too(tmp_path) -> None:
+    # The old filter matched literal "years of" text inside gaps_json, which only rules-mode gap
+    # text ever contained - an LLM-scored job's differently-worded gap text made the filter a
+    # silent no-op. requirements_json is populated the same deterministic way regardless of which
+    # provider scored the job, so the filter must work here too.
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    job_id, _ = database.upsert_job(sample_job())
+    eligibility = EligibilityResult(
+        status=EligibilityStatus.ELIGIBLE, route="remote-from-tr", sponsorship="unknown",
+        relocation="unknown", location_fit="worldwide", reasons=[], risks=[],
+    )
+    score = ScoreResult(
+        total=70,
+        dimensions={
+            "role_domain": 20, "stack": 15, "domain_experience": 15,
+            "seniority": 8, "location_authorization": 10, "salary_employment": 2,
+        },
+        confidence=0.7, verdict="review", evidence=[],
+        gaps=[{"requirement": "Candidate has not shown Rust proficiency", "severity": "medium"}],
+        provider="llm", model="test-model", prompt_version="job-fit-v11:test-model",
+    )
+
+    database.save_evaluation(job_id, eligibility, score, "scored", requirements=[{"skill": "Rust", "years": 6, "unmet": True}])
+
+    assert database.list_jobs(JobFilters(hide_unmet_experience=True)) == []
 
 
 def test_hide_mismatched_titles_excludes_low_role_domain_jobs_but_keeps_unscored_ones(tmp_path) -> None:
@@ -370,6 +431,25 @@ def test_starting_a_source_clears_its_stale_skip_reason_note(tmp_path) -> None:
     assert state is not None
     assert state["status"] == "running"
     assert state["last_skipped_reason"] == ""
+
+
+def test_reset_stale_sync_runs_closes_interrupted_source_attempts(tmp_path) -> None:
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    database.start_source("interrupted")
+    run_id = database.start_sync_run("interrupted")
+
+    assert database.reset_stale_sync_runs() == 1
+
+    state = database.source_state("interrupted")
+    assert state is not None
+    assert state["status"] == "error"
+    assert "interrupted" in state["last_error"].casefold()
+    with database.connect() as connection:
+        run = connection.execute("SELECT * FROM source_sync_runs WHERE id = ?", (run_id,)).fetchone()
+    assert run is not None
+    assert run["status"] == "error"
+    assert run["finished_at"]
 
 
 def test_company_in_filter_matches_priority_or_watchlist_companies(tmp_path) -> None:

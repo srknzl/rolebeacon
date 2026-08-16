@@ -17,9 +17,10 @@ RELOCATION_REGION_CODES = {
     "OCEANIA": "Oceania",
 }
 # ISO 3166-1 alpha-2 members of each region above, used to expand a one-click continent
-# selection into real per-country relocation targets and source coverage. Antarctica and
-# non-sovereign territories/dependencies are excluded. Europe intentionally matches
-# scoring.EUROPE_LOCATION_TERMS (so it excludes Belarus and Vatican City, same as that list).
+# selection into real per-country relocation targets and source coverage, and by
+# scoring._country_match to recognize a job's location against a region strategy. Antarctica and
+# non-sovereign territories/dependencies are excluded; Europe intentionally excludes Belarus and
+# Vatican City.
 CONTINENT_COUNTRY_CODES: dict[str, tuple[str, ...]] = {
     "EUROPE": (
         "AL", "AD", "AT", "BE", "BA", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR",

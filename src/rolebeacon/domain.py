@@ -113,6 +113,9 @@ class EligibilityResult:
     location_fit: str
     reasons: list[str]
     risks: list[str]
+    # The score a job needs to earn a "review" verdict, from the governing strategy's own
+    # "threshold" (rule_score and llm.py's _normalize_score both read this - one verdict rule).
+    threshold: int = 80
 
 
 @dataclass(slots=True)

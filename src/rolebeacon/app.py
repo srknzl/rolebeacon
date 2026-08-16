@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -16,9 +18,9 @@ from .company import CompanyResearchCoordinator, CompanyResearchService
 from .config import Settings
 from .database import JOB_SORTS, PIPELINE_COLUMNS, Database, JobFilters, company_key
 from .domain import CollectedJob, JobStatus, SourceConfig
-from .llm import LlmClient, LlmUnavailable
+from .llm import LlmClient, LlmResponseRejected, LlmUnavailable
 from .profile import country_catalog, relocation_region_options
-from .scoring import DIMENSION_META, INELIGIBLE_SCORE_CAP
+from .scoring import DIMENSION_META, INELIGIBLE_SCORE_CAP, location_requirement
 from .services import ArtifactService, ProfileValidationError, cover_letter_recommendation
 from .setup import LocalModelService, SetupService
 from .source_catalog import SourceCatalog, SourceCatalogError
@@ -44,6 +46,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     templates = Jinja2Templates(directory=app_settings.resource_dir / "templates")
     templates.env.filters["repair_text"] = repair_text
     templates.env.filters["description_blocks"] = description_blocks
+    templates.env.filters["location_requirement"] = location_requirement
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -116,9 +119,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         sources = app_settings.load_sources()
         preferences = app_settings.load_search_profile()
         filters = _job_filters_from_query(request.query_params, sources=sources, preferences=preferences)
-        sort = values.get("sort", "opportunity")
+        sort = values.get("sort", "decision_ready")
         if sort not in JOB_SORTS:
-            sort = "opportunity"
+            sort = "decision_ready"
         page_size = _as_int(values.get("page_size"), 50)
         if page_size not in {10, 20, 50}:
             page_size = 50
@@ -162,6 +165,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Job not found")
         recommended, recommendation_reason = cover_letter_recommendation(job)
         application = next((item for item in database.list_applications() if item["job_id"] == job_id), None)
+        cover_letter_text = None
+        if application and application.get("cover_letter_path"):
+            cover_letter_file = Path(application["cover_letter_path"])
+            if cover_letter_file.exists():
+                cover_letter_text = cover_letter_file.read_text(encoding="utf-8")
         return templates.TemplateResponse(
             request,
             "job-detail.html",
@@ -171,6 +179,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 application=application,
                 cover_letter_recommended=recommended,
                 cover_letter_reason=recommendation_reason,
+                cover_letter_text=cover_letter_text,
                 dimension_meta=DIMENSION_META,
             ),
         )
@@ -395,7 +404,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         source: str = "",
         q: str = "",
         min_score: int = 0,
-        sort: str = "opportunity",
+        sort: str = "decision_ready",
         limit: int = Query(100, ge=1, le=500),
         offset: int = Query(0, ge=0),
     ) -> dict[str, Any]:
@@ -447,8 +456,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             path = await artifacts.generate_cover_letter(job_id)
         except ProfileValidationError as error:
             raise HTTPException(status_code=409, detail={"message": "Candidate profile is inconsistent", "issues": error.issues}) from error
+        except LlmResponseRejected as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
         except LlmUnavailable as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
+        except (httpx.HTTPError, json.JSONDecodeError, KeyError, ValueError) as error:
+            raise HTTPException(status_code=502, detail=str(error)) from error
         except LookupError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         if _wants_html(request):
@@ -670,6 +683,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
 
 JOB_SORT_LABELS: tuple[tuple[str, str], ...] = (
+    ("decision_ready", "Decision-ready"),
     ("opportunity", "Opportunity score"),
     ("job_fit", "Job fit only"),
     ("title_match", "Title match"),

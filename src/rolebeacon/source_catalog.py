@@ -49,21 +49,23 @@ class SourceCatalog:
         for pack in catalog["packs"]:
             installed = 0
             enabled = 0
-            source_views = []
+            pack_source_views = []
             for entry_id in pack["source_ids"]:
                 entry = entries[entry_id]
                 candidate = self._source(entry, catalog)
                 current = next((source for source in configured if same_source(source, candidate)), None)
                 installed += int(current is not None)
                 enabled += int(bool(current and current.enabled))
-                source_views.append({**entry, "installed": current is not None, "enabled": bool(current and current.enabled)})
+                pack_source_views.append(
+                    {**entry, "installed": current is not None, "enabled": bool(current and current.enabled)}
+                )
             packs.append(
                 {
                     **pack,
                     "source_count": len(pack["source_ids"]),
                     "installed_count": installed,
                     "enabled_count": enabled,
-                    "sources": source_views,
+                    "sources": pack_source_views,
                 }
             )
         return {

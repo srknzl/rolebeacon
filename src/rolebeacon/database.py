@@ -55,6 +55,11 @@ PIPELINE_COLUMNS = ("not_interested", "bookmarked", "applied", "rejected", "offe
 
 # Sort keys are a fixed allow-list because they are interpolated into ORDER BY.
 JOB_SORTS: dict[str, str] = {
+    "decision_ready": (
+        "CASE COALESCE(e.status, 'unknown') "
+        "WHEN 'eligible' THEN 0 WHEN 'unknown' THEN 1 WHEN 'ineligible' THEN 2 ELSE 1 END ASC, "
+        "COALESCE(opportunity_score, ms.total, 0) DESC"
+    ),
     "opportunity": "COALESCE(opportunity_score, ms.total, 0) DESC",
     "job_fit": "COALESCE(ms.total, 0) DESC",
     "title_match": "COALESCE(json_extract(ms.dimensions_json, '$.role_domain'), 0) DESC",
@@ -663,10 +668,11 @@ class Database:
         if filters.exclude_ineligible:
             clauses.append("COALESCE(e.status, 'unknown') <> 'ineligible'")
         if filters.hide_unmet_experience:
-            # Rules-mode gap text always reads "...years of <skill>..." for an experience-requirement
-            # gap (see extract_experience_requirements in scoring.py); LLM-mode gap text won't match
-            # this, so the filter simply has no effect on LLM-scored jobs.
-            clauses.append("COALESCE(ms.gaps_json, '') NOT LIKE '%years of%'")
+            # Each stored requirement carries its own "unmet" bool (see extract_experience_requirements
+            # in scoring.py) - works identically in rules and LLM mode, unlike matching gap text.
+            clauses.append(
+                "NOT EXISTS (SELECT 1 FROM json_each(j.requirements_json) req WHERE json_extract(req.value, '$.unmet') = 1)"
+            )
         if filters.eligibility:
             clauses.append("COALESCE(e.status, 'unknown') = ?")
             params.append(filters.eligibility)
@@ -753,7 +759,7 @@ class Database:
         self,
         filters: JobFilters | None = None,
         *,
-        sort: str = "opportunity",
+        sort: str = "decision_ready",
         limit: int = 100,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
@@ -780,7 +786,7 @@ class Database:
                 SELECT id FROM company_scores WHERE company_id = c.id ORDER BY created_at DESC, id DESC LIMIT 1
             )
             WHERE {' AND '.join(clauses)}
-            ORDER BY {JOB_SORTS.get(sort) or JOB_SORTS["opportunity"]},
+            ORDER BY {JOB_SORTS.get(sort) or JOB_SORTS["decision_ready"]},
                      COALESCE(opportunity_score, ms.total, 0) DESC,
                      COALESCE(j.published_at, j.first_seen_at) DESC
             LIMIT ? OFFSET ?
@@ -947,6 +953,32 @@ class Database:
             if cursor.lastrowid is None:
                 raise RuntimeError("SQLite did not return the sync run ID")
             return int(cursor.lastrowid)
+
+    def reset_stale_sync_runs(self) -> int:
+        """Close source attempts left running by a cancelled or terminated process.
+
+        A new SyncService run owns the only in-process sync lock, so any pre-existing running
+        row necessarily belongs to an interrupted older run. Leaving it as running forever makes
+        the Sources page report work that no process can complete.
+        """
+        now = _iso()
+        message = "Previous sync was interrupted before completion"
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE source_sync_runs SET finished_at = ?, status = 'error', error = ?
+                WHERE status = 'running'
+                """,
+                (now, message),
+            )
+            connection.execute(
+                """
+                UPDATE source_state SET status = 'error', last_error = ?, next_eligible_sync_at = NULL
+                WHERE status = 'running'
+                """,
+                (message,),
+            )
+            return cursor.rowcount
 
     def finish_sync_run(self, run_id: int, *, status: str, started_at: datetime, **metrics: Any) -> None:
         duration_ms = max(0, int((datetime.now(UTC) - started_at).total_seconds() * 1000))

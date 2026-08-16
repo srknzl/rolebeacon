@@ -7,10 +7,17 @@ import httpx
 from rolebeacon.collectors import plain_text
 from rolebeacon.config import Settings
 from rolebeacon.database import Database
-from rolebeacon.domain import CollectedJob, SourceConfig
-from rolebeacon.llm import LlmClient
+from rolebeacon.domain import CollectedJob, ScoreResult, SourceConfig
+from rolebeacon.llm import LlmClient, LlmResponseRejected
+from rolebeacon.setup import SetupService
 from rolebeacon.source_discovery import relocation_source_candidates
-from rolebeacon.sync import SyncService, _friendly_error_prefix, deduplicate_source_jobs, personalize_source
+from rolebeacon.sync import (
+    SyncService,
+    _friendly_error_prefix,
+    deduplicate_source_jobs,
+    engineering_job,
+    personalize_source,
+)
 
 
 def test_incremental_window_overlaps_last_success(tmp_path) -> None:
@@ -69,6 +76,49 @@ def test_collector_duplicates_are_collapsed_before_upsert() -> None:
 
     assert len(result) == 1
     assert result[0].description == "Updated representation"
+
+
+def test_ingestion_filter_uses_only_candidate_authored_terms_and_exact_role_phrases() -> None:
+    profile = {
+        "target_roles": ["Software Engineer", "Backend Engineer"],
+        "preferred_skills": ["Go"],
+        "preferred_domains": ["distributed systems"],
+    }
+
+    assert engineering_job(
+        CollectedJob(
+            source="fixture", source_job_id="1", title="Software Engineer", company="Example",
+            location="Remote", description="", url="https://example.test/1",
+        ),
+        profile,
+    )
+    assert not engineering_job(
+        CollectedJob(
+            source="fixture", source_job_id="2", title="Google Partnerships Manager", company="Example",
+            location="Remote", description="", url="https://example.test/2",
+        ),
+        profile,
+    )
+
+
+def test_ingestion_filter_keeps_watchlist_companies_and_rejects_unrelated_titles() -> None:
+    profile = {
+        "target_roles": ["Backend Engineer"],
+        "preferred_skills": ["Python"],
+        "preferred_domains": ["cloud"],
+        "company_watchlist": ["Watched Co"],
+    }
+    unrelated = CollectedJob(
+        source="fixture", source_job_id="1", title="Account Executive", company="Other Co",
+        location="Remote", description="", url="https://example.test/1",
+    )
+    watched = CollectedJob(
+        source="fixture", source_job_id="2", title="Account Executive", company="Watched Co",
+        location="Remote", description="", url="https://example.test/2",
+    )
+
+    assert not engineering_job(unrelated, profile)
+    assert engineering_job(watched, profile)
 
 
 def test_first_party_sources_use_saved_roles_and_keep_their_baked_in_location(tmp_path) -> None:
@@ -156,3 +206,38 @@ async def test_unavailable_selected_llm_stops_refresh_before_collection_or_rules
     assert result.jobs_seen == 0
     assert result.rule_fallback_jobs == 0
     assert database.list_sources() == []
+
+
+async def test_llm_response_rejected_falls_back_to_rules_for_just_that_job(tmp_path, monkeypatch) -> None:
+    payload = {
+        "candidate": {"schema_version": "1.0", "name": "Candidate", "location": {"country_code": "TR", "country_name": "Türkiye"}, "skills": {}},
+        "mobility": {"schema_version": "1.0", "current_country_code": "TR", "work_authorizations": ["TR"]},
+        "preferences": {"schema_version": "1.0", "target_roles": ["Backend Engineer"]},
+        "enabled_source_ids": [],
+        "llm": {"mode": "custom", "base_url": "http://model.example/v1", "model": "test-model"},
+        "activate": True,
+    }
+    settings = SetupService(Settings.load(tmp_path)).complete(payload)
+    database = Database(settings.database_path)
+    database.initialize()
+    job_id, _ = database.upsert_job(
+        CollectedJob(
+            source="fixture", source_job_id="1", title="Backend Engineer", company="Example",
+            location="Remote Worldwide", description="Build backend systems", url="https://example.com/jobs/1",
+        )
+    )
+    service = SyncService(settings, database, LlmClient(settings))
+
+    async def available() -> dict[str, object]:
+        return {"available": True, "status": "available", "error": ""}
+
+    async def rejected(*_args, **_kwargs) -> ScoreResult:
+        raise LlmResponseRejected("generic gap label stack")
+
+    monkeypatch.setattr(service.llm, "health", available)
+    monkeypatch.setattr(service.llm, "score", rejected)
+    result = await service.run()
+
+    assert result.phase == "complete"
+    assert result.rule_fallback_jobs == 1
+    assert database.get_job(job_id)["provider"] == "rules"

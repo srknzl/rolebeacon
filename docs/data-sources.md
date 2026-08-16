@@ -1,6 +1,6 @@
 # Job data source assessment
 
-Research date: 2026-08-11.
+Research date: 2026-08-16.
 
 RoleBeacon favors first-party career pages and documented provider APIs. A source must preserve
 the original posting URL, publication time, location restrictions, and provider attribution. A
@@ -10,7 +10,8 @@ large feed is not useful if its employment geography cannot be assessed conserva
 
 The Sources page accepts a public careers URL and supports two classes of company source:
 
-- documented public ATS boards: Greenhouse, Lever, Ashby, SmartRecruiters, and Workday;
+- documented public ATS boards: Greenhouse, Lever, Ashby, SmartRecruiters, Workday, and
+  Personio's public XML feed;
 - isolated first-party connectors: Google Careers server-rendered job pages and the Amazon Jobs
   public-site JSON response.
 
@@ -34,6 +35,11 @@ can produce thousands of postings and substantial local-model work.
 The registry includes unsupported first-party career sites as explicit coverage gaps rather than
 installable sources. Entries are reviewed against public provider endpoints, but the verification date is
 not a promise of permanent availability. Contract tests and source-local health reporting handle changes.
+
+Personio boards are read from the employer's documented, credential-free
+`https://<account>.jobs.personio.com/xml` feed. The connector uses the same four-hour default polling
+interval as other company boards, preserves the public Personio job URL, and never uses the
+authenticated Recruiting API.
 
 Google Careers and Amazon Jobs do not advertise these read surfaces as supported public APIs. Their
 connectors therefore use four-hour polling by default, content hashes, provider-specific contract tests,
@@ -91,6 +97,7 @@ Official provider references:
 - [Adzuna Job Search API](https://developer.adzuna.com/docs/search)
 - [Jooble REST API](https://jooble.org/api/about)
 - [SerpApi Google Jobs API](https://serpapi.com/google-jobs-api)
+- [Personio XML job integration](https://support.personio.de/hc/en-us/articles/207576365-Integrate-jobs-from-Personio-into-your-company-website-via-XML)
 
 ## Sources that do not solve the gap directly
 

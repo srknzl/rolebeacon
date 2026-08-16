@@ -23,7 +23,9 @@ an LLM must never be required for collection, deterministic scoring, or setup.
 ## Conventions
 
 - Commit English-only code, identifiers, comments, fixtures, UI copy, and documentation.
-  `Türkiye` is the intentional display name for country code `TR`.
+  `Türkiye` is the intentional display name for country code `TR`. This does not cover
+  on-demand generated artifacts (e.g. cover letters), which are written in the job
+  posting's own language.
 - Never automate a final application submission. The user must review and submit.
 - Do not scrape authenticated LinkedIn pages. LinkedIn data may enter through user-owned alerts.
 - Keep profiles, generated artifacts, browser sessions, OAuth tokens, secrets, and SQLite files
@@ -32,6 +34,8 @@ an LLM must never be required for collection, deterministic scoring, or setup.
 - Collectors fail independently and preserve provenance during deduplication.
 - Eligibility is a hard gate. Reputation and fit cannot override authorization, sponsorship,
   clearance, or explicit geographic restrictions.
+- The `location_authorization` dimension is always computed deterministically from the
+  eligibility result and is never scored by a model.
 - Country-scoped remote wording is regional, not worldwide. Unknown facts remain unknown.
 - Company fit and job fit stay separate; company fit contributes at most 20% of opportunity fit.
 - Company search may discover official domains and pages, but search snippets and third-party profiles

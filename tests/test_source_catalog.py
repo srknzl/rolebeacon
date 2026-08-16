@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from fastapi.testclient import TestClient
 from test_source_workflow import setup_payload
 
@@ -21,8 +23,8 @@ def test_source_catalog_is_valid_and_exposes_searchable_packs(tmp_path) -> None:
     view = catalog.view()
 
     assert view["schema_version"] == "1.0"
-    assert view["verified_at"] == "2026-08-13"
-    assert len(view["sources"]) == 74
+    assert view["verified_at"] == "2026-08-16"
+    assert len(view["sources"]) == 79
     assert {pack["id"] for pack in view["packs"]} >= {
         "big-tech",
         "developer-infrastructure",
@@ -46,13 +48,13 @@ def test_pack_installation_is_idempotent_and_preserves_enabled_sources(tmp_path)
     second = catalog.install("big-tech", enabled=True)
     third = catalog.install("big-tech", enabled=False)
 
-    assert first.added == 7  # Google, Amazon, and Cloudflare already ship as disabled defaults.
+    assert first.added == 8  # Google, Amazon, and Cloudflare already ship as disabled defaults.
     assert first.updated == 3
     assert first.enabled == 0
     assert second.added == 0
-    assert second.enabled == 10
+    assert second.enabled == 11
     assert third.added == 0
-    assert third.enabled == 10
+    assert third.enabled == 11
     configured = settings.load_sources()
     assert len({source.id for source in configured}) == len(configured)
 
@@ -71,6 +73,26 @@ def test_single_catalog_entry_install_updates_existing_board_without_duplicate(t
     assert sum(item.kind == "greenhouse" and item.slug == "cloudflare" for item in settings.load_sources()) == 1
 
 
+def test_catalog_top_level_sources_are_not_shadowed_by_the_last_pack(tmp_path) -> None:
+    settings = configured_settings(tmp_path)
+    catalog = SourceCatalog(settings)
+    catalog.path = tmp_path / "source-packs.json"
+    catalog.path.write_text(json.dumps({
+        "schema_version": "1.0",
+        "verified_at": "2026-08-16",
+        "packs": [
+            {"id": "all", "name": "All", "description": "", "source_ids": ["cloudflare", "gitlab"]},
+            {"id": "last-subset", "name": "Subset", "description": "", "source_ids": ["gitlab"]},
+        ],
+        "sources": [
+            {"id": "cloudflare", "company": "Cloudflare", "name": "Cloudflare", "url": "https://job-boards.greenhouse.io/cloudflare", "connector": "greenhouse"},
+            {"id": "gitlab", "company": "GitLab", "name": "GitLab", "url": "https://job-boards.greenhouse.io/gitlab", "connector": "greenhouse"},
+        ],
+    }), encoding="utf-8")
+
+    assert {source["id"] for source in catalog.view()["sources"]} == {"cloudflare", "gitlab"}
+
+
 def test_source_pack_api_and_page_work_end_to_end(tmp_path) -> None:
     app = create_app(configured_settings(tmp_path))
 
@@ -83,7 +105,7 @@ def test_source_pack_api_and_page_work_end_to_end(tmp_path) -> None:
 
     assert page.status_code == 200
     assert "Source packs" in page.text
-    assert "Browse all 74 verified company boards" in page.text
+    assert "Browse all 79 verified company boards" in page.text
     assert catalog.status_code == 200
     assert installed.status_code == 200
     assert installed.json()["added"] > 0
