@@ -27,7 +27,7 @@
       </div>
       <p>{{ pack.description }}</p>
       <div class="source-pack-progress"><span style="width:{{ (100 * pack.installed_count / pack.source_count)|round|int }}%"></span></div>
-      <small>{{ pack.installed_count }} added · {{ pack.enabled_count }} enabled</small>
+      <small>{{ pack.installed_count }}/{{ pack.source_count }} added · {{ pack.enabled_count }}/{{ pack.source_count }} enabled</small>
       <details>
         <summary>View companies</summary>
         <div class="source-pack-companies">{% for source in pack.sources %}<span class="source-company-chip {% if source.enabled %}is-enabled{% elif source.installed %}is-installed{% endif %}">{{ source.company }}</span>{% endfor %}</div>
