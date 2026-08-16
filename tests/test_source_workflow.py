@@ -70,6 +70,11 @@ def setup_payload() -> dict:
             {"host": "https://acme.wd5.myworkdayjobs.com", "tenant": "acme", "site": "External"},
         ),
         (
+            "https://acme.jobs.personio.com/",
+            "personio",
+            {"host": "https://acme.jobs.personio.com", "slug": "acme"},
+        ),
+        (
             "https://www.google.com/about/careers/applications/jobs/results/?q=Software+Engineer&location=Germany",
             "google_careers",
             {"url": "https://www.google.com/about/careers/applications/jobs/results/?q=Software+Engineer&location=Germany"},
@@ -163,6 +168,28 @@ async def test_source_preview_validates_the_endpoint_and_returns_sample_jobs() -
     assert preview.jobs_found == 2
     assert preview.source.kind == "greenhouse"
     assert [job["title"] for job in preview.sample_jobs] == ["Backend Engineer", "Platform Engineer"]
+
+
+@pytest.mark.asyncio
+async def test_personio_preview_uses_the_public_xml_feed() -> None:
+    xml = """
+    <workzag-jobs><position><id>42</id><office>Berlin</office><name>Platform Engineer</name></position></workzag-jobs>
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url == httpx.URL("https://acme.jobs.personio.com/xml")
+        return httpx.Response(200, content=xml)
+
+    service = SourceDiscoveryService(lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    preview = await service.preview("https://acme.jobs.personio.com/", "Acme")
+
+    assert preview.jobs_found == 1
+    assert preview.source.kind == "personio"
+    assert preview.sample_jobs == [{
+        "title": "Platform Engineer",
+        "location": "Berlin",
+        "url": "https://acme.jobs.personio.com/job/42?display=en",
+    }]
 
 
 @pytest.mark.asyncio

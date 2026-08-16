@@ -173,15 +173,23 @@ def test_llm_score_total_is_derived_from_dimensions(tmp_path) -> None:
             "stack": 15,
             "domain_experience": 15,
             "seniority": 8,
-            "location_authorization": 12,
             "salary_employment": 5,
         },
+        "confidence": 80,
+        "evidence": [],
+        "gaps": [],
     }
-    value["confidence"] = 80
-    LlmClient._normalize_score(value, EligibilityStatus.ELIGIBLE)
+    eligibility = EligibilityResult(
+        status=EligibilityStatus.ELIGIBLE, route="authorized-tr", sponsorship="unavailable",
+        relocation="unknown", location_fit="authorized:TR", reasons=[], risks=[], threshold=65,
+    )
+    LlmClient._normalize_score(value, eligibility)
     LlmClient._validate_score(value)
 
-    assert value["total"] == 75
+    # location_authorization is never model-supplied - it's spliced in deterministically from
+    # the eligibility status (15 for ELIGIBLE), never left to the model to guess.
+    assert value["dimensions"]["location_authorization"] == 15
+    assert value["total"] == 78
     assert value["confidence"] == 0.8
     assert value["verdict"] == "review"
 
@@ -199,13 +207,12 @@ def test_llm_semantic_validation_rejects_negative_evidence_and_generic_gaps() ->
             "stack": 0,
             "domain_experience": 10,
             "seniority": 8,
-            "location_authorization": 15,
             "salary_employment": 5,
         },
         "evidence": [
             {
                 "requirement": "stack",
-                "profile_evidence": "Candidate knows Java, but the role requires React.",
+                "profile_evidence": "Candidate knows Java, does not have React experience.",
             }
         ],
         "gaps": [
@@ -218,24 +225,84 @@ def test_llm_semantic_validation_rejects_negative_evidence_and_generic_gaps() ->
         LlmClient._validate_score_semantics(value)
 
 
+def test_llm_semantic_validation_accepts_but_rejects_contradicting_and_ungrounded_evidence() -> None:
+    base_dimensions = {
+        "role_domain": 20, "stack": 15, "domain_experience": 5, "seniority": 10, "salary_employment": 5,
+    }
+
+    # "but" alone is no longer a negation marker - it was the single biggest cause of the
+    # 20% hard-failure rate measured against real jobs, and "but" mid-sentence is not reliably
+    # negative ("Built Kafka pipelines, but at smaller scale" is still positive evidence).
+    LlmClient._validate_score_semantics(
+        {
+            "dimensions": base_dimensions,
+            "evidence": [{"requirement": "Kafka", "profile_evidence": "Built Kafka pipelines, but at smaller scale"}],
+            "gaps": [],
+        },
+        {"kafka", "pipelines"},
+    )
+
+    with pytest.raises(ValueError, match="claimed as both evidence and a gap"):
+        LlmClient._validate_score_semantics(
+            {
+                "dimensions": base_dimensions,
+                "evidence": [{"requirement": "Kafka", "profile_evidence": "Built Kafka pipelines"}],
+                "gaps": [{"requirement": "Kafka", "severity": "high"}],
+            },
+            {"kafka", "pipelines"},
+        )
+
+    with pytest.raises(ValueError, match="not grounded in the candidate profile"):
+        LlmClient._validate_score_semantics(
+            {
+                "dimensions": base_dimensions,
+                "evidence": [{"requirement": "Kafka", "profile_evidence": "Built Kafka pipelines"}],
+                "gaps": [],
+            },
+            {"python", "django"},
+        )
+
+
+def test_normalize_score_overwrites_a_model_supplied_location_authorization() -> None:
+    # Even if a model ignores the schema and sneaks the key back in, the deterministic value
+    # must win - this dimension is never the model's call.
+    value = {
+        "dimensions": {
+            "role_domain": 20, "stack": 15, "domain_experience": 5, "seniority": 10,
+            "location_authorization": 999, "salary_employment": 5,
+        },
+        "confidence": 0.5,
+        "evidence": [],
+        "gaps": [],
+    }
+    eligibility = EligibilityResult(
+        status=EligibilityStatus.UNKNOWN, route="other", sponsorship="unknown",
+        relocation="unknown", location_fit="unknown", reasons=[], risks=[],
+    )
+
+    LlmClient._normalize_score(value, eligibility)
+
+    assert value["dimensions"]["location_authorization"] == 8
+    assert value["total"] == 63
+
+
 @pytest.mark.asyncio
 async def test_llm_score_retries_with_specific_semantic_feedback(tmp_path) -> None:
     invalid = {
         "dimensions": {
-            "role_domain": 0, "stack": 0, "domain_experience": 0,
-            "seniority": 0, "location_authorization": 15, "salary_employment": 5,
+            "role_domain": 0, "stack": 0, "domain_experience": 0, "seniority": 0, "salary_employment": 5,
         },
         "confidence": 0.2,
-        "evidence": [{"requirement": "stack", "profile_evidence": "Java, but the role needs React"}],
+        "evidence": [{"requirement": "stack", "profile_evidence": "Java, does not have React experience"}],
         "gaps": [{"requirement": "stack", "severity": "high"}],
     }
     corrected = {
-        **invalid,
+        "dimensions": {
+            "role_domain": 25, "stack": 10, "domain_experience": 5, "seniority": 10, "salary_employment": 5,
+        },
+        "confidence": 0.2,
         "evidence": [
-            {
-                "requirement": "location_authorization",
-                "profile_evidence": "Worldwide remote work explicitly includes the candidate location.",
-            }
+            {"requirement": "TypeScript", "profile_evidence": "Candidate profile lists TypeScript among skills"}
         ],
         "gaps": [{"requirement": "React", "severity": "high"}],
     }
@@ -262,7 +329,7 @@ async def test_llm_score_retries_with_specific_semantic_feedback(tmp_path) -> No
             risks=[],
         ),
         {},
-        {"location": {"country_code": "TR", "country_name": "Türkiye"}},
+        {"location": {"country_code": "TR", "country_name": "Türkiye"}, "skills": {"Languages": ["TypeScript"]}},
     )
 
     assert score.gaps == [{"requirement": "React", "severity": "high"}]
@@ -277,7 +344,7 @@ def test_qwen3_prompts_disable_thinking_for_structured_output(tmp_path) -> None:
     assert LlmClient(settings)._prompt_for_model("Return JSON").endswith("/no_think")
 
 
-def test_ollama_native_payload_disables_thinking_and_uses_json_schema(tmp_path) -> None:
+def test_ollama_native_payload_uses_json_schema_and_context_length(tmp_path) -> None:
     settings = replace(Settings.load(tmp_path), llm_mode="ollama", llm_enabled=True, llm_model="qwen3:14b")
     schema = {"type": "object", "properties": {"result": {"type": "string"}}, "required": ["result"]}
 
@@ -285,9 +352,12 @@ def test_ollama_native_payload_disables_thinking_and_uses_json_schema(tmp_path) 
         [{"role": "user", "content": "Return JSON"}], schema, temperature=0.1, max_tokens=900
     )
 
-    assert payload["think"] is False
+    # No "think" key: forcing it off previously collapsed qwen3 scores to near-zero. Omitting it
+    # lets Ollama use each model's own default thinking behavior.
+    assert "think" not in payload
     assert payload["format"] == schema
-    assert payload["options"]["num_predict"] == 900
+    assert payload["options"]["num_predict"] == 4096
+    assert payload["options"]["num_ctx"] == 16384
 
 
 def test_setup_shows_searchable_country_catalog_and_rules_model_status(tmp_path) -> None:
@@ -732,6 +802,29 @@ def test_job_detail_decisions_are_in_place_and_cover_letter_requires_llm(tmp_pat
     assert "Cover letter requires an LLM" in page.text
     assert decision.status_code == 200
     assert app.state.database.get_job(job_id)["status"] == "bookmarked"
+
+
+def test_job_detail_renders_the_cover_letter_draft_and_links_the_printable_version(tmp_path) -> None:
+    settings = configured_settings(tmp_path)
+    app = create_app(settings)
+    job_id, _ = app.state.database.upsert_job(
+        CollectedJob(
+            source="manual", source_job_id="cover-letter", title="Backend Engineer", company="Example",
+            location="Remote", description="Build backend systems.", url="https://example.test/cover-letter",
+        )
+    )
+    directory = settings.data_dir / "applications" / str(job_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "cover-letter.txt").write_text("Dear Hiring Team,\n\nA tailored paragraph.\n\nSincerely,\nExample Candidate\n", encoding="utf-8")
+    (directory / "cover-letter.html").write_text("<p>Dear Hiring Team,</p>", encoding="utf-8")
+    app.state.database.save_application(job_id, status="preparing", cover_letter_path=str(directory / "cover-letter.txt"))
+
+    with TestClient(app) as client:
+        page = client.get(f"/jobs/{job_id}")
+
+    assert page.status_code == 200
+    assert "A tailored paragraph." in page.text
+    assert f"/artifacts/{job_id}/cover-letter.html" in page.text
 
 
 def test_bookmarking_a_job_shows_it_on_the_pipeline_board_without_a_resume(tmp_path) -> None:

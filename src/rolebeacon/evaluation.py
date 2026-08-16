@@ -221,7 +221,21 @@ async def run_model_evaluation(scorer: ModelScorer, runs: int = 1) -> dict[str, 
         scores_by_case[case.id] = []
         for _ in range(max(1, runs)):
             started = time.perf_counter()
-            score = await scorer.score(case.job, eligibility, preferences, candidate)
+            try:
+                score = await scorer.score(case.job, eligibility, preferences, candidate)
+            except Exception as error:
+                latency = time.perf_counter() - started
+                latencies.append(latency)
+                run_number = len(result["runs"]) + 1
+                result["runs"].append(
+                    {
+                        "error": f"{type(error).__name__}: {error}",
+                        "latency_seconds": round(latency, 3),
+                        "checks": {"response": False},
+                    }
+                )
+                checks[f"run_{run_number}_response"] = False
+                continue
             latency = time.perf_counter() - started
             latencies.append(latency)
             scores_by_case[case.id].append(score.total)
@@ -253,14 +267,18 @@ async def run_model_evaluation(scorer: ModelScorer, runs: int = 1) -> dict[str, 
         result["passed"] = all(checks.values())
         case_results.append(result)
 
+    def mean_score(case_id: str) -> float:
+        values = scores_by_case.get(case_id, [])
+        return statistics.mean(values) if values else 0
+
     ranking_checks = {
         "strong_beats_frontend_by_15": (
-            statistics.mean(scores_by_case.get("strong_backend_match", [0]))
-            >= statistics.mean(scores_by_case.get("frontend_stack_mismatch", [0])) + 15
+            mean_score("strong_backend_match")
+            >= mean_score("frontend_stack_mismatch") + 15
         ),
         "strong_beats_big_tech_transfer_by_5": (
-            statistics.mean(scores_by_case.get("strong_backend_match", [0]))
-            >= statistics.mean(scores_by_case.get("big_tech_transferable_experience", [0])) + 5
+            mean_score("strong_backend_match")
+            >= mean_score("big_tech_transferable_experience") + 5
         ),
     }
     passed_cases = sum(bool(item["passed"]) for item in case_results)

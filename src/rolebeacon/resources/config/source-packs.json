@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "verified_at": "2026-08-13",
+  "verified_at": "2026-08-16",
   "packs": [
     {
       "id": "big-tech",
@@ -9,7 +9,7 @@
       "recommended": true,
       "source_ids": [
         "google-software-germany", "amazon-software-germany", "openai", "databricks",
-        "cloudflare", "mongodb", "datadog", "figma", "coinbase", "reddit"
+        "cloudflare", "mongodb", "datadog", "figma", "coinbase", "reddit", "nvidia"
       ]
     },
     {
@@ -36,7 +36,7 @@
       "name": "Remote-friendly engineering",
       "description": "Companies known for distributed or location-flexible engineering teams; every role is still checked individually.",
       "recommended": false,
-      "source_ids": ["gitlab", "grafana-labs", "canonical", "tailscale", "vercel", "posthog"]
+      "source_ids": ["gitlab", "grafana-labs", "canonical", "tailscale", "vercel", "posthog", "lever"]
     },
     {
       "id": "europe-tech",
@@ -45,7 +45,7 @@
       "recommended": true,
       "source_ids": [
         "jetbrains", "contentful", "n26", "celonis", "sumup", "getyourguide", "hellofresh",
-        "wise", "elastic", "grafana-labs", "canonical"
+        "wise", "elastic", "grafana-labs", "canonical", "delivery-hero", "bosch", "personio", "lever"
       ]
     },
     {
@@ -56,7 +56,7 @@
       "source_ids": [
         "openai", "cohere", "cursor", "perplexity", "modal", "midjourney", "runway", "elevenlabs",
         "langchain", "harvey", "databricks", "mongodb", "clickhouse", "temporal", "airbyte", "pinecone",
-        "weaviate", "motherduck", "neon"
+        "weaviate", "motherduck", "neon", "nvidia"
       ]
     },
     {
@@ -84,7 +84,7 @@
         "robinhood", "affirm", "brex", "sumup", "chime", "getyourguide", "hellofresh", "jetbrains",
         "cohere", "modal", "railway", "motherduck", "neon", "render", "airbyte", "pinecone", "temporal",
         "weaviate", "clickhouse", "runway", "midjourney", "langchain", "vanta", "notion", "harvey",
-        "elevenlabs", "drata", "wise"
+        "elevenlabs", "drata", "wise", "lever", "delivery-hero", "bosch", "nvidia", "personio"
       ]
     }
   ],
@@ -162,7 +162,12 @@
     {"id":"notion","company":"Notion","name":"Notion","url":"https://jobs.ashbyhq.com/notion","connector":"ashby"},
     {"id":"harvey","company":"Harvey","name":"Harvey","url":"https://jobs.ashbyhq.com/harvey","connector":"ashby"},
     {"id":"elevenlabs","company":"ElevenLabs","name":"ElevenLabs","url":"https://jobs.ashbyhq.com/elevenlabs","connector":"ashby"},
-    {"id":"drata","company":"Drata","name":"Drata","url":"https://jobs.ashbyhq.com/drata","connector":"ashby"}
+    {"id":"drata","company":"Drata","name":"Drata","url":"https://jobs.ashbyhq.com/drata","connector":"ashby"},
+    {"id":"lever","company":"Lever","name":"Lever","url":"https://jobs.eu.lever.co/lever","connector":"lever"},
+    {"id":"delivery-hero","company":"Delivery Hero","name":"Delivery Hero","url":"https://jobs.smartrecruiters.com/DeliveryHero","connector":"smartrecruiters"},
+    {"id":"bosch","company":"Bosch","name":"Bosch","url":"https://jobs.smartrecruiters.com/BoschGroup","connector":"smartrecruiters"},
+    {"id":"nvidia","company":"NVIDIA","name":"NVIDIA","url":"https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite","connector":"workday"},
+    {"id":"personio","company":"Personio","name":"Personio","url":"https://open.jobs.personio.com/","connector":"personio"}
   ],
   "coverage_gaps": [
     {"company":"Microsoft","url":"https://apply.careers.microsoft.com/careers","reason":"Dedicated first-party connector required"},

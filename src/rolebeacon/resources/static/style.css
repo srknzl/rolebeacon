@@ -585,6 +585,7 @@ label:has(> .help-tip):not(:has(> input[type=checkbox])) > :not(.help-tip) { gri
 .dimension-list strong { font-family: var(--font-mono); }
 
 .job-description p { white-space: pre-line; }
+.cover-letter-text { white-space: pre-line; line-height: 1.72; margin: 0; }
 .job-description-content h3 { font-size: 15px; margin: 26px 0 10px; color: var(--ink); }
 .job-description-content h3:first-child { margin-top: 0; }
 .job-description-content p { white-space: normal; margin: 0 0 16px; line-height: 1.72; }

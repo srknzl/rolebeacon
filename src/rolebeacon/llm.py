@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import json
+import re
+from collections.abc import Callable
 from typing import Any
 
 import httpx
 
 from .config import Settings
-from .domain import EligibilityResult, EligibilityStatus, ScoreResult
-from .scoring import DIMENSION_MAXIMUMS, SCORING_PROMPT_VERSION
+from .domain import EligibilityResult, ScoreResult
+from .scoring import DIMENSION_MAXIMUMS, LOCATION_SCORES, SCORING_PROMPT_VERSION, compute_verdict
 
+# location_authorization is deliberately absent: it is a pure lookup from the deterministic
+# eligibility result (LOCATION_SCORES, scoring.py), spliced into dimensions in _normalize_score.
+# Letting a model set it would let it override the eligibility gate - see CLAUDE.md.
 SCORE_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -21,16 +26,14 @@ SCORE_SCHEMA = {
                 "stack": {"type": "integer", "minimum": 0, "maximum": DIMENSION_MAXIMUMS["stack"]},
                 "domain_experience": {"type": "integer", "minimum": 0, "maximum": DIMENSION_MAXIMUMS["domain_experience"]},
                 "seniority": {"type": "integer", "minimum": 0, "maximum": DIMENSION_MAXIMUMS["seniority"]},
-                "location_authorization": {
-                    "type": "integer", "minimum": 0, "maximum": DIMENSION_MAXIMUMS["location_authorization"],
-                },
                 "salary_employment": {"type": "integer", "minimum": 0, "maximum": DIMENSION_MAXIMUMS["salary_employment"]},
             },
-            "required": ["role_domain", "stack", "domain_experience", "seniority", "location_authorization", "salary_employment"],
+            "required": ["role_domain", "stack", "domain_experience", "seniority", "salary_employment"],
         },
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
         "evidence": {
             "type": "array",
+            "maxItems": 6,
             "items": {
                 "type": "object",
                 "additionalProperties": False,
@@ -40,6 +43,7 @@ SCORE_SCHEMA = {
         },
         "gaps": {
             "type": "array",
+            "maxItems": 6,
             "items": {
                 "type": "object",
                 "additionalProperties": False,
@@ -56,10 +60,11 @@ SCORING_RUBRIC = """Use the full integer point ranges below. These are additive 
 - stack (0-20): 18-20 nearly all required technologies, 10-17 meaningful overlap, 1-9 weak overlap, 0 none.
 - domain_experience (0-10): 9-10 direct proven experience, 5-8 transferable, 1-4 adjacent, 0 none.
 - seniority (0-15): 13-15 proven target seniority, 7-12 close, 1-6 mismatch, 0 disqualifying.
-- location_authorization (0-15): 15 explicitly eligible, 8-12 likely compatible, 0-5 unknown or risky.
 - salary_employment (0-10): 8-10 confirmed fit, 5 when unstated, 0-4 conflict or material uncertainty.
+Location and work authorization are scored separately from the deterministic eligibility result - do not
+score or mention them as a dimension.
 
-A strong evidence-backed match should normally total at least 70 points. Do not normalize dimensions to 0 or 1.
+A strong evidence-backed match should normally total at least 55 of these 85 points. Do not normalize dimensions to 0 or 1.
 Use evidence only for positive matches and quote concrete candidate facts in profile_evidence. For zero-score dimensions,
 omit evidence entirely and explain the mismatch only in gaps. Every gap requirement must name the exact missing skill,
 technology, qualification, or authorization; never use a generic dimension name such as "stack". Never write "absent",
@@ -70,11 +75,22 @@ GENERIC_GAP_LABELS = {
     "role domain", "role_domain", "stack", "domain experience", "domain_experience", "seniority",
     "location authorization", "location_authorization", "salary employment", "salary_employment",
 }
-NEGATIVE_EVIDENCE = (" but ", " no experience", " does not ", " doesn't ", " lacks ", " missing ", " absent ")
+NEGATIVE_EVIDENCE = (" no experience", " does not ", " doesn't ", " lacks ", " missing ", " absent ")
+_TERM_RE = re.compile(r"[a-z0-9+#.]{3,}")
+
+
+def _profile_terms(compact_profile: dict[str, Any]) -> set[str]:
+    return set(_TERM_RE.findall(json.dumps(compact_profile, ensure_ascii=False).casefold()))
 
 
 class LlmUnavailable(RuntimeError):
     pass
+
+
+class LlmResponseRejected(LlmUnavailable):
+    """The model answered and the answer failed validation after retries - unlike a transport
+    failure, this is not a reason to abort the whole sync. sync.py catches this first and falls
+    back to the rules score for just this one job."""
 
 
 class LlmClient:
@@ -155,6 +171,7 @@ class LlmClient:
             {"role": "system", "content": "You are a conservative job-fit evaluator. Return valid JSON only."},
             {"role": "user", "content": self._prompt_for_model(prompt)},
         ]
+        profile_terms = _profile_terms(compact_profile)
         last_error: Exception | None = None
         correction_messages = messages
         for _ in range(2):
@@ -162,9 +179,9 @@ class LlmClient:
             try:
                 content = await self._chat_content(correction_messages, SCORE_SCHEMA, "job_match_score", 0.1, 900)
                 value = json.loads(content)
-                self._normalize_score(value, eligibility.status)
+                self._normalize_score(value, eligibility)
                 self._validate_score(value)
-                self._validate_score_semantics(value)
+                self._validate_score_semantics(value, profile_terms)
                 return ScoreResult(
                     total=value["total"],
                     dimensions=value["dimensions"],
@@ -192,16 +209,47 @@ class LlmClient:
                             ),
                         },
                     ]
-        raise LlmUnavailable(str(last_error or "Model returned an invalid response"))
+        if isinstance(last_error, httpx.HTTPError):
+            raise LlmUnavailable(str(last_error))
+        raise LlmResponseRejected(str(last_error or "Model returned an invalid response"))
 
-    async def generate_text(self, system: str, prompt: str, schema: dict[str, Any], name: str) -> dict[str, Any]:
+    async def generate_text(
+        self,
+        system: str,
+        prompt: str,
+        schema: dict[str, Any],
+        name: str,
+        validate: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
+        """Like score()'s retry loop, generalized: an optional validate() gets one correction
+        attempt before the caller sees a failure. validate() raises ValueError to reject."""
         if not await self.available():
             raise LlmUnavailable("The configured model server is unavailable")
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": self._prompt_for_model(prompt)},
         ]
-        return json.loads(await self._chat_content(messages, schema, name, 0.2, 3_000))
+        last_error: Exception | None = None
+        correction_messages = messages
+        for _ in range(2):
+            content = ""
+            try:
+                content = await self._chat_content(correction_messages, schema, name, 0.2, 3_000)
+                value = json.loads(content)
+                if validate:
+                    validate(value)
+                return value
+            except (httpx.HTTPError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+                last_error = error
+                if content:
+                    correction_messages = [
+                        *messages,
+                        {"role": "assistant", "content": content},
+                        {"role": "user", "content": f"The previous JSON is invalid: {error}. Return a corrected JSON object."},
+                    ]
+        if isinstance(last_error, httpx.HTTPError):
+            raise LlmUnavailable(str(last_error))
+        raise LlmResponseRejected(str(last_error or "Model returned an invalid response"))
 
     async def _chat_content(
         self,
@@ -247,13 +295,22 @@ class LlmClient:
         temperature: float,
         max_tokens: int,
     ) -> dict[str, Any]:
+        # Qwen3's reasoning shares num_predict with the final answer. On real scoring prompts a
+        # 2k response budget can end with done_reason=length and an empty content field after the
+        # model spends the whole budget thinking, so reserve enough room for both phases. This
+        # does not affect non-reasoning models such as the measured qwen2.5 alternative.
+        response_tokens = max(max_tokens, 4096) if "qwen3" in self.settings.llm_model.casefold() else max_tokens
         return {
             "model": self.settings.llm_model,
             "messages": messages,
             "stream": False,
-            "think": False,
+            # No "think" key: let Ollama use each model's own default. Measured directly against
+            # qwen3:14b - forcing think=False collapsed scores to near-zero with no evidence on
+            # jobs rules scored 70+ (structured output stayed valid JSON either way; "content" is
+            # unaffected by thinking, Ollama returns reasoning separately). Thinking costs 2-4x
+            # latency, which is why sync.py only LLM-scores a rules-shortlisted subset of jobs.
             "format": schema,
-            "options": {"temperature": temperature, "num_predict": max_tokens},
+            "options": {"temperature": temperature, "num_predict": response_tokens, "num_ctx": 16384},
         }
 
     def _headers(self) -> dict[str, str]:
@@ -263,7 +320,10 @@ class LlmClient:
         return headers
 
     def _prompt_for_model(self, prompt: str) -> str:
-        if "qwen3" in self.settings.llm_model.casefold():
+        # Only relevant off the ollama-native path: there, _ollama_payload's "think" field (or
+        # its absence) is the real lever. A generic OpenAI-compatible endpoint has no such field,
+        # so the text suffix is the only way to ask a qwen3 model to skip its <think> block there.
+        if self.settings.llm_mode != "ollama" and "qwen3" in self.settings.llm_model.casefold():
             return f"{prompt}\n\n/no_think"
         return prompt
 
@@ -278,18 +338,26 @@ class LlmClient:
             raise ValueError("Confidence is outside the allowed range")
 
     @staticmethod
-    def _validate_score_semantics(value: dict[str, Any]) -> None:
+    def _validate_score_semantics(value: dict[str, Any], profile_terms: set[str] | None = None) -> None:
+        profile_terms = profile_terms or set()
         zero_dimensions = {
             key.casefold() for key, score in value["dimensions"].items() if int(score) == 0
         }
         violations: list[str] = []
+        evidence_requirements: set[str] = set()
         for evidence in value["evidence"]:
             requirement = str(evidence["requirement"]).strip().casefold()
-            profile_evidence = f" {str(evidence['profile_evidence']).strip().casefold()} "
+            evidence_requirements.add(requirement)
+            profile_evidence = str(evidence["profile_evidence"]).strip().casefold()
+            padded = f" {profile_evidence} "
             if requirement in zero_dimensions:
                 violations.append(f"evidence was supplied for zero-score dimension {requirement}")
-            if any(marker in profile_evidence for marker in NEGATIVE_EVIDENCE):
+            if requirement in GENERIC_GAP_LABELS:
+                violations.append(f"generic dimension name used as evidence requirement {requirement}")
+            if any(marker in padded for marker in NEGATIVE_EVIDENCE):
                 violations.append(f"negative or mismatch text was supplied as evidence for {requirement}")
+            if profile_terms and not (set(_TERM_RE.findall(profile_evidence)) & profile_terms):
+                violations.append(f"evidence for {requirement} is not grounded in the candidate profile")
 
         seen_gaps: set[str] = set()
         for gap in value["gaps"]:
@@ -298,19 +366,18 @@ class LlmClient:
                 violations.append(f"generic gap label {requirement}")
             if requirement in seen_gaps:
                 violations.append(f"duplicate gap {requirement}")
+            if requirement in evidence_requirements:
+                violations.append(f"{requirement} was claimed as both evidence and a gap")
             seen_gaps.add(requirement)
         if violations:
             raise ValueError("; ".join(violations))
 
     @staticmethod
-    def _normalize_score(value: dict[str, Any], eligibility_status: EligibilityStatus) -> None:
+    def _normalize_score(value: dict[str, Any], eligibility: EligibilityResult) -> None:
+        value["dimensions"]["location_authorization"] = LOCATION_SCORES[eligibility.status]
         value["total"] = sum(int(item) for item in value["dimensions"].values())
         confidence = float(value["confidence"])
         value["confidence"] = confidence / 100 if 1 < confidence <= 100 else confidence
-        value["verdict"] = (
-            "review"
-            if eligibility_status == EligibilityStatus.ELIGIBLE and value["total"] >= 65
-            else "reject"
-            if value["total"] < 40
-            else "low_priority"
-        )
+        value["evidence"] = value["evidence"][:6]
+        value["gaps"] = value["gaps"][:6]
+        value["verdict"] = compute_verdict(eligibility.status, value["total"], eligibility.threshold)

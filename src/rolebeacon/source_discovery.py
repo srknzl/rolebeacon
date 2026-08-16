@@ -6,6 +6,7 @@ from html import unescape
 from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import parse_qs, parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
+from xml.etree import ElementTree
 
 import httpx
 import pycountry
@@ -106,6 +107,13 @@ def detect_source(careers_url: str, company: str = "") -> SourceConfig:
             "host": f"https://{host}", "tenant": tenant, "site": site, **common,
         })
 
+    if host.endswith(".jobs.personio.de") or host.endswith(".jobs.personio.com"):
+        board = host.split(".", 1)[0]
+        return SourceConfig.from_dict({
+            "id": _source_id("personio", company_name, board), "kind": "personio", "slug": board,
+            "host": f"https://{host}", **common,
+        })
+
     custom_sites = {
         "apply.careers.microsoft.com": "Microsoft Careers",
         "jobs.careers.microsoft.com": "Microsoft Careers",
@@ -121,7 +129,7 @@ def detect_source(careers_url: str, company: str = "") -> SourceConfig:
         )
     raise SourceDiscoveryError(
         "This careers URL is not a supported public ATS board. Use a Greenhouse, Lever, Ashby, "
-        "SmartRecruiters, or Workday board URL."
+        "SmartRecruiters, Workday, or Personio board URL."
     )
 
 
@@ -190,6 +198,12 @@ class SourceDiscoveryService:
             payload = response.json()
             items = payload.get("jobPostings", [])
             return int(payload.get("total", len(items))), [_workday_summary(item) for item in items[:3]]
+        if source.kind == "personio":
+            response = await client.get(f"{source.host.rstrip('/')}/xml")
+            response.raise_for_status()
+            root = ElementTree.fromstring(response.content)
+            items = root.findall("./position")
+            return len(items), [_personio_summary(item, source.host) for item in items[:3]]
         if source.kind == "google_careers":
             response = await client.get(source.url)
             response.raise_for_status()
@@ -348,6 +362,20 @@ def _workday_summary(item: dict[str, Any]) -> dict[str, str]:
         "location": str(item.get("locationsText", "")),
         "url": str(item.get("externalPath", "")),
     }
+
+
+def _personio_summary(item: ElementTree.Element, host: str) -> dict[str, str]:
+    source_job_id = _element_text(item, "id")
+    return {
+        "title": _element_text(item, "name"),
+        "location": _element_text(item, "office"),
+        "url": f"{host.rstrip('/')}/job/{source_job_id}?display=en",
+    }
+
+
+def _element_text(item: ElementTree.Element, tag: str) -> str:
+    node = item.find(tag)
+    return (node.text or "").strip() if node is not None else ""
 
 
 class _GoogleResultsParser(HTMLParser):

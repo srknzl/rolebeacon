@@ -7,7 +7,10 @@ import pytest
 
 from rolebeacon.collectors import (
     ArbeitnowCollector,
+    AshbyCollector,
+    HimalayasCollector,
     JobicyCollector,
+    PersonioCollector,
     RemotiveCollector,
     description_blocks,
     plain_text,
@@ -36,6 +39,64 @@ async def test_arbeitnow_preserves_sponsorship_signal() -> None:
 
     assert batch.requests_made == 1
     assert batch.jobs[0].metadata["signals"]["visa_sponsorship"] is True
+
+
+@pytest.mark.asyncio
+async def test_full_board_collector_keeps_current_jobs_without_provider_timestamps() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"jobs": [{
+            "id": "1", "title": "Backend Engineer", "location": "Berlin",
+            "description": "Build systems.", "jobUrl": "https://example.test/1",
+        }]})
+
+    config = SourceConfig.from_dict({"id": "ashby", "kind": "ashby", "name": "Example", "slug": "example"})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        jobs = await AshbyCollector(config, client).collect(datetime.now(UTC))
+
+    assert [job.source_job_id for job in jobs] == ["1"]
+
+
+@pytest.mark.asyncio
+async def test_himalayas_placeholder_company_name_falls_back_to_company_slug() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"jobs": [{
+            "id": "1", "title": "Backend Engineer", "companyName": "name", "companySlug": "actual-company",
+            "location": "Worldwide", "description": "Build systems.", "url": "https://example.test/1",
+            "publishedAt": datetime.now(UTC).isoformat(),
+        }]})
+
+    config = SourceConfig(id="himalayas", kind="himalayas", name="Himalayas")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        jobs = await HimalayasCollector(config, client).collect(datetime.now(UTC) - timedelta(days=1))
+
+    assert jobs[0].company == "actual-company"
+
+
+@pytest.mark.asyncio
+async def test_personio_collector_maps_the_public_xml_feed() -> None:
+    xml = """
+    <workzag-jobs><position><id>42</id><office>Munich</office><additionalOffices><office>Remote</office></additionalOffices>
+    <department>Engineering</department><recruitingCategory>Permanent Employee</recruitingCategory>
+    <name>Backend Engineer</name><jobDescriptions><jobDescription><name>About the role</name>
+    <value>&lt;p&gt;Build reliable APIs.&lt;/p&gt;</value></jobDescription></jobDescriptions>
+    <createdAt>2026-08-15T10:00:00+00:00</createdAt></position></workzag-jobs>
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/xml"
+        return httpx.Response(200, content=xml)
+
+    config = SourceConfig.from_dict({
+        "id": "personio", "kind": "personio", "name": "Personio", "company": "Personio",
+        "slug": "open", "host": "https://open.jobs.personio.com",
+    })
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        jobs = await PersonioCollector(config, client).collect(datetime.now(UTC))
+
+    assert jobs[0].title == "Backend Engineer"
+    assert jobs[0].location == "Munich, Remote"
+    assert "About the role" in jobs[0].description
+    assert jobs[0].url == "https://open.jobs.personio.com/job/42?display=en"
 
 
 def test_repair_text_fixes_common_job_description_mojibake() -> None:

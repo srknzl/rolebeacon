@@ -4,8 +4,9 @@ import re
 from typing import Any
 
 from .domain import EligibilityResult, EligibilityStatus, ScoreResult
+from .profile import CONTINENT_COUNTRY_CODES, country_names_by_code
 
-SCORING_PROMPT_VERSION = "job-fit-v10"
+SCORING_PROMPT_VERSION = "job-fit-v11"
 
 # Ineligibility is a hard gate: no combination of fit signals may push a total above this cap.
 # LLM scoring is only ever invoked for eligible jobs (see sync.py), so every ineligible job's
@@ -26,6 +27,26 @@ DIMENSION_META: list[tuple[str, str, int, str]] = [
 ]
 DIMENSION_MAXIMUMS: dict[str, int] = {key: max_points for key, _, max_points, _ in DIMENSION_META}
 
+# The only place location_authorization is scored, for both providers - it is a pure lookup from
+# the deterministic eligibility gate, never a model judgment call. rule_score uses it directly;
+# llm.py's _normalize_score splices it into the model's dimensions before summing.
+LOCATION_SCORES: dict[EligibilityStatus, int] = {
+    EligibilityStatus.ELIGIBLE: 15,
+    EligibilityStatus.UNKNOWN: 8,
+    EligibilityStatus.INELIGIBLE: 0,
+}
+
+
+def compute_verdict(status: EligibilityStatus, total: int, threshold: int) -> str:
+    """The one verdict rule shared by rule_score and llm.py's _normalize_score."""
+    return (
+        "reject"
+        if status == EligibilityStatus.INELIGIBLE
+        else "review"
+        if total >= threshold
+        else "low_priority"
+    )
+
 # Words that end a skill phrase rather than belong to it, so "5 years of Java experience" and
 # "5+ years of experience with Java" both resolve to the skill "Java", not "Java experience", and
 # "5 years of Go required" resolves to "Go", not "Go required". The rest are generic filler that
@@ -38,8 +59,10 @@ _REQUIREMENT_STOPWORDS = (
     "one", "non", "full", "software", "professional", "advanced", "expert", "hands", "state", "progressive",
     "relevant", "industry", "recent", "overall", "technical",
 )
-# Never itself a skill - it's the verb before the real (unextracted) object, as in "years of
-# experience leading design" or "years of experience building large-scale infrastructure".
+# Never itself a skill - it's the verb before the real object, as in "years of experience
+# providing technical leadership". A short allowlist of connector verbs (below, in
+# _EXPERIENCE_PATTERN) lets the object after "building"/"developing"/"designing"/"leading" through
+# instead; every other -ing verb still blocks the match outright rather than exposing it.
 # ponytail: blocks every -ing word, including real skill nouns like "Networking" or the second
 # word of "Data Engineering" - degrades those to a shorter/partial skill rather than dropping the
 # match, which fits "tolerate misses, avoid bogus captures." Allowlist a specific term here if one
@@ -51,27 +74,51 @@ _SKILL_WORD = r"(?:(?!(?:" + "|".join(_REQUIREMENT_STOPWORDS) + r")\b)(?!\w+ing\
 # "...with Kafka. General software...") since a real skill name never ends a matched word in ".".
 # At least one of "of"/"experience with|in|using" must be present - both fully optional used to
 # let bare "N years <two random words>" match any unrelated "N years" mention at all, e.g. "10
-# years to exercise your options" (stock-plan clause) or "5-10 years into the future".
+# years to exercise your options" (stock-plan clause) or "5-10 years into the future". Optional
+# apostrophe after "years" covers the formal "5 years' experience with X" phrasing. The extra
+# "experience building|developing|working with|designing|leading" connectors catch postings that
+# never write the bare "of X"/"with X" shape at all, e.g. "years of experience building X".
 _EXPERIENCE_PATTERN = re.compile(
-    rf"\b(\d+)\+?\s*years?\s+(?:of\s+experience\s+(?:with|in|using)\s+|of\s+|experience\s+(?:with|in|using)\s+)"
+    rf"\b(\d+)\+?\s*years?['’]?\s+"
+    rf"(?:of\s+experience\s+(?:with|in|using|building|developing|working\s+with|designing|leading)\s+|of\s+|experience\s+(?:with|in|using)\s+)"
     rf"({_SKILL_WORD}(?<!\.)(?:[\s/-]+{_SKILL_WORD}){{0,1}})",
     re.IGNORECASE,
 )
 
 
-def extract_experience_requirements(description: str) -> list[dict[str, Any]]:
+def _is_plausible_skill(skill: str, known_terms: set[str]) -> bool:
+    """A captured 'N years of X' phrase is kept only if X reads like an actual skill name: a
+    multi-word phrase or one containing a symbol ("data structures", "C++", ".NET", "Node.js"),
+    capitalized in the source text (real tech nouns like "Kafka"/"React" are; filler words like
+    "modern"/"quota"/"related" never are, mid-sentence), or already in the candidate's own
+    vocabulary. Drops the single-lowercase-word junk the stopword list alone doesn't catch."""
+    if re.search(r"[^A-Za-z]", skill):
+        return True
+    if skill[:1].isupper():
+        return True
+    return skill.casefold() in known_terms
+
+
+def extract_experience_requirements(description: str, known_terms: set[str] | None = None) -> list[dict[str, Any]]:
     """Deterministic, LLM-free 'N years of X' extraction so rules-only mode has the same
-    experience-requirement signal as LLM mode. Keeps the longest years figure seen per skill."""
+    experience-requirement signal as LLM mode. Keeps the longest years figure seen per skill.
+    known_terms is the candidate's own vocabulary (see candidate_terms()): it both filters out
+    implausible captures that aren't in it and don't look like a skill name, and marks each
+    surviving requirement "unmet" when the candidate's profile doesn't already show it."""
+    known_terms = known_terms or set()
     found: dict[str, tuple[str, int]] = {}
     for match in _EXPERIENCE_PATTERN.finditer(description):
         years = int(match.group(1))
         skill = match.group(2).strip().rstrip(".,")
-        if not skill or not (0 < years <= 40):
+        if not skill or not (0 < years <= 40) or not _is_plausible_skill(skill, known_terms):
             continue
         key = skill.casefold()
         if key not in found or years > found[key][1]:
             found[key] = (skill, years)
-    return [{"skill": skill, "years": years} for skill, years in found.values()]
+    return [
+        {"skill": skill, "years": years, "unmet": skill.casefold() not in known_terms}
+        for skill, years in found.values()
+    ]
 
 # A title's head noun is the job. "Engineering Manager", "Sales Engineer", and
 # "Customer Engineer (Pre-Sales)" all contain an engineering word while being a different
@@ -127,14 +174,20 @@ SCOPED_REMOTE_PATTERNS = (
     r"remote (?:within|in|across) [a-z][a-z .-]+",
     r"must be (?:based|located|resident) in",
 )
-EUROPE_LOCATION_TERMS = (
-    "europe", "european union", "eu", "eea", "albania", "andorra", "austria", "belgium", "bosnia",
-    "bulgaria", "croatia", "cyprus", "czechia", "czech republic", "denmark", "estonia", "finland",
-    "france", "germany", "greece", "hungary", "iceland", "ireland", "italy", "kosovo", "latvia",
-    "liechtenstein", "lithuania", "luxembourg", "malta", "moldova", "monaco", "montenegro", "netherlands",
-    "north macedonia", "norway", "poland", "portugal", "romania", "san marino", "serbia", "slovakia",
-    "slovenia", "spain", "sweden", "switzerland", "ukraine", "united kingdom", "england", "scotland", "wales",
-)
+# Calibration knobs for the two places official ISO/pycountry names don't match how a job posting
+# writes a location: a country referred to by a constituent nation/alternate name, and a region
+# referred to by the bloc's own name rather than any member country's name.
+COUNTRY_LOCATION_ALIASES: dict[str, tuple[str, ...]] = {
+    "GB": ("united kingdom", "england", "scotland", "wales"),
+}
+REGION_LOCATION_ALIASES: dict[str, tuple[str, ...]] = {
+    "EUROPE": ("europe", "european union", "eu", "eea"),
+    # Region-member expansion deliberately never matches a bare 2-letter ISO code (see
+    # _country_match) to avoid "IT"/"NO"-style false positives in all-caps text, but real US
+    # postings overwhelmingly write "US"/"USA", not "United States" - so, like EUROPE's "eu"
+    # above, curate the dominant real-world abbreviations as an explicit region alias instead.
+    "NORTH_AMERICA": ("north america", "us", "usa"),
+}
 
 
 def _contains(text: str, patterns: tuple[str, ...]) -> bool:
@@ -146,19 +199,30 @@ def _company_in(company: str, values: list[str]) -> bool:
     return any(re.sub(r"\W+", "", value.casefold()) in normalized for value in values if value)
 
 
-def _country_match(location: str, strategy: dict[str, Any]) -> bool:
-    if strategy.get("country_code") == "EUROPE":
-        text = location.casefold()
-        return any(re.search(rf"\b{re.escape(term)}\b", text) for term in EUROPE_LOCATION_TERMS)
-    code = str(strategy.get("country_code", "")).strip()
+def _place_match(location: str, code: str, name: str, cities: list[str] | tuple[str, ...] = ()) -> bool:
+    code = str(code).strip()
     # A short ISO code is only trustworthy as an exact-case token (e.g. "Berlin, DE"). Casefolding it
     # like the name/city terms below produces false positives, e.g. "de" inside "Île-de-France" matching
     # country_code "DE" (Germany) for an unrelated French location.
     if code and re.search(rf"\b{re.escape(code)}\b", location):
         return True
-    terms = [strategy.get("country_name", ""), *strategy.get("cities", [])]
+    terms = [name, *COUNTRY_LOCATION_ALIASES.get(code.upper(), ()), *cities]
     text = location.casefold()
     return any(re.search(rf"\b{re.escape(str(term).casefold())}\b", text) for term in terms if term)
+
+
+def _country_match(location: str, strategy: dict[str, Any]) -> bool:
+    code = str(strategy.get("country_code", "")).strip().upper()
+    if code in CONTINENT_COUNTRY_CODES:
+        text = location.casefold()
+        if any(re.search(rf"\b{re.escape(alias)}\b", text) for alias in REGION_LOCATION_ALIASES.get(code, ())):
+            return True
+        # A region match is name/alias only, never a bare 2-letter code - "IT"/"NO" inside an
+        # all-caps location string is a false-positive generator once dozens of member codes are
+        # in play, unlike a single explicitly-configured country (_place_match's own code check).
+        names = country_names_by_code()
+        return any(_place_match(location, "", names.get(member, ""), ()) for member in CONTINENT_COUNTRY_CODES[code])
+    return _place_match(location, code, str(strategy.get("country_name", "")), strategy.get("cities", []))
 
 
 def evaluate_eligibility(
@@ -208,7 +272,14 @@ def evaluate_eligibility(
         None,
     )
     remote_strategy = next((strategy for strategy in strategies if strategy.get("kind") == "remote"), None)
-    route = str((priority or country_strategy or (remote_strategy if remote else None) or {"id": "other"})["id"])
+    # remote_strategy only earns the route if its own country actually matches this job's remote
+    # scope - otherwise a job remote-scoped to a different country (e.g. "Remote, United States"
+    # for a candidate whose remote strategy is "remote-from-tr") wrongly took on the candidate's
+    # own remote-strategy id despite never having been checked against it.
+    remote_route_strategy = remote_strategy if remote and _country_match(location, remote_strategy or {}) else None
+    route = str((priority or country_strategy or remote_route_strategy or {"id": "other"})["id"])
+    governing_strategy = next((item for item in strategies if item.get("id") == route), None)
+    threshold = int(governing_strategy.get("threshold", 80)) if governing_strategy else 80
 
     reasons: list[str] = []
     risks: list[str] = []
@@ -246,6 +317,12 @@ def evaluate_eligibility(
         status = EligibilityStatus.ELIGIBLE
         location_fit = f"remote:{remote_strategy.get('country_code', '')}"
         reasons.append(f"Role explicitly includes remote work from {remote_strategy.get('country_name')}")
+    elif remote and country_strategy:
+        # Remote, but explicitly scoped to a country other than the candidate's own (matched a
+        # relocation/authorized_local strategy above, just not one of the sponsor/relocation/
+        # authorized branches) - a more specific, honest label than the generic case below.
+        location_fit = f"remote-scoped:{country_strategy.get('country_code', '')}"
+        risks.append(f"Remote scope may be limited to {country_strategy.get('country_name', 'a specific country')}, not stated as worldwide")
     elif remote:
         location_fit = "remote-scope-unknown"
         risks.append("Remote scope does not explicitly include the candidate's configured country")
@@ -277,10 +354,29 @@ def evaluate_eligibility(
         location_fit=location_fit,
         reasons=reasons,
         risks=risks,
+        threshold=threshold,
     )
 
 
-def _candidate_terms(candidate_profile: dict[str, Any]) -> set[str]:
+def location_requirement(location_fit: str) -> str:
+    """One plain sentence for what location_fit means, for display next to a job. Kept beside the
+    evaluate_eligibility branches that produce each value so the two prefixes can't drift apart."""
+    prefix, _, code = location_fit.partition(":")
+    name = country_names_by_code().get(code, code)
+    sentence = {
+        "authorized": f"You are already authorized to work in {name}.",
+        "sponsorship-unavailable": f"Would need sponsorship in {name}, which the posting excludes.",
+        "relocation": f"The posting supports relocation or sponsorship to {name}.",
+        "worldwide": "The posting explicitly supports worldwide remote work.",
+        "remote": f"The posting explicitly includes remote work from {name}.",
+        "remote-scoped": f"Remote, but appears scoped to {name} rather than worldwide.",
+        "remote-scope-unknown": "Remote, but the posting does not state which countries are included.",
+        "mobility-unknown": f"Targets {name}, but sponsorship and relocation support are not stated.",
+    }.get(prefix)
+    return sentence or "Location requirement could not be determined from the posting."
+
+
+def candidate_terms(candidate_profile: dict[str, Any]) -> set[str]:
     terms: set[str] = set()
     skills = candidate_profile.get("skills", {})
     if isinstance(skills, dict):
@@ -330,11 +426,11 @@ def rule_score(
     text = f"{title} {description}"
     role_score, same_role_family = _role_match(title, preferences)
 
-    candidate_terms = _candidate_terms(candidate_profile)
+    known_terms = candidate_terms(candidate_profile)
     preferred_skills = [str(value) for value in preferences.get("preferred_skills", [])]
     if not preferred_skills:
-        preferred_skills = sorted(candidate_terms)
-    skill_hits = [skill for skill in preferred_skills if skill.casefold() in text and skill.casefold() in candidate_terms]
+        preferred_skills = sorted(known_terms)
+    skill_hits = [skill for skill in preferred_skills if skill.casefold() in text and skill.casefold() in known_terms]
     skill_score = min(20, len(skill_hits) * 5)
 
     domains = [str(value) for value in preferences.get("preferred_domains", [])]
@@ -352,11 +448,7 @@ def rule_score(
     elif title_seniority in {"intern", "junior"}:
         seniority_score = 4
 
-    location_score = {
-        EligibilityStatus.ELIGIBLE: 15,
-        EligibilityStatus.UNKNOWN: 8,
-        EligibilityStatus.INELIGIBLE: 0,
-    }[eligibility.status]
+    location_score = LOCATION_SCORES[eligibility.status]
     salary_score = 5
     if job.get("salary_min") or job.get("salary_max"):
         salary_score = 10
@@ -388,14 +480,7 @@ def rule_score(
     if eligibility.status == EligibilityStatus.INELIGIBLE:
         _cap_dimensions(dimensions, INELIGIBLE_SCORE_CAP)
     total = sum(dimensions.values())
-    threshold = int(strategy.get("threshold", 80)) if strategy else 80
-    verdict = (
-        "reject"
-        if eligibility.status == EligibilityStatus.INELIGIBLE
-        else "review"
-        if total >= threshold
-        else "low_priority"
-    )
+    verdict = compute_verdict(eligibility.status, total, eligibility.threshold)
     evidence: list[dict[str, str]] = []
     if skill_hits:
         evidence.append({"requirement": "Relevant skills", "profile_evidence": ", ".join(skill_hits)})
@@ -407,8 +492,8 @@ def rule_score(
         {"requirement": risk, "severity": "high" if eligibility.status == EligibilityStatus.INELIGIBLE else "medium"}
         for risk in eligibility.risks
     ]
-    for requirement in extract_experience_requirements(str(job.get("description", ""))):
-        if requirement["skill"].casefold() not in candidate_terms:
+    for requirement in extract_experience_requirements(str(job.get("description", "")), known_terms):
+        if requirement["unmet"]:
             gaps.append(
                 {
                     "requirement": f"Posting asks for {requirement['years']}+ years of {requirement['skill']}, "

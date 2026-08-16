@@ -14,8 +14,14 @@ from .collectors import as_batch, create_collector, default_http_client
 from .config import Settings
 from .database import Database
 from .domain import CollectedJob, EligibilityStatus
-from .llm import LlmClient, LlmUnavailable
-from .scoring import SCORING_PROMPT_VERSION, evaluate_eligibility, extract_experience_requirements, rule_score
+from .llm import LlmClient, LlmResponseRejected, LlmUnavailable
+from .scoring import (
+    SCORING_PROMPT_VERSION,
+    candidate_terms,
+    evaluate_eligibility,
+    extract_experience_requirements,
+    rule_score,
+)
 
 # Different sources hit different providers, so syncing them concurrently is safe - these two
 # caps just keep any one provider from being hammered hard enough to get rate-limited/blocked.
@@ -85,6 +91,7 @@ class SyncService:
             if not self.settings.setup_complete or (not manual and not self.settings.activated):
                 self.status = SyncStatus(error="setup_required")
                 return self.status
+            self.database.reset_stale_sync_runs()
             sources = [source for source in self.settings.load_sources() if source.enabled]
             self.status = SyncStatus(
                 running=True,
@@ -135,24 +142,41 @@ class SyncService:
                     if self.settings.llm_enabled
                     else f"{SCORING_PROMPT_VERSION}:rules"
                 )
-                pending = set(self.database.pending_job_ids(scoring_version)) | changed_ids
+                # The 1000-job cap exists to bound an LLM-mode sync's wall-clock time; rules scoring
+                # is local and fast enough to clear the whole backlog every run.
+                score_limit = 1000 if self.settings.llm_enabled else 100_000
+                pending = set(self.database.pending_job_ids(scoring_version, limit=score_limit)) | changed_ids
                 self.status.jobs_to_score = len(pending)
                 self.status.phase = "scoring"
                 self.status.phase_message = "Ranking eligible jobs"
                 self.status.progress_percent = 65
                 candidate_profile = self.settings.load_candidate_profile()
+                known_terms = candidate_terms(candidate_profile)
                 for job_id in pending:
                     job_record = self.database.get_job(job_id)
                     if not job_record:
                         continue
                     eligibility = evaluate_eligibility(job_record, search_profile, mobility_profile, strategies)
                     rules = rule_score(job_record, eligibility, search_profile, candidate_profile, strategies)
-                    requirements = extract_experience_requirements(str(job_record.get("description", "")))
+                    requirements = extract_experience_requirements(str(job_record.get("description", "")), known_terms)
                     score = rules
                     score_status = "scored"
-                    if eligibility.status != EligibilityStatus.INELIGIBLE and self.settings.llm_enabled:
+                    # The LLM only refines jobs rules already thinks are in the right role family
+                    # (role_domain > 9 is the same "unrelated" boundary hide_mismatched_titles uses
+                    # in database.py) - scoring the full firehose costs seconds per job for no
+                    # benefit on titles rules can already tell are the wrong job.
+                    if (
+                        eligibility.status != EligibilityStatus.INELIGIBLE
+                        and self.settings.llm_enabled
+                        and rules.dimensions["role_domain"] > 9
+                    ):
                         try:
                             score = await self.llm.score(job_record, eligibility, search_profile, candidate_profile)
+                        except LlmResponseRejected as error:
+                            # The model answered and its answer failed validation twice - keep the
+                            # rules score already computed above rather than aborting the sync.
+                            self.status.rule_fallback_jobs += 1
+                            self.status.llm_error = f"Model response rejected, used rules score for job {job_id}: {error}"
                         except LlmUnavailable as error:
                             self.status.llm_available = False
                             self.status.llm_status = "unavailable"
@@ -289,12 +313,19 @@ def deduplicate_source_jobs(jobs: list[CollectedJob]) -> list[CollectedJob]:
     return list(unique.values())
 
 
-ENGINEERING_TERMS = re.compile(
-    r"\b(?:software|backend|back-end|frontend|front-end|full[ -]?stack|platform|infrastructure|"
-    r"site reliability|sre|devops|cloud|distributed systems?|data engineer|machine learning|"
-    r"security engineer|developer|programmer|engineering manager|staff engineer|principal engineer)\b",
-    re.IGNORECASE,
-)
+def _profile_terms(search_profile: dict[str, Any]) -> set[str]:
+    """Terms the candidate explicitly supplied for role-family ingestion decisions."""
+    terms: set[str] = set()
+    for role in search_profile.get("target_roles", []):
+        terms.update(token.casefold() for token in re.findall(r"[A-Za-z][A-Za-z+#.-]{2,}", str(role)))
+    for domain in search_profile.get("preferred_domains", []):
+        terms.update(token.casefold() for token in re.findall(r"[A-Za-z][A-Za-z+#.-]{2,}", str(domain)))
+    terms.update(
+        str(skill).strip().casefold()
+        for skill in search_profile.get("preferred_skills", [])
+        if str(skill).strip()
+    )
+    return {term for term in terms if term}
 
 
 def engineering_job(job: CollectedJob, search_profile: dict[str, Any]) -> bool:
@@ -305,16 +336,18 @@ def engineering_job(job: CollectedJob, search_profile: dict[str, Any]) -> bool:
     if any(company.casefold() == job.company.casefold() for company in watchlist):
         return True
     categories = " ".join(map(str, job.metadata.get("categories", [])))
-    searchable = f"{job.title} {categories}"
-    if not ENGINEERING_TERMS.search(searchable):
-        return False
-    role_terms = {
-        token.casefold()
+    searchable = f"{job.title} {categories}".casefold()
+    if any(
+        str(role).strip().casefold() in searchable
         for role in search_profile.get("target_roles", [])
-        for token in re.findall(r"[A-Za-z][A-Za-z+#.-]{2,}", str(role))
-        if token.casefold() not in {"senior", "staff", "lead", "principal", "engineer", "developer", "software"}
-    }
-    return not role_terms or any(term in searchable.casefold() for term in role_terms)
+        if str(role).strip()
+    ):
+        return True
+    terms = _profile_terms(search_profile)
+    return not terms or any(
+        re.search(rf"(?<![A-Za-z0-9]){re.escape(term)}(?![A-Za-z0-9])", searchable)
+        for term in terms
+    )
 
 
 _URL_QUERY_KINDS = {"google_careers": "q", "amazon_jobs": "base_query"}

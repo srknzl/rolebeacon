@@ -8,6 +8,7 @@
     <div class="badge-row"><span class="route-badge" title="The search strategy that surfaced this job.">{{ job.route or 'UNCLASSIFIED' }}</span><span class="status status-{{ job.status }}" title="Your personal pipeline decision for this job.">{{ job.status }}</span><span class="status status-{{ job.eligibility_status or 'unknown' }}" title="Eligibility is checked before fit and cannot be overridden by a high score.">{{ job.eligibility_status or 'eligibility unknown' }}</span></div>
     <h1>{{ job.title }}</h1>
     <p class="detail-company">{{ job.company }} · {{ job.location or 'Location unknown' }}</p>
+    <p class="safety-note">{{ (job.location_fit or '')|location_requirement }}</p>
   </div>
   <div class="detail-score" title="Overall score from 0 to 100. It combines eligibility, role fit, skills, seniority, and work-model constraints."><strong>{{ job.opportunity_score or job.score or '—' }}</strong><span>opportunity score</span><small>job {{ job.score or '—' }} · company {{ job.company_score or '—' }}</small></div>
 </section>
@@ -26,6 +27,13 @@
       <h2>Gaps and risks</h2>
       {% if job.gaps %}<ul class="gap-list">{% for item in job.gaps %}<li><span class="severity severity-{{ item.severity }}">{{ item.severity }}</span>{{ item.requirement }}</li>{% endfor %}</ul>{% else %}<p class="muted">No material gaps recorded.</p>{% endif %}
     </div>
+    {% if cover_letter_text %}
+    <div class="panel">
+      <div class="panel-heading"><h2>Cover letter draft</h2><a class="artifact-link" href="/artifacts/{{ job.id }}/cover-letter.html" target="_blank" title="Open a print-ready version of this draft in a new tab.">Open printable version ↗</a></div>
+      <p class="safety-note">This is a generated draft grounded in your profile. Review every claim before you send it — RoleBeacon never sends it for you.</p>
+      <p class="cover-letter-text">{{ cover_letter_text }}</p>
+    </div>
+    {% endif %}
     <div class="panel job-description">
       <h2>Job description</h2>
       <div class="job-description-content">

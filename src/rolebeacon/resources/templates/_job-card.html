@@ -11,11 +11,13 @@
       </div>
       <div class="job-card-badges">
         <span class="status status-{{ job.eligibility_status or 'unknown' }}" title="Eligibility is checked before fit and cannot be overridden by a high score.">{{ job.eligibility_status or 'eligibility unknown' }}</span>
+        {% if job.verdict %}<span class="status status-{{ job.verdict }}" title="Verdict uses the threshold configured for this job's governing search strategy.">{{ job.verdict|replace('_', ' ') }}</span>{% endif %}
         <span class="status status-{{ job.status }}" title="Your own pipeline decision for this job.">{{ job.status }}</span>
       </div>
     </div>
     <div class="meta-row">
       <span>{{ job.location or 'Location unknown' }}</span>
+      <span>{{ (job.location_fit or '')|location_requirement }}</span>
       <span>{{ job.route or 'Unclassified' }}</span>
       <span>{{ job.sponsorship or 'sponsorship unknown' }}</span>
       {% if job.source_name %}<span>{{ job.source_name }}</span>{% endif %}

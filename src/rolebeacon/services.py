@@ -12,20 +12,42 @@ from urllib.parse import urlsplit
 
 from .config import Settings
 from .database import Database
-from .llm import LlmClient, LlmUnavailable
-from .resume import BuiltinResumeRenderer, ExternalCommandResumeRenderer
+from .llm import LlmClient
+from .resume import BuiltinResumeRenderer, ExternalCommandResumeRenderer, tailor_profile_for_job
 
+# greeting/closing are deliberately absent: a model asked to fill them invents a hiring-manager
+# name we never supplied. Python writes both from a small language-keyed template instead.
 COVER_LETTER_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
     "properties": {
         "subject": {"type": "string"},
-        "greeting": {"type": "string"},
         "paragraphs": {"type": "array", "items": {"type": "string"}, "minItems": 3, "maxItems": 4},
-        "closing": {"type": "string"},
     },
-    "required": ["subject", "greeting", "paragraphs", "closing"],
+    "required": ["subject", "paragraphs"],
 }
+
+# ponytail: two languages, English default - extend when a third market shows up. Keyed off the
+# same German-application signal cover_letter_recommendation() already checks for.
+_GREETING_CLOSING = {"de": ("Sehr geehrte Damen und Herren,", "Mit freundlichen Grüßen")}
+_DEFAULT_GREETING_CLOSING = ("Dear Hiring Team,", "Sincerely,")
+
+
+def _greeting_and_closing(job: dict[str, Any]) -> tuple[str, str]:
+    text = f"{job.get('title', '')} {job.get('description', '')}".casefold()
+    if re.search(r"anschreiben|motivationsschreiben|bewerbung", text):
+        return _GREETING_CLOSING["de"]
+    return _DEFAULT_GREETING_CLOSING
+
+
+def _validate_cover_letter(value: dict[str, Any]) -> None:
+    subject = str(value.get("subject", "")).strip()
+    if not subject or len(subject) > 120:
+        raise ValueError("Subject must be a short, non-empty line")
+    body = "\n\n".join(str(paragraph).strip() for paragraph in value.get("paragraphs", []))
+    word_count = len(re.findall(r"\b\w+\b", body))
+    if not 200 <= word_count <= 400:
+        raise ValueError(f"Cover letter length is outside the target range: {word_count} words (aim for 250-350)")
 
 
 class ProfileValidationError(ValueError):
@@ -98,13 +120,22 @@ class ArtifactService:
         issues = validate_candidate_profile(profile)
         if issues:
             raise ProfileValidationError(issues)
+        # Tailored and stripped: only the sections relevant to this job, and no contact PII
+        # (email/phone/linkedin/github) reaches the prompt - mirrors llm.py score()'s compact_profile.
+        tailored = tailor_profile_for_job(profile, job)
+        compact_profile = {key: tailored.get(key) for key in ("summary", "location", "experience", "projects", "skills", "education")}
+        mobility = self.settings.load_mobility_profile()
+        search_profile = self.settings.load_search_profile()
         prompt = (
-            "Write a concise, specific cover letter for this application. Use 250-350 words across 3-4 short "
-            "paragraphs. Explain motivation, connect two concrete candidate examples to the role, and address "
-            "relocation or remote-work eligibility only when relevant. Do not invent metrics, company "
-            "facts, hiring-manager names, work authorization, or skills. Avoid generic praise and do not repeat "
-            "the resume. Write in English.\n\n"
-            f"CANDIDATE PROFILE:\n{json.dumps(profile, ensure_ascii=False)}\n\n"
+            "Write a concise, specific cover letter for this application. Use 3-4 short paragraphs totalling "
+            "250-350 words. Explain motivation, connect two concrete candidate examples to the role, and "
+            "address relocation or remote-work eligibility only when relevant, using only the mobility facts "
+            "supplied below. Do not invent metrics, company facts, a hiring-manager name, work authorization, "
+            "or skills. Avoid generic praise and do not repeat the resume verbatim. Write in the same language "
+            "as the job description.\n\n"
+            f"CANDIDATE:\n{json.dumps(compact_profile, ensure_ascii=False)}\n\n"
+            f"MOBILITY:\n{json.dumps({key: mobility.get(key) for key in ('work_authorizations', 'willing_to_relocate', 'sponsorship_required_outside_authorized_countries', 'timezone')}, ensure_ascii=False)}\n\n"
+            f"PREFERENCES:\n{json.dumps({key: search_profile.get(key) for key in ('target_roles', 'preferred_domains')}, ensure_ascii=False)}\n\n"
             f"JOB:\n{json.dumps({key: job.get(key) for key in ('title', 'company', 'location', 'route', 'sponsorship', 'relocation')}, ensure_ascii=False)}\n\n"
             f"DESCRIPTION:\n{str(job.get('description', ''))[:20000]}"
         )
@@ -113,15 +144,14 @@ class ArtifactService:
             prompt,
             COVER_LETTER_SCHEMA,
             "cover_letter",
+            validate=_validate_cover_letter,
         )
         body = "\n\n".join(str(paragraph).strip() for paragraph in value["paragraphs"])
-        word_count = len(re.findall(r"\b\w+\b", body))
-        if not 180 <= word_count <= 450:
-            raise LlmUnavailable(f"Cover letter length is outside the safe range: {word_count} words")
+        greeting, closing = _greeting_and_closing(job)
         directory = self.application_dir(job_id)
         text_path = directory / "cover-letter.txt"
         text_path.write_text(
-            f"{value['subject']}\n\n{value['greeting']}\n\n{body}\n\n{value['closing']}\n{profile.get('name', '')}\n",
+            f"{value['subject']}\n\n{greeting}\n\n{body}\n\n{closing}\n{profile.get('name', '')}\n",
             encoding="utf-8",
         )
         html_path = directory / "cover-letter.html"
@@ -131,8 +161,8 @@ class ArtifactService:
             "@page{size:A4;margin:22mm}body{font:11pt/1.5 Arial,sans-serif;color:#111;max-width:170mm;margin:auto}"
             "p{margin:0 0 12pt}</style></head><body>"
             f"<p><strong>{html.escape(value['subject'])}</strong></p>"
-            f"<p>{html.escape(value['greeting'])}</p>{paragraphs}"
-            f"<p>{html.escape(value['closing'])}<br>{html.escape(profile.get('name', ''))}</p>"
+            f"<p>{html.escape(greeting)}</p>{paragraphs}"
+            f"<p>{html.escape(closing)}<br>{html.escape(profile.get('name', ''))}</p>"
             "</body></html>",
             encoding="utf-8",
         )

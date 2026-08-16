@@ -91,6 +91,7 @@
     <p><button id="discover-model" class="button" type="button">Detect Ollama</button> <button id="start-model" class="button" type="button">Start Ollama</button> <button id="pull-model" class="button" type="button">Pull selected model</button> <button id="test-model" class="button" type="button">Test endpoint</button></p>
     <div id="model-connection" class="model-health model-health-rules">Rules-only scoring is selected until you choose and test an LLM endpoint.</div>
     <p class="safety-note">Starting Ollama or downloading a model happens only when you click the corresponding button. The recommended model is qwen3:8b; qwen3:14b offers higher quality on hardware with enough memory.</p>
+    <p class="safety-note">Scoring prompts run 2-8k tokens depending on posting length. A self-hosted Ollama needs <code>OLLAMA_CONTEXT_LENGTH</code> set to at least that (RoleBeacon requests 16384 tokens of context per call), or long postings are silently truncated before scoring - this is a setting on your Ollama host, not something RoleBeacon can set for you.</p>
     </div>
   </section>
 
