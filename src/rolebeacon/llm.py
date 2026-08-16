@@ -9,7 +9,13 @@ import httpx
 
 from .config import Settings
 from .domain import EligibilityResult, ScoreResult
-from .scoring import DIMENSION_MAXIMUMS, LOCATION_SCORES, SCORING_PROMPT_VERSION, compute_verdict
+from .scoring import (
+    DIMENSION_MAXIMUMS,
+    LOCATION_SCORES,
+    SCORING_PROMPT_VERSION,
+    _apply_score_weights,
+    compute_verdict,
+)
 
 # location_authorization is deliberately absent: it is a pure lookup from the deterministic
 # eligibility result (LOCATION_SCORES, scoring.py), spliced into dimensions in _normalize_score.
@@ -179,7 +185,7 @@ class LlmClient:
             try:
                 content = await self._chat_content(correction_messages, SCORE_SCHEMA, "job_match_score", 0.1, 900)
                 value = json.loads(content)
-                self._normalize_score(value, eligibility)
+                self._normalize_score(value, eligibility, search_profile)
                 self._validate_score(value)
                 self._validate_score_semantics(value, profile_terms)
                 return ScoreResult(
@@ -339,7 +345,14 @@ class LlmClient:
 
     @staticmethod
     def _validate_score(value: dict[str, Any]) -> None:
+        if set(value) != {"dimensions", "confidence", "evidence", "gaps", "total", "verdict"}:
+            raise ValueError("Score returned unexpected or missing keys")
         dimensions = value["dimensions"]
+        if set(dimensions) != set(DIMENSION_MAXIMUMS):
+            raise ValueError("Score dimensions do not match the canonical dimension set")
+        for key, maximum in DIMENSION_MAXIMUMS.items():
+            if not 0 <= int(dimensions[key]) <= maximum:
+                raise ValueError(f"{key} is outside its allowed range")
         if sum(int(item) for item in dimensions.values()) != int(value["total"]):
             raise ValueError("Dimension scores do not add up to total")
         if not 0 <= int(value["total"]) <= 100:
@@ -383,8 +396,11 @@ class LlmClient:
             raise ValueError("; ".join(violations))
 
     @staticmethod
-    def _normalize_score(value: dict[str, Any], eligibility: EligibilityResult) -> None:
+    def _normalize_score(
+        value: dict[str, Any], eligibility: EligibilityResult, preferences: dict[str, Any] | None = None
+    ) -> None:
         value["dimensions"]["location_authorization"] = LOCATION_SCORES[eligibility.status]
+        value["dimensions"] = _apply_score_weights(value["dimensions"], preferences or {})
         value["total"] = sum(int(item) for item in value["dimensions"].values())
         confidence = float(value["confidence"])
         value["confidence"] = confidence / 100 if 1 < confidence <= 100 else confidence

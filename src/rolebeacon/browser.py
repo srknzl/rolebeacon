@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from playwright.sync_api import Page, sync_playwright
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -48,6 +49,9 @@ def fill_application(page: Page, packet: dict[str, Any]) -> None:
 
 def run(packet_path: Path, profile_dir: Path) -> None:
     packet = json.loads(packet_path.read_text(encoding="utf-8"))
+    target = urlsplit(str(packet.get("job_url", "")))
+    if target.scheme not in {"http", "https"} or not target.hostname:
+        raise ValueError("Application URLs must use http or https")
     with sync_playwright() as playwright:
         context = playwright.chromium.launch_persistent_context(
             str(profile_dir),

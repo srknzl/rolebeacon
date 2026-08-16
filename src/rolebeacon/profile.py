@@ -16,6 +16,14 @@ RELOCATION_REGION_CODES = {
     "SOUTH_AMERICA": "South America",
     "OCEANIA": "Oceania",
 }
+DEFAULT_SCORE_WEIGHTS: dict[str, int] = {
+    "role_domain": 30,
+    "stack": 20,
+    "domain_experience": 10,
+    "seniority": 15,
+    "location_authorization": 15,
+    "salary_employment": 10,
+}
 # ISO 3166-1 alpha-2 members of each region above, used to expand a one-click continent
 # selection into real per-country relocation targets and source coverage, and by
 # scoring._country_match to recognize a job's location against a region strategy. Antarctica and
@@ -178,6 +186,21 @@ class CountryPreference(StrictModel):
         return normalize_relocation_target_code(value)
 
 
+class ClearanceCredential(StrictModel):
+    jurisdiction: str = ""
+    scheme: str = ""
+    level: str = ""
+    status: Literal["active", "expired", "unknown"] = "unknown"
+    expires_on: str | None = None
+
+
+class ClearancePolicy(StrictModel):
+    status: Literal["unknown", "cannot_meet", "eligible_to_attempt", "has_active_clearance"] = "unknown"
+    willing_to_undergo_vetting: bool | None = None
+    explicitly_excluded_requirements: list[str] = Field(default_factory=list)
+    credentials: list[ClearanceCredential] = Field(default_factory=list)
+
+
 class MobilityProfileV1(StrictModel):
     schema_version: Literal["1.0"] = "1.0"
     current_country_code: str = Field(min_length=2, max_length=2)
@@ -189,6 +212,7 @@ class MobilityProfileV1(StrictModel):
     eor_allowed: bool = True
     sponsorship_required_outside_authorized_countries: bool = True
     timezone: str = ""
+    clearance_policy: ClearancePolicy = Field(default_factory=lambda: ClearancePolicy())
 
     @field_validator("current_country_code")
     @classmethod
@@ -226,6 +250,18 @@ class SearchPreferencesV1(StrictModel):
     exclude_phrases: list[str] = Field(default_factory=list)
     salary: SalaryPreference = Field(default_factory=SalaryPreference)
     daily_review_limit: int = Field(default=15, ge=1, le=100)
+    score_weights: dict[str, int] = Field(default_factory=lambda: dict(DEFAULT_SCORE_WEIGHTS))
+
+    @field_validator("score_weights")
+    @classmethod
+    def validate_score_weights(cls, values: dict[str, int]) -> dict[str, int]:
+        if set(values) != set(DEFAULT_SCORE_WEIGHTS):
+            raise ValueError("Score weights must contain exactly the supported fit dimensions")
+        if any(not isinstance(value, int) or value < 0 for value in values.values()):
+            raise ValueError("Score weights must be non-negative integers")
+        if sum(values.values()) != 100:
+            raise ValueError("Score weights must total 100")
+        return values
 
 
 class LlmSetup(StrictModel):
@@ -233,6 +269,7 @@ class LlmSetup(StrictModel):
     base_url: str = "http://127.0.0.1:11434/v1"
     model: str = "qwen3:8b"
     api_key: str = ""
+    api_key_action: Literal["preserve", "replace", "remove"] = "preserve"
 
 
 class SetupPayloadV1(StrictModel):
@@ -353,6 +390,10 @@ work authorization, or proficiency. Use empty strings or empty lists for missing
 Set schema_version to \"1.0\" and return JSON only.
 """
 
-SETUP_PLANNING_PROMPT = """Help a candidate plan a RoleBeacon setup. Return only one valid SetupPayloadV1 JSON object, with no Markdown or explanation.
+_SUPPORTED_RELOCATION_REGIONS = ", ".join(
+    f"`{code}` ({name})" for code, name in RELOCATION_REGION_CODES.items()
+)
 
-Preserve the supplied candidate profile exactly. Use only stated facts for work authorization, relocation, remote-work eligibility, compensation, and seniority. Do not infer a work right, visa sponsorship, salary, or location permission. For countries where the candidate requires a visa or sponsorship, add them only as relocation targets, not as work authorizations. Work authorizations and current country must use ISO 3166-1 alpha-2 codes. Relocation targets may additionally use `EUROPE` with the country name `Europe` when the candidate wants Europe-wide relocation. Include focused target roles, relevant preferred skills and domains, and a conservative company priority/watch list based on the candidate's stated goals. Keep `activate` false so the candidate reviews the configuration before any source is contacted."""
+SETUP_PLANNING_PROMPT = f"""Help a candidate plan a RoleBeacon setup. Return only one valid SetupPayloadV1 JSON object, with no Markdown or explanation.
+
+Preserve the supplied candidate profile exactly. Use only stated facts for work authorization, relocation, remote-work eligibility, compensation, seniority, and security-clearance policy. Do not infer a work right, visa sponsorship, salary, location permission, citizenship, or clearance status. For countries where the candidate requires a visa or sponsorship, add them only as relocation targets, not as work authorizations. Work authorizations and current country must use ISO 3166-1 alpha-2 codes. Relocation targets may additionally use these supported canonical region codes: {_SUPPORTED_RELOCATION_REGIONS}. Include focused target roles, relevant preferred skills and domains, and a conservative company priority/watch list based on the candidate's stated goals. Keep `activate` false so the candidate reviews the configuration before any source is contacted."""

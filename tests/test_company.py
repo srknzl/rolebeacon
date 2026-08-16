@@ -199,6 +199,17 @@ def test_conventional_official_sources_skip_brand_pages_for_hiring_pages() -> No
     assert "https://example.com/careers" in urls
 
 
+def test_redirected_product_page_is_reclassified_as_non_hiring_evidence() -> None:
+    result = CompanyResearchService._validated_source_type(
+        "careers",
+        "https://example.com/products/job-search",
+        "Job Search - publish your job postings",
+        "Help candidates discover jobs published by your business.",
+    )
+
+    assert result == "official"
+
+
 def test_coverage_counts_established_facts_rather_than_fetched_pages() -> None:
     jobs = [{"salary_min": 90000, "salary_max": 120000}]
     nothing_established = {
@@ -497,3 +508,49 @@ async def test_configured_llm_company_research_never_silently_falls_back_to_rule
     with pytest.raises(LlmUnavailable, match="invalid company assessment"):
         await service.research("Example")
     assert database.list_companies() == []
+
+
+def test_registrable_host_uses_public_suffix_rules() -> None:
+    assert CompanyResearchService._registrable_host("careers.example.co.uk") == "example.co.uk"
+    assert CompanyResearchService._registrable_host("jobs.example.com.tr") == "example.com.tr"
+
+
+def test_operational_within_region_wording_does_not_establish_remote_policy(tmp_path) -> None:
+    service = CompanyResearchService(Settings.load(), Database(tmp_path / "jobs.sqlite3"), LlmClient(Settings.load()))
+    evidence = [{
+        "source_url": "https://example.test/jobs/1", "source_type": "current_job_posting",
+        "title": "Program Manager", "excerpt": "Own project implementation within the region and coordinate delivery.",
+    }]
+
+    profile, _ = service._deterministic_research(
+        "Example", evidence, [], {"preferred_domains": [], "priority_companies": [], "company_watchlist": []},
+    )
+
+    assert profile["remote_policy"] == "unknown"
+
+
+def test_short_engineering_skills_use_token_boundaries_and_keep_per_signal_citations(tmp_path) -> None:
+    service = CompanyResearchService(Settings.load(), Database(tmp_path / "jobs.sqlite3"), LlmClient(Settings.load()))
+    evidence = [
+        {"source_url": "https://example.test/jobs/1", "source_type": "current_job_posting", "title": "Google role", "excerpt": "Google hires engineers."},
+        {"source_url": "https://example.test/jobs/2", "source_type": "current_job_posting", "title": "Backend", "excerpt": "Build services in Go."},
+    ]
+    profile, _ = service._deterministic_research(
+        "Example", evidence, [], {"preferred_skills": ["Go"], "preferred_domains": [], "priority_companies": [], "company_watchlist": []},
+    )
+
+    assert profile["engineering_signals"] == [{
+        "claim": "Engineering signal: Go", "source_url": "https://example.test/jobs/2", "quote": "Build services in Go.",
+    }]
+
+
+def test_company_model_citations_must_belong_to_fetched_evidence() -> None:
+    result = {
+        "summary": "Example", "remote_policy": "unknown", "sponsorship": "unknown", "relocation": "unknown",
+        "engineering_signals": [{"claim": "Go", "source_url": "https://fabricated.test"}], "risks": [],
+        "confidence": .5,
+        "score": {"total": 0, "dimensions": {"domain_alignment": 0, "engineering_environment": 0, "location_mobility": 0, "compensation": 0, "company_quality": 0, "evidence_confidence": 0}, "reasons": [], "risks": []},
+    }
+
+    with pytest.raises(ValueError, match="was not fetched"):
+        CompanyResearchService._validate_company_result(result, [{"source_url": "https://example.test"}])

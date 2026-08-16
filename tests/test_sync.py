@@ -7,7 +7,7 @@ import httpx
 from rolebeacon.collectors import plain_text
 from rolebeacon.config import Settings
 from rolebeacon.database import Database
-from rolebeacon.domain import CollectedJob, ScoreResult, SourceConfig
+from rolebeacon.domain import CollectedJob, CollectionBatch, ScoreResult, SourceConfig
 from rolebeacon.llm import LlmClient, LlmResponseRejected
 from rolebeacon.setup import SetupService
 from rolebeacon.source_discovery import relocation_source_candidates
@@ -241,3 +241,80 @@ async def test_llm_response_rejected_falls_back_to_rules_for_just_that_job(tmp_p
     assert result.phase == "complete"
     assert result.rule_fallback_jobs == 1
     assert database.get_job(job_id)["provider"] == "rules"
+
+
+async def test_complete_snapshot_sync_deactivates_removed_posting(tmp_path, monkeypatch) -> None:
+    payload = {
+        "candidate": {"schema_version": "1.0", "name": "Candidate", "location": {"country_code": "TR", "country_name": "Türkiye"}, "skills": {}},
+        "mobility": {"schema_version": "1.0", "current_country_code": "TR", "work_authorizations": ["TR"]},
+        "preferences": {"schema_version": "1.0", "target_roles": ["Backend Engineer"]},
+        "enabled_source_ids": ["arbeitnow"], "llm": {"mode": "rules"}, "activate": True,
+    }
+    settings = SetupService(Settings.load(tmp_path)).complete(payload)
+    database = Database(settings.database_path)
+    database.initialize()
+    batches = [CollectionBatch(jobs=[CollectedJob(
+        source="arbeitnow", source_job_id="closed-later", title="Backend Engineer", company="Example",
+        location="Remote", description="Build systems", url="https://example.test/jobs/closed-later",
+    )], complete_snapshot=True), CollectionBatch(jobs=[], complete_snapshot=True)]
+
+    class Collector:
+        async def collect(self, _since, _cursor=""):
+            return batches.pop(0)
+
+    monkeypatch.setattr("rolebeacon.sync.create_collector", lambda *_args: Collector())
+    service = SyncService(settings, database, LlmClient(settings))
+    await service.run(force=True)
+    job_id = database.list_jobs()[0]["id"]
+    await service.run(force=True)
+
+    assert database.get_job(job_id)["active"] == 0
+
+
+async def test_process_lock_prevents_two_refresh_processes_from_racing(tmp_path) -> None:
+    payload = {
+        "candidate": {"schema_version": "1.0", "name": "Candidate", "location": {"country_code": "TR", "country_name": "Türkiye"}, "skills": {}},
+        "mobility": {"schema_version": "1.0", "current_country_code": "TR", "work_authorizations": ["TR"]},
+        "preferences": {"schema_version": "1.0", "target_roles": ["Backend Engineer"]},
+        "enabled_source_ids": [], "llm": {"mode": "rules"}, "activate": True,
+    }
+    settings = SetupService(Settings.load(tmp_path)).complete(payload)
+    database = Database(settings.database_path)
+    database.initialize()
+    owner = SyncService(settings, database, LlmClient(settings))
+    contender = SyncService(settings, database, LlmClient(settings))
+    handle = owner._acquire_process_lock()
+    assert handle is not None
+    try:
+        result = await contender.run()
+    finally:
+        owner._release_process_lock(handle)
+
+    assert result.error == "sync_already_running"
+
+
+async def test_sync_injects_application_data_directory_into_credential_collectors(tmp_path, monkeypatch) -> None:
+    payload = {
+        "candidate": {"schema_version": "1.0", "name": "Candidate", "location": {"country_code": "TR", "country_name": "Türkiye"}},
+        "mobility": {"schema_version": "1.0", "current_country_code": "TR", "work_authorizations": ["TR"]},
+        "preferences": {"schema_version": "1.0", "target_roles": ["Backend Engineer"]},
+        "enabled_source_ids": ["linkedin-alerts"], "llm": {"mode": "rules"}, "activate": True,
+    }
+    settings = SetupService(Settings.load(tmp_path)).complete(payload)
+    database = Database(settings.database_path)
+    database.initialize()
+    seen: list[SourceConfig] = []
+
+    class Collector:
+        async def collect(self, _since, _cursor="") -> CollectionBatch:
+            return CollectionBatch(jobs=[])
+
+    def create(config, _client):
+        seen.append(config)
+        return Collector()
+
+    monkeypatch.setattr("rolebeacon.sync.create_collector", create)
+
+    await SyncService(settings, database, LlmClient(settings)).run(force=True)
+
+    assert seen[0].options["data_dir"] == str(settings.data_dir)

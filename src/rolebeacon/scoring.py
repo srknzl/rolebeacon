@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
+import unicodedata
 from typing import Any
 
 from .domain import EligibilityResult, EligibilityStatus, ScoreResult
-from .profile import CONTINENT_COUNTRY_CODES, country_names_by_code
+from .profile import CONTINENT_COUNTRY_CODES, DEFAULT_SCORE_WEIGHTS, country_names_by_code
 
-SCORING_PROMPT_VERSION = "job-fit-v11"
+SCORING_PROMPT_VERSION = "job-fit-v12"
 
 # Ineligibility is a hard gate: no combination of fit signals may push a total above this cap.
 # LLM scoring is only ever invoked for eligible jobs (see sync.py), so every ineligible job's
@@ -25,7 +28,7 @@ DIMENSION_META: list[tuple[str, str, int, str]] = [
     ("location_authorization", "Location & authorization", 15, "Eligibility status: eligible, unknown, or ineligible."),
     ("salary_employment", "Salary & employment", 10, "Whether stated pay meets your minimum, when the posting states one."),
 ]
-DIMENSION_MAXIMUMS: dict[str, int] = {key: max_points for key, _, max_points, _ in DIMENSION_META}
+DIMENSION_MAXIMUMS: dict[str, int] = dict(DEFAULT_SCORE_WEIGHTS)
 
 # The only place location_authorization is scored, for both providers - it is a pure lookup from
 # the deterministic eligibility gate, never a model judgment call. rule_score uses it directly;
@@ -35,6 +38,33 @@ LOCATION_SCORES: dict[EligibilityStatus, int] = {
     EligibilityStatus.UNKNOWN: 8,
     EligibilityStatus.INELIGIBLE: 0,
 }
+
+
+def configured_score_weights(preferences: dict[str, Any] | None = None) -> dict[str, int]:
+    raw = (preferences or {}).get("score_weights")
+    if not isinstance(raw, dict) or set(raw) != set(DEFAULT_SCORE_WEIGHTS):
+        return dict(DEFAULT_SCORE_WEIGHTS)
+    values = {key: int(value) for key, value in raw.items()}
+    return values if all(value >= 0 for value in values.values()) and sum(values.values()) == 100 else dict(DEFAULT_SCORE_WEIGHTS)
+
+
+def scoring_behavior_version(preferences: dict[str, Any] | None = None) -> str:
+    """Stable suffix that requeues evaluations once when the point distribution changes."""
+    encoded = json.dumps(configured_score_weights(preferences), sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()[:12]
+
+
+def dimension_metadata(preferences: dict[str, Any] | None = None) -> list[tuple[str, str, int, str]]:
+    weights = configured_score_weights(preferences)
+    return [(key, label, weights[key], hint) for key, label, _maximum, hint in DIMENSION_META]
+
+
+def _apply_score_weights(dimensions: dict[str, int], preferences: dict[str, Any]) -> dict[str, int]:
+    weights = configured_score_weights(preferences)
+    return {
+        key: round(int(value) * weights[key] / DEFAULT_SCORE_WEIGHTS[key])
+        for key, value in dimensions.items()
+    }
 
 
 def compute_verdict(status: EligibilityStatus, total: int, threshold: int) -> str:
@@ -149,7 +179,7 @@ NO_SPONSOR_PATTERNS = (
     r"(?:citizens|permanent residents) only",
 )
 SPONSOR_PATTERNS = (
-    r"visa sponsorship (?:is )?(?:available|provided|offered)",
+    r"visa sponsorship (?:is |are )?(?:available|provided|offered)",
     r"we (?:can|will) sponsor",
     r"sponsorship available",
     r"blue card",
@@ -178,7 +208,11 @@ SCOPED_REMOTE_PATTERNS = (
 # writes a location: a country referred to by a constituent nation/alternate name, and a region
 # referred to by the bloc's own name rather than any member country's name.
 COUNTRY_LOCATION_ALIASES: dict[str, tuple[str, ...]] = {
-    "GB": ("united kingdom", "england", "scotland", "wales"),
+    "CZ": ("czech republic",),
+    "GB": ("united kingdom", "great britain", "britain", "england", "scotland", "wales", "uk"),
+    "KR": ("south korea", "republic of korea"),
+    "TR": ("türkiye", "turkiye", "turkey"),
+    "US": ("united states", "united states of america", "usa"),
 }
 REGION_LOCATION_ALIASES: dict[str, tuple[str, ...]] = {
     "EUROPE": ("europe", "european union", "eu", "eea"),
@@ -195,8 +229,77 @@ def _contains(text: str, patterns: tuple[str, ...]) -> bool:
 
 
 def _company_in(company: str, values: list[str]) -> bool:
-    normalized = re.sub(r"\W+", "", company.casefold())
-    return any(re.sub(r"\W+", "", value.casefold()) in normalized for value in values if value)
+    def normalized(value: str) -> str:
+        folded = unicodedata.normalize("NFKC", value).casefold()
+        return " ".join(re.findall(r"[^\W_]+", folded, re.UNICODE))
+
+    company_name = normalized(company)
+    return bool(company_name) and any(normalized(value) == company_name for value in values if normalized(value))
+
+
+_CLEARANCE_MENTION = re.compile(
+    r"\b(?:security[- ]clearance|clearance|public[- ]trust|ts/sci|top[- ]secret|secret[- ]clearance)\b",
+    re.IGNORECASE,
+)
+_CLEARANCE_NEGATED = re.compile(
+    r"\b(?:no|not|does not|doesn't|without)\b.{0,45}\b(?:security[- ]clearance|clearance|public[- ]trust|ts/sci)\b"
+    r"|\b(?:security[- ]clearance|clearance|public[- ]trust|ts/sci)\b.{0,45}\b(?:not required|isn't required)\b",
+    re.IGNORECASE,
+)
+_CLEARANCE_PREFERRED = re.compile(
+    r"\b(?:security[- ]clearance|clearance|public[- ]trust|ts/sci)\b.{0,35}\b(?:preferred|nice to have|a plus|not required)\b",
+    re.IGNORECASE,
+)
+_CLEARANCE_OBTAIN = re.compile(
+    r"\b(?:ability|able|eligible|willingness|required) to (?:obtain|maintain)\b.{0,45}\b(?:clearance|public[- ]trust)\b"
+    r"|\b(?:clearance|public[- ]trust)\b.{0,45}\b(?:must|required to|ability to) (?:be )?(?:obtain|obtained|maintain)",
+    re.IGNORECASE,
+)
+_CLEARANCE_ACTIVE = re.compile(
+    r"\b(?:active|current|existing)\b.{0,35}\b(?:clearance|ts/sci|top[- ]secret|secret)\b"
+    r"|\b(?:ts/sci|top[- ]secret|secret[- ]clearance|security[- ]clearance|cleared candidate)\b.{0,35}\b(?:required|must have|needed)\b"
+    r"|\b(?:required|must have|needed)\b.{0,35}\b(?:ts/sci|top[- ]secret|secret[- ]clearance|security[- ]clearance)\b",
+    re.IGNORECASE,
+)
+
+
+def clearance_requirements(text: str) -> list[dict[str, str]]:
+    """Classify explicit English clearance wording while preserving its exact sentence."""
+    results: list[dict[str, str]] = []
+    for sentence in (part.strip() for part in re.split(r"(?<=[.!?])\s+|\n+", text) if part.strip()):
+        if not _CLEARANCE_MENTION.search(sentence):
+            continue
+        kind = (
+            "preferred" if _CLEARANCE_PREFERRED.search(sentence)
+            else "not_required" if _CLEARANCE_NEGATED.search(sentence)
+            else "ability_to_obtain" if _CLEARANCE_OBTAIN.search(sentence)
+            else "active_required" if _CLEARANCE_ACTIVE.search(sentence)
+            else "ambiguous"
+        )
+        level = "TS/SCI" if re.search(r"\bTS/SCI\b", sentence, re.IGNORECASE) else (
+            "Top Secret" if re.search(r"\btop[- ]secret\b", sentence, re.IGNORECASE) else
+            "Secret" if re.search(r"\bsecret\b", sentence, re.IGNORECASE) else ""
+        )
+        jurisdiction = "US" if re.search(r"\b(?:US|U\.S\.|United States|DoD)\b", sentence) else ""
+        results.append({"kind": kind, "evidence": sentence, "level": level, "jurisdiction": jurisdiction})
+    return results
+
+
+def _matching_active_clearance(policy: dict[str, Any], requirement: dict[str, str]) -> bool:
+    credentials = policy.get("credentials", [])
+    if not isinstance(credentials, list):
+        return False
+    for credential in credentials:
+        if not isinstance(credential, dict) or credential.get("status") != "active":
+            continue
+        jurisdiction = requirement.get("jurisdiction", "")
+        level = requirement.get("level", "")
+        if jurisdiction and str(credential.get("jurisdiction", "")).casefold() != jurisdiction.casefold():
+            continue
+        if level and str(credential.get("level", "")).casefold() != level.casefold():
+            continue
+        return True
+    return False
 
 
 def _place_match(location: str, code: str, name: str, cities: list[str] | tuple[str, ...] = ()) -> bool:
@@ -248,11 +351,37 @@ def evaluate_eligibility(
     scoped_remote = _contains(text, SCOPED_REMOTE_PATTERNS)
     worldwide = (_contains(text, WORLDWIDE_PATTERNS) or "worldwide" in location.casefold()) and not scoped_remote
     remote = "remote" in location.casefold() or worldwide
-    clearance = bool(
-        re.search(r"(?:active |ability to obtain )?(?:security |secret |top secret )clearance", text, re.IGNORECASE)
-    )
+    clearance = clearance_requirements(text)
+    raw_clearance_policy = mobility.get("clearance_policy")
+    clearance_policy: dict[str, Any] = raw_clearance_policy if isinstance(raw_clearance_policy, dict) else {}
     excluded = [phrase for phrase in preferences.get("exclude_phrases", []) if phrase.casefold() in text.casefold()]
     blocked_company = _company_in(company, preferences.get("company_blocklist", []))
+    policy_exclusions = [
+        phrase for phrase in clearance_policy.get("explicitly_excluded_requirements", [])
+        if str(phrase).strip() and str(phrase).casefold() in text.casefold()
+    ]
+    gating_clearance = next(
+        (item for item in clearance if item["kind"] in {"active_required", "ability_to_obtain", "ambiguous"}),
+        None,
+    )
+    matched_clearance = bool(
+        gating_clearance
+        and gating_clearance["kind"] == "active_required"
+        and _matching_active_clearance(clearance_policy, gating_clearance)
+    )
+    if matched_clearance:
+        gating_clearance = None
+    salary_preference = preferences.get("salary", {})
+    salary_hard_conflict = False
+    if isinstance(salary_preference, dict) and salary_preference.get("hard_filter"):
+        preferred_currency = str(salary_preference.get("currency", "")).casefold()
+        job_currency = str(job.get("salary_currency", "")).casefold()
+        minimum = salary_preference.get("minimum")
+        maximum = job.get("salary_max") or job.get("salary_min")
+        salary_hard_conflict = bool(
+            minimum is not None and maximum is not None and preferred_currency and job_currency == preferred_currency
+            and float(maximum) < float(minimum)
+        )
 
     priority = next(
         (
@@ -287,6 +416,8 @@ def evaluate_eligibility(
     sponsorship = "available" if sponsor else "unavailable" if no_sponsor else "unknown"
     relocation_value = "available" if relocation else "unknown"
     location_fit = "unknown"
+    if matched_clearance:
+        reasons.append("A matching active clearance is recorded in the local mobility profile")
 
     if blocked_company:
         status = EligibilityStatus.INELIGIBLE
@@ -294,9 +425,25 @@ def evaluate_eligibility(
     elif excluded:
         status = EligibilityStatus.INELIGIBLE
         risks.append(f"Excluded phrase: {excluded[0]}")
-    elif clearance:
+    elif policy_exclusions:
         status = EligibilityStatus.INELIGIBLE
-        risks.append("Security clearance conflicts with the configured eligibility profile")
+        risks.append(f"Rejected by your excluded clearance requirement: {policy_exclusions[0]}")
+    elif salary_hard_conflict:
+        status = EligibilityStatus.INELIGIBLE
+        risks.append("The posting's stated comparable salary is below your configured hard minimum")
+    elif gating_clearance and (
+        clearance_policy.get("status") == "cannot_meet"
+        or clearance_policy.get("willing_to_undergo_vetting") is False
+    ):
+        status = EligibilityStatus.INELIGIBLE
+        risks.append(
+            f"Posting clearance requirement conflicts with your explicit policy: {gating_clearance['evidence']}"
+        )
+    elif gating_clearance:
+        status = EligibilityStatus.UNKNOWN
+        risks.append(
+            f"Clearance requirement needs verification against your profile: {gating_clearance['evidence']}"
+        )
     elif country_strategy and country_strategy.get("kind") == "authorized_local":
         status = EligibilityStatus.ELIGIBLE
         location_fit = f"authorized:{country_strategy.get('country_code', '')}"
@@ -305,10 +452,17 @@ def evaluate_eligibility(
         status = EligibilityStatus.INELIGIBLE
         location_fit = f"sponsorship-unavailable:{country_strategy.get('country_code', '')}"
         risks.append("The role explicitly excludes sponsorship required by the configured mobility profile")
-    elif country_strategy and (sponsor or relocation):
+    elif country_strategy and country_strategy.get("requires_sponsorship") and sponsor:
+        status = EligibilityStatus.ELIGIBLE
+        location_fit = f"sponsorship:{country_strategy.get('country_code', '')}"
+        reasons.append("The target-country role explicitly supports required visa sponsorship")
+    elif country_strategy and country_strategy.get("requires_sponsorship") and not remote:
+        location_fit = f"sponsorship-unknown:{country_strategy.get('country_code', '')}"
+        risks.append("Visa sponsorship required by the configured mobility profile is not confirmed")
+    elif country_strategy and relocation:
         status = EligibilityStatus.ELIGIBLE
         location_fit = f"relocation:{country_strategy.get('country_code', '')}"
-        reasons.append("The target-country role explicitly supports sponsorship or relocation")
+        reasons.append("The target-country role explicitly supports relocation")
     elif worldwide and mobility.get("remote_from_current_country", False):
         status = EligibilityStatus.ELIGIBLE
         location_fit = "worldwide"
@@ -345,6 +499,9 @@ def evaluate_eligibility(
             if priority.get("kind") == "company_watchlist"
             else "Company is on the candidate priority list"
         )
+    preferred_clearance = next((item for item in clearance if item["kind"] == "preferred"), None)
+    if preferred_clearance:
+        risks.append(f"Clearance is preferred, not required: {preferred_clearance['evidence']}")
 
     return EligibilityResult(
         status=status,
@@ -366,6 +523,8 @@ def location_requirement(location_fit: str) -> str:
     sentence = {
         "authorized": f"You are already authorized to work in {name}.",
         "sponsorship-unavailable": f"Would need sponsorship in {name}, which the posting excludes.",
+        "sponsorship": f"The posting explicitly supports required visa sponsorship in {name}.",
+        "sponsorship-unknown": f"Would need sponsorship in {name}, but the posting does not confirm it.",
         "relocation": f"The posting supports relocation or sponsorship to {name}.",
         "worldwide": "The posting explicitly supports worldwide remote work.",
         "remote": f"The posting explicitly includes remote work from {name}.",
@@ -382,8 +541,16 @@ def candidate_terms(candidate_profile: dict[str, Any]) -> set[str]:
     if isinstance(skills, dict):
         for values in skills.values():
             terms.update(str(value).casefold() for value in values)
-    for section in ("summary", "headline"):
-        terms.update(re.findall(r"[a-z0-9+#.]+", str(candidate_profile.get(section, "")).casefold()))
+    evidence_sections = {
+        "summary": candidate_profile.get("summary", ""),
+        "headline": candidate_profile.get("headline", ""),
+        "experience": candidate_profile.get("experience", []),
+        "projects": candidate_profile.get("projects", []),
+        "education": candidate_profile.get("education", []),
+        "languages": candidate_profile.get("languages", []),
+    }
+    for value in evidence_sections.values():
+        terms.update(re.findall(r"[a-z0-9+#.]+", str(value).casefold()))
     return terms
 
 
@@ -451,11 +618,12 @@ def rule_score(
     location_score = LOCATION_SCORES[eligibility.status]
     salary_score = 5
     if job.get("salary_min") or job.get("salary_max"):
-        salary_score = 10
         salary = preferences.get("salary", {})
         minimum = salary.get("minimum") if isinstance(salary, dict) else None
         currency = salary.get("currency") if isinstance(salary, dict) else ""
-        if minimum and currency and str(job.get("salary_currency", "")).casefold() == str(currency).casefold():
+        comparable = bool(currency) and str(job.get("salary_currency", "")).casefold() == str(currency).casefold()
+        salary_score = 10 if comparable or not minimum else 5
+        if minimum and comparable:
             if float(job.get("salary_max") or job.get("salary_min") or 0) < float(minimum):
                 salary_score = 0
 
@@ -467,6 +635,8 @@ def rule_score(
         "location_authorization": location_score,
         "salary_employment": salary_score,
     }
+    dimensions = _apply_score_weights(dimensions, preferences)
+    maximums = configured_score_weights(preferences)
     strategy = next((item for item in strategies if item.get("id") == eligibility.route), None)
     # A priority/watchlist company is a reason to look at its engineering roles, not at its
     # procurement or pre-sales openings, and the floor never touches the title match
@@ -474,9 +644,9 @@ def rule_score(
     # smaller floor than priority - "lighter weight" is the field's own documented intent.
     if strategy and same_role_family:
         if strategy.get("kind") == "priority_company":
-            _raise_dimensions_to_floor(dimensions, 55)
+            _raise_dimensions_to_floor(dimensions, 55, maximums)
         elif strategy.get("kind") == "company_watchlist":
-            _raise_dimensions_to_floor(dimensions, 45)
+            _raise_dimensions_to_floor(dimensions, 45, maximums)
     if eligibility.status == EligibilityStatus.INELIGIBLE:
         _cap_dimensions(dimensions, INELIGIBLE_SCORE_CAP)
     total = sum(dimensions.values())
@@ -516,10 +686,10 @@ def rule_score(
     )
 
 
-def _raise_dimensions_to_floor(dimensions: dict[str, int], floor: int) -> None:
+def _raise_dimensions_to_floor(dimensions: dict[str, int], floor: int, maximums: dict[str, int]) -> None:
     shortfall = max(0, floor - sum(dimensions.values()))
     for key in ("domain_experience", "stack"):
-        increase = min(shortfall, DIMENSION_MAXIMUMS[key] - dimensions[key])
+        increase = min(shortfall, maximums[key] - dimensions[key])
         dimensions[key] += increase
         shortfall -= increase
         if not shortfall:

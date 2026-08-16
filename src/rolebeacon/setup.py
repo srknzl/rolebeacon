@@ -57,6 +57,8 @@ class SetupService:
                 "base_url": self.settings.llm_base_url,
                 "model": self.settings.llm_model,
                 "api_key": "",
+                "api_key_action": "preserve",
+                "api_key_configured": bool(self.settings.llm_api_key),
             },
             "activate": self.settings.activated,
         }
@@ -123,7 +125,29 @@ class SetupService:
         return validated.model_dump(mode="json")
 
     def complete(self, value: dict[str, Any]) -> Settings:
-        payload = SetupPayloadV1.model_validate(value)
+        current = self.saved_payload() if self.settings.setup_complete else {}
+
+        def merged(existing: Any, incoming: Any) -> Any:
+            if isinstance(existing, dict) and isinstance(incoming, dict):
+                return {key: merged(existing.get(key), item) for key, item in incoming.items()} | {
+                    key: item for key, item in existing.items() if key not in incoming
+                }
+            return incoming
+
+        candidate_value = merged(current.get("candidate", {}), value.get("candidate", {}))
+        mobility_value = merged(current.get("mobility", {}), value.get("mobility", {}))
+        preferences_value = merged(current.get("preferences", {}), value.get("preferences", {}))
+        llm_value = merged(current.get("llm", {}), value.get("llm", {}))
+        llm_value.pop("api_key_configured", None)
+        complete_value = {
+            **current,
+            **value,
+            "candidate": candidate_value,
+            "mobility": mobility_value,
+            "preferences": preferences_value,
+            "llm": llm_value,
+        }
+        payload = SetupPayloadV1.model_validate(complete_value)
         profile = payload.candidate.model_dump(mode="json")
         issues = validate_candidate_profile(profile)
         if issues:

@@ -9,6 +9,7 @@ from urllib.parse import urlsplit, urlunsplit
 from urllib.robotparser import RobotFileParser
 
 import httpx
+import tldextract
 
 from .collectors import USER_AGENT, default_http_client, plain_text
 from .config import Settings
@@ -141,6 +142,8 @@ REMOTE_POLICY_WORDING = {
     "unknown": "not stated in the fetched sources",
 }
 
+_TLD_EXTRACT = tldextract.TLDExtract(suffix_list_urls=())
+
 
 @dataclass(slots=True)
 class CompanyResearchStatus:
@@ -210,6 +213,7 @@ class CompanyResearchService:
             for _attempt in range(2):
                 try:
                     result = await self._llm_research(name, evidence, search_profile)
+                    self._validate_company_result(result, evidence)
                     profile = {key: value for key, value in result.items() if key != "score"}
                     score = result["score"]
                     self._validate_score(score)
@@ -342,8 +346,8 @@ class CompanyResearchService:
     @staticmethod
     def _registrable_host(host: str) -> str:
         normalized = host.casefold().removeprefix("www.")
-        parts = normalized.split(".")
-        return ".".join(parts[-2:]) if len(parts) >= 2 else normalized
+        extracted = _TLD_EXTRACT(normalized)
+        return extracted.top_domain_under_public_suffix or normalized
 
     @staticmethod
     def _excluded_discovery_host(host: str) -> bool:
@@ -398,6 +402,10 @@ class CompanyResearchService:
                         )
                         continue
                     response.raise_for_status()
+                    requested_host = self._registrable_host(urlsplit(url).hostname or "")
+                    final_host = self._registrable_host(response.url.host or "")
+                    if not requested_host or final_host != requested_host:
+                        continue
                     content_type = response.headers.get("content-type", "")
                     if "html" not in content_type and "text" not in content_type:
                         continue
@@ -408,10 +416,11 @@ class CompanyResearchService:
                     title = plain_text(title_match.group(1)) if title_match else "Official company page"
                     if self._soft_404(title, text):
                         continue
+                    validated_type = self._validated_source_type(source.get("type", "official"), str(response.url), title, text)
                     evidence.append(
                         {
                             "source_url": str(response.url),
-                            "source_type": source.get("type", "official"),
+                            "source_type": validated_type,
                             "title": title,
                             "excerpt": text,
                             "etag": response.headers.get("etag", ""),
@@ -421,6 +430,16 @@ class CompanyResearchService:
                 except httpx.HTTPError:
                     continue
         return evidence
+
+    @classmethod
+    def _validated_source_type(cls, requested: str, final_url: str, title: str, text: str) -> str:
+        detected = cls._source_type(final_url, title)
+        hiring_context = any(term in f"{title} {text[:1200]}".casefold() for term in ("career", "jobs", "join our team", "open roles", "benefits"))
+        if requested == "careers" and (detected != "careers" or not hiring_context):
+            return "official"
+        if requested == "engineering" and detected != "engineering":
+            return "official"
+        return requested
 
     @staticmethod
     def _soft_404(title: str, text: str) -> bool:
@@ -449,8 +468,17 @@ class CompanyResearchService:
 
     @staticmethod
     def _job_evidence(jobs: list[dict[str, Any]]) -> list[dict[str, str]]:
+        groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for job in jobs:
+            family = " ".join(str(job.get("normalized_title", "")).split()[:2])
+            groups.setdefault((str(job.get("location_bucket", "")), family), []).append(job)
+        sample: list[dict[str, Any]] = []
+        while len(sample) < 20 and any(groups.values()):
+            for key in sorted(groups):
+                if groups[key] and len(sample) < 20:
+                    sample.append(groups[key].pop(0))
         evidence = []
-        for job in jobs[:20]:
+        for job in sample:
             text = " ".join(
                 filter(None, (str(job.get("title", "")), str(job.get("location", "")), str(job.get("description", ""))[:3000]))
             )
@@ -536,7 +564,10 @@ class CompanyResearchService:
         domains = search_profile.get("preferred_domains", [])
         domain_hits = [item for item in domains if item.casefold() in text]
         skills = [str(value) for value in search_profile.get("preferred_skills", [])]
-        stack_hits = [item for item in (skills or ENGINEERING_FALLBACK_TERMS) if item.casefold() in text]
+        def term_present(term: str, value: str) -> bool:
+            return bool(re.search(rf"(?<![\w]){re.escape(term.casefold())}(?![\w])", value))
+
+        stack_hits = [item for item in (skills or ENGINEERING_FALLBACK_TERMS) if term_present(item, text)]
         remote_policy, remote_source, remote_quote = self._infer_remote_policy(hiring)
         no_sponsor_found = self._locate(hiring, SPONSORSHIP_ABSENT_PHRASES)
         sponsor_found = [
@@ -571,7 +602,9 @@ class CompanyResearchService:
             "evidence_confidence": 0,
         }
         domain_found = self._locate(hiring, tuple(item.casefold() for item in domain_hits))
-        stack_found = self._locate(hiring, tuple(item.casefold() for item in stack_hits))
+        stack_evidence = [
+            (skill, self._locate(hiring, (skill.casefold(),))) for skill in stack_hits
+        ]
         reasons = []
         # No fallback source: a claim citing a page that does not contain the term is worse than an
         # uncited claim, because the "Source" link then looks like verification.
@@ -579,10 +612,10 @@ class CompanyResearchService:
             reasons.append(
                 self._claim(f"Evidence mentions preferred domains: {', '.join(domain_hits)}", domain_found[0])
             )
-        if stack_found:
-            reasons.append(
-                self._claim(f"Engineering signals include: {', '.join(stack_hits)}", stack_found[0])
-            )
+        engineering_signals = [
+            self._claim(f"Engineering signal: {skill}", found[0]) for skill, found in stack_evidence if found
+        ]
+        reasons.extend(engineering_signals)
         if remote_policy == "worldwide" and remote_source:
             reasons.append(
                 {
@@ -625,7 +658,7 @@ class CompanyResearchService:
             "remote_policy": remote_policy,
             "sponsorship": sponsorship_state,
             "relocation": relocation_state,
-            "engineering_signals": reasons,
+            "engineering_signals": engineering_signals,
             "risks": risks,
         }
         score = {"total": sum(dimensions.values()), "dimensions": dimensions, "reasons": reasons, "risks": risks}
@@ -673,7 +706,12 @@ class CompanyResearchService:
         for item in evidence:
             matches = []
             for sentence in cls._sentences(item["excerpt"]):
-                hits = [index for index in (sentence.casefold().find(p) for p in patterns) if index >= 0]
+                folded = sentence.casefold()
+                hits = [
+                    match.start()
+                    for pattern in patterns
+                    if (match := re.search(rf"(?<![\w]){re.escape(pattern)}(?![\w])", folded))
+                ]
                 if hits:
                     matches.append((item, cls._window(sentence, min(hits))))
             if matches:
@@ -749,6 +787,10 @@ class CompanyResearchService:
         ):
             match = next((found for found in (re.search(item, text) for item in patterns) if found), None)
             if match:
+                if policy == "regional" and "within" in match.group(0) and not re.search(
+                    r"\b(?:remote|work location|country of employment|hiring|based|located|resident)\b", text
+                ):
+                    continue
                 return policy, match.start()
         return "unknown", 0
 
@@ -780,6 +822,21 @@ class CompanyResearchService:
     def _validate_score(score: dict[str, Any]) -> None:
         if sum(int(value) for value in score["dimensions"].values()) != int(score["total"]):
             raise LlmUnavailable("Company score dimensions do not add up to total")
+
+    @classmethod
+    def _validate_company_result(cls, result: dict[str, Any], evidence: list[dict[str, str]]) -> None:
+        expected = {"summary", "remote_policy", "sponsorship", "relocation", "engineering_signals", "risks", "confidence", "score"}
+        if set(result) != expected:
+            raise ValueError("Company assessment returned unexpected or missing keys")
+        allowed_urls = {item["source_url"] for item in evidence}
+        for collection in (result["engineering_signals"], result["risks"], result["score"]["reasons"], result["score"]["risks"]):
+            for claim in collection:
+                source_url = str(claim.get("source_url", ""))
+                if source_url and source_url not in allowed_urls:
+                    raise ValueError("Company assessment cited evidence that was not fetched")
+        if not 0 <= float(result["confidence"]) <= 1:
+            raise ValueError("Company assessment confidence is outside 0..1")
+        cls._validate_score(result["score"])
 
 
 class CompanyResearchCoordinator:

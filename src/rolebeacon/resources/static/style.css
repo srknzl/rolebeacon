@@ -526,6 +526,11 @@ label:has(> .help-tip):not(:has(> input[type=checkbox])) > :not(.help-tip) { gri
 .help-tip::before { display: none; }
 .help-tip:hover::after, .help-tip:focus-visible::after { opacity: 1; }
 .help-tip:focus-visible { box-shadow: 0 0 0 3px var(--brand-soft); }
+.score-factor { border-bottom: 1px solid var(--line-soft); }
+.score-factor summary { display: flex; justify-content: space-between; gap: 16px; padding: 9px 0; cursor: pointer; }
+.score-factor summary:focus-visible { outline: 3px solid var(--brand-soft); outline-offset: 2px; }
+.score-factor-explanation { padding: 0 0 10px; color: var(--muted); font-size: 13px; }
+.score-factor-explanation p { margin: 5px 0; }
 
 /* ============================================================
    Alerts & toasts

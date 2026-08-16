@@ -10,7 +10,8 @@ from fastapi.testclient import TestClient
 
 from rolebeacon.app import _source_filter_options, create_app
 from rolebeacon.config import Settings
-from rolebeacon.domain import CollectedJob, EligibilityResult, EligibilityStatus, SourceConfig
+from rolebeacon.database import Database
+from rolebeacon.domain import CollectedJob, EligibilityResult, EligibilityStatus, ScoreResult, SourceConfig
 from rolebeacon.llm import SCORING_RUBRIC, LlmClient
 from rolebeacon.setup import SetupService
 
@@ -75,7 +76,20 @@ def test_idle_refresh_panel_stays_hidden_until_user_starts_refresh(tmp_path) -> 
     assert "syncPanel.hidden = true" in page.text
 
 
-def test_manual_refresh_is_allowed_when_only_scheduled_collection_is_disabled(tmp_path, monkeypatch) -> None:
+def test_setup_exposes_validated_accessible_score_distribution(tmp_path) -> None:
+    app = create_app(Settings.load(tmp_path))
+
+    with TestClient(app) as client:
+        page = client.get("/setup")
+
+    assert "Opportunity-fit point distribution" in page.text
+    assert 'id="weight-location-authorization"' in page.text
+    assert 'id="score-weight-total" role="status" aria-live="polite"' in page.text
+    assert "Score weights must be non-negative whole numbers totaling 100" in page.text
+    assert "a model never supplies it" in page.text
+
+
+def test_manual_refresh_requires_explicit_activation(tmp_path, monkeypatch) -> None:
     payload = setup_payload()
     payload["activate"] = False
     app = create_app(SetupService(Settings.load(tmp_path)).complete(payload))
@@ -89,8 +103,8 @@ def test_manual_refresh_is_allowed_when_only_scheduled_collection_is_disabled(tm
     with TestClient(app) as client:
         response = client.post("/api/sync")
 
-    assert response.status_code == 202
-    assert calls == [(False, True)]
+    assert response.status_code == 409
+    assert calls == []
 
 
 def test_setup_schema_validation_and_completion(tmp_path) -> None:
@@ -171,7 +185,7 @@ def test_llm_score_total_is_derived_from_dimensions(tmp_path) -> None:
         "dimensions": {
             "role_domain": 20,
             "stack": 15,
-            "domain_experience": 15,
+            "domain_experience": 10,
             "seniority": 8,
             "salary_employment": 5,
         },
@@ -189,7 +203,7 @@ def test_llm_score_total_is_derived_from_dimensions(tmp_path) -> None:
     # location_authorization is never model-supplied - it's spliced in deterministically from
     # the eligibility status (15 for ELIGIBLE), never left to the model to guess.
     assert value["dimensions"]["location_authorization"] == 15
-    assert value["total"] == 78
+    assert value["total"] == 73
     assert value["confidence"] == 0.8
     assert value["verdict"] == "review"
 
@@ -284,6 +298,30 @@ def test_normalize_score_overwrites_a_model_supplied_location_authorization() ->
 
     assert value["dimensions"]["location_authorization"] == 8
     assert value["total"] == 63
+
+
+def test_custom_location_weight_still_uses_only_deterministic_eligibility() -> None:
+    value = {
+        "dimensions": {
+            "role_domain": 20, "stack": 15, "domain_experience": 5, "seniority": 10,
+            "location_authorization": 999, "salary_employment": 5,
+        },
+        "confidence": 0.5, "evidence": [], "gaps": [],
+    }
+    eligibility = EligibilityResult(
+        status=EligibilityStatus.UNKNOWN, route="other", sponsorship="unknown",
+        relocation="unknown", location_fit="unknown", reasons=[], risks=[],
+    )
+    preferences = {
+        "score_weights": {
+            "role_domain": 25, "stack": 15, "domain_experience": 10,
+            "seniority": 10, "location_authorization": 30, "salary_employment": 10,
+        }
+    }
+
+    LlmClient._normalize_score(value, eligibility, preferences)
+
+    assert value["dimensions"]["location_authorization"] == 16
 
 
 @pytest.mark.asyncio
@@ -632,12 +670,113 @@ def test_preferences_separate_search_from_application_and_hide_rules_details(tmp
     assert page.status_code == 200
     assert 'data-settings-tab="search"' in page.text
     assert 'data-settings-tab="application"' in page.text
-    assert "These fields do not influence job discovery" in page.text
+    assert "LLM fit may use summary, location, experience, projects, skills, education" in page.text
+    assert "contact details are excluded" in page.text
     assert 'id="model-details"' in page.text
     assert 'modelDetails.hidden = document.getElementById("llm-mode").value === "rules"' in page.text
     assert 'message("Preferences saved.", true)' in page.text
     assert "Arbeitnow roles that explicitly advertise visa sponsorship" in page.text
     assert "Searches every relocation-target country or continent you've added" in page.text
+
+
+def test_settings_round_trip_preserves_omitted_fields_and_saved_api_key(tmp_path) -> None:
+    payload = setup_payload()
+    payload["mobility"].update({
+        "relocation_targets": [{"country_code": "DE", "country_name": "Germany", "cities": ["Berlin"]}],
+        "sponsorship_required_outside_authorized_countries": False,
+        "timezone": "Europe/Istanbul",
+    })
+    payload["preferences"].update({
+        "salary": {"minimum": 120000, "currency": "EUR", "hard_filter": True},
+        "daily_review_limit": 7,
+    })
+    payload["llm"] = {
+        "mode": "custom", "base_url": "http://model.test/v1", "model": "test",
+        "api_key": "secret-value", "api_key_action": "replace",
+    }
+    service = SetupService(Settings.load(tmp_path))
+    service.complete(payload)
+
+    updated = service.complete({"candidate": {"headline": "Updated headline"}})
+
+    assert updated.llm_api_key == "secret-value"
+    assert updated.load_mobility_profile()["relocation_targets"][0]["cities"] == ["Berlin"]
+    assert updated.load_mobility_profile()["timezone"] == "Europe/Istanbul"
+    assert updated.load_mobility_profile()["sponsorship_required_outside_authorized_countries"] is False
+    assert updated.load_search_profile()["salary"] == {"minimum": 120000.0, "currency": "EUR", "hard_filter": True}
+    assert updated.load_search_profile()["daily_review_limit"] == 7
+
+
+def test_job_detail_score_factors_are_keyboard_expandable_and_mode_transparent(tmp_path) -> None:
+    settings = configured_settings(tmp_path)
+    database = Database(settings.database_path)
+    database.initialize()
+    job_id, _ = database.upsert_job(CollectedJob(
+        source="fixture", source_job_id="tooltip", title="Backend Engineer", company="Example",
+        location="Remote", description="Build systems", url="https://example.test/jobs/tooltip",
+    ))
+    database.save_evaluation(job_id, EligibilityResult(
+        status=EligibilityStatus.UNKNOWN, route="other", sponsorship="unknown", relocation="unknown",
+        location_fit="remote-scope-unknown", reasons=[], risks=["Scope unknown"],
+    ), ScoreResult(
+        total=30, dimensions={"role_domain": 10, "stack": 0, "domain_experience": 0, "seniority": 7, "location_authorization": 8, "salary_employment": 5},
+        confidence=.5, verdict="low_priority", evidence=[], gaps=[], provider="rules", model="deterministic",
+    ), "scored")
+
+    with TestClient(create_app(settings)) as client:
+        page = client.get(f"/jobs/{job_id}")
+
+    assert page.text.count('class="score-factor"') == 6
+    assert 'data-score-factor="location_authorization"' in page.text
+    assert "Missing evidence does not prove you lack the qualification" in page.text
+    assert "no model can set or override it" in page.text
+    assert ".score-factor summary:focus-visible" in (settings.resource_dir / "static" / "style.css").read_text()
+
+
+def test_refresh_completion_step_and_partial_error_state_are_distinct(tmp_path) -> None:
+    with TestClient(create_app(configured_settings(tmp_path))) as client:
+        page = client.get("/")
+
+    assert 'if (phase === "complete") return "complete"' in page.text
+    assert 'phase === "completed_with_errors"' in page.text
+
+
+def test_source_preview_requires_activation_and_origin_matches_scheme_and_port(tmp_path) -> None:
+    payload = setup_payload()
+    payload["activate"] = False
+    app = create_app(SetupService(Settings.load(tmp_path)).complete(payload))
+    with TestClient(app) as client:
+        preview = client.post("/api/sources/discover", json={"careers_url": "https://boards.greenhouse.io/example"})
+        hostile = client.post("/api/setup/validate", json={}, headers={"Origin": "http://localhost:9999"})
+
+    assert preview.status_code == 409
+    assert hostile.status_code == 403
+
+
+def test_json_mutations_reject_non_object_payloads(tmp_path) -> None:
+    with TestClient(create_app(Settings.load(tmp_path))) as client:
+        response = client.post("/api/setup/validate", json=["not", "an", "object"])
+
+    assert response.status_code == 422
+
+
+def test_mutations_reject_string_boolean_and_invalid_integer_coercion(tmp_path) -> None:
+    with TestClient(create_app(configured_settings(tmp_path))) as client:
+        source = client.post(
+            "/api/sources",
+            json={"careers_url": "https://boards.greenhouse.io/example", "enabled": "false"},
+        )
+        duplicate = client.post("/api/duplicates/1/merge", json={"keep_job_id": "not-an-integer"})
+
+    assert source.status_code == 422
+    assert duplicate.status_code == 422
+
+
+def test_manual_import_rejects_non_web_url_schemes(tmp_path) -> None:
+    with TestClient(create_app(configured_settings(tmp_path))) as client:
+        response = client.post("/api/imports", json={"title": "Role", "company": "Example", "url": "javascript:alert(1)"})
+
+    assert response.status_code == 422
 
 
 def test_realistic_job_detail_with_llm_evidence_renders_without_500(tmp_path) -> None:
@@ -674,11 +813,11 @@ def test_realistic_job_detail_with_llm_evidence_renders_without_500(tmp_path) ->
 
 def test_job_detail_shows_the_ineligible_score_cap_explanation(tmp_path) -> None:
     from rolebeacon.domain import ScoreResult
-    from rolebeacon.scoring import INELIGIBLE_SCORE_CAP, SCORING_PROMPT_VERSION
+    from rolebeacon.scoring import INELIGIBLE_SCORE_CAP, SCORING_PROMPT_VERSION, scoring_behavior_version
 
     # Startup runs an immediate sync, which requeues and rescores any job whose stored
     # prompt_version doesn't match the current one - match it so this seeded score survives.
-    scoring_version = f"{SCORING_PROMPT_VERSION}:rules"
+    scoring_version = f"{SCORING_PROMPT_VERSION}:rules:weights-{scoring_behavior_version()}"
     app = create_app(configured_settings(tmp_path))
     job_id, _ = app.state.database.upsert_job(
         CollectedJob(
@@ -709,11 +848,11 @@ def test_job_detail_shows_the_ineligible_score_cap_explanation(tmp_path) -> None
 
 def test_job_detail_shows_the_score_breakdown_by_dimension(tmp_path) -> None:
     from rolebeacon.domain import ScoreResult
-    from rolebeacon.scoring import SCORING_PROMPT_VERSION
+    from rolebeacon.scoring import SCORING_PROMPT_VERSION, scoring_behavior_version
 
     # Startup runs an immediate sync, which requeues and rescores any job whose stored
     # prompt_version doesn't match the current one - match it so this seeded score survives.
-    scoring_version = f"{SCORING_PROMPT_VERSION}:rules"
+    scoring_version = f"{SCORING_PROMPT_VERSION}:rules:weights-{scoring_behavior_version()}"
     app = create_app(configured_settings(tmp_path))
     job_id, _ = app.state.database.upsert_job(
         CollectedJob(

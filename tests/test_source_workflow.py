@@ -11,7 +11,12 @@ from rolebeacon.app import create_app
 from rolebeacon.collectors import AmazonJobsCollector, GoogleCareersCollector, _google_job_detail
 from rolebeacon.config import Settings
 from rolebeacon.domain import SourceConfig
-from rolebeacon.profile import CONTINENT_COUNTRY_CODES, RELOCATION_REGION_CODES, relocation_countries
+from rolebeacon.profile import (
+    CONTINENT_COUNTRY_CODES,
+    RELOCATION_REGION_CODES,
+    SETUP_PLANNING_PROMPT,
+    relocation_countries,
+)
 from rolebeacon.setup import SetupService
 from rolebeacon.source_discovery import (
     SourceDiscoveryError,
@@ -586,6 +591,12 @@ def test_amazon_search_params_does_not_override_a_country_already_in_the_url() -
 def test_relocation_region_codes_and_continent_country_codes_stay_in_sync() -> None:
     # Guards against the two maps silently drifting apart as continents are added or renamed.
     assert set(RELOCATION_REGION_CODES) == set(CONTINENT_COUNTRY_CODES)
+
+
+def test_setup_planning_prompt_lists_every_canonical_supported_region() -> None:
+    for code, name in RELOCATION_REGION_CODES.items():
+        assert f"`{code}` ({name})" in SETUP_PLANNING_PROMPT
+    assert "may additionally use `EUROPE`" not in SETUP_PLANNING_PROMPT
 
 
 def test_relocation_countries_expands_a_continent_and_dedupes_an_explicit_member() -> None:

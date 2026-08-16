@@ -5,6 +5,8 @@ import base64
 import html
 import os
 import re
+import stat
+import tempfile
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
@@ -297,7 +299,7 @@ def _signals(**values: Any) -> dict[str, Any]:
 
 
 class GreenhouseCollector(Collector):
-    async def collect(self, since: datetime, cursor: str = "") -> list[CollectedJob]:
+    async def collect(self, since: datetime, cursor: str = "") -> CollectionBatch:
         if not self.config.slug:
             raise ValueError("Greenhouse source requires a board slug")
         response = await self.client.get(
@@ -322,7 +324,7 @@ class GreenhouseCollector(Collector):
                 metadata={"departments": item.get("departments", []), "offices": item.get("offices", [])},
             )
             result.append(job)
-        return result
+        return CollectionBatch(jobs=result, complete_snapshot=True, provider_total=len(result))
 
 
 def _metadata_value(metadata: list[dict[str, Any]], key: str) -> str:
@@ -333,44 +335,49 @@ def _metadata_value(metadata: list[dict[str, Any]], key: str) -> str:
 
 
 class LeverCollector(Collector):
-    async def collect(self, since: datetime, cursor: str = "") -> list[CollectedJob]:
+    async def collect(self, since: datetime, cursor: str = "") -> CollectionBatch:
         if not self.config.slug:
             raise ValueError("Lever source requires a site slug")
         base = self.config.host.rstrip("/") if self.config.host else "https://api.lever.co"
-        response = await self.client.get(
-            f"{base}/v0/postings/{self.config.slug}",
-            params={"mode": "json", "limit": 500},
-        )
-        response.raise_for_status()
         result = []
-        for item in response.json():
-            categories = item.get("categories") or {}
-            salary = item.get("salaryRange") or {}
-            location = categories.get("location", "")
-            job = CollectedJob(
-                source=self.config.id,
-                source_job_id=str(item.get("id", item.get("hostedUrl", ""))),
-                title=item.get("text", ""),
-                company=self.config.company or self.config.name,
-                location=location,
-                description=plain_text(item.get("descriptionPlain") or item.get("description")),
-                url=item.get("hostedUrl", ""),
-                apply_url=item.get("applyUrl", item.get("hostedUrl", "")),
-                remote_scope=location if "remote" in location.casefold() else "",
-                employment_type=categories.get("commitment", ""),
-                salary_min=salary.get("min"),
-                salary_max=salary.get("max"),
-                salary_currency=salary.get("currency", ""),
-                published_at=parse_datetime(item.get("createdAt")),
-                updated_at=parse_datetime(item.get("updatedAt")),
-                metadata={"team": categories.get("team", ""), "department": categories.get("department", "")},
+        requests = 0
+        page_size = 100
+        truncated = False
+        for page in range(max(1, self.config.max_pages)):
+            response = await self.client.get(
+                f"{base}/v0/postings/{self.config.slug}",
+                params={"mode": "json", "limit": page_size, "skip": page * page_size},
             )
-            result.append(job)
-        return result
+            requests += 1
+            response.raise_for_status()
+            items = response.json()
+            for item in items:
+                categories = item.get("categories") or {}
+                salary = item.get("salaryRange") or {}
+                location = categories.get("location", "")
+                result.append(CollectedJob(
+                    source=self.config.id, source_job_id=str(item.get("id", item.get("hostedUrl", ""))),
+                    title=item.get("text", ""), company=self.config.company or self.config.name,
+                    location=location, description=plain_text(item.get("descriptionPlain") or item.get("description")),
+                    url=item.get("hostedUrl", ""), apply_url=item.get("applyUrl", item.get("hostedUrl", "")),
+                    remote_scope=location if "remote" in location.casefold() else "",
+                    employment_type=categories.get("commitment", ""), salary_min=salary.get("min"),
+                    salary_max=salary.get("max"), salary_currency=salary.get("currency", ""),
+                    published_at=parse_datetime(item.get("createdAt")), updated_at=parse_datetime(item.get("updatedAt")),
+                    metadata={"team": categories.get("team", ""), "department": categories.get("department", "")},
+                ))
+            if len(items) < page_size:
+                break
+        else:
+            truncated = bool(result) and len(items) == page_size
+        return CollectionBatch(
+            jobs=result, complete_snapshot=not truncated, provider_total=len(result) if not truncated else None,
+            requests_made=requests, truncated=truncated,
+        )
 
 
 class AshbyCollector(Collector):
-    async def collect(self, since: datetime, cursor: str = "") -> list[CollectedJob]:
+    async def collect(self, since: datetime, cursor: str = "") -> CollectionBatch:
         if not self.config.slug:
             raise ValueError("Ashby source requires a board slug")
         response = await self.client.get(
@@ -402,7 +409,7 @@ class AshbyCollector(Collector):
                 metadata={"department": item.get("department", ""), "team": item.get("team", "")},
             )
             result.append(job)
-        return result
+        return CollectionBatch(jobs=result, complete_snapshot=True, provider_total=len(result))
 
 
 class RemoteOkCollector(Collector):
@@ -419,11 +426,11 @@ class RemoteOkCollector(Collector):
                 source_job_id=str(item["id"]),
                 title=item.get("position", ""),
                 company=item.get("company", ""),
-                location=item.get("location", "Worldwide") or "Worldwide",
+                location=item.get("location", "") or "",
                 description=plain_text(item.get("description")),
                 url=item.get("url", ""),
                 apply_url=item.get("apply_url", item.get("url", "")),
-                remote_scope=item.get("location", "Worldwide") or "Worldwide",
+                remote_scope=item.get("location", "") or "",
                 employment_type="full-time",
                 salary_min=salary_min,
                 salary_max=salary_max,
@@ -487,11 +494,11 @@ class HimalayasCollector(Collector):
                     source_job_id=source_job_id,
                     title=item.get("title", ""),
                     company=company,
-                    location=str(restrictions or "Worldwide"),
+                    location=str(restrictions or ""),
                     description=plain_text(item.get("description") or item.get("descriptionHtml")),
                     url=item.get("applicationLink") or item.get("guid") or item.get("url", ""),
                     apply_url=item.get("applicationLink") or item.get("guid") or item.get("url", ""),
-                    remote_scope=str(restrictions or "Worldwide"),
+                    remote_scope=str(restrictions or ""),
                     employment_type=str(item.get("employmentType", "")),
                     salary_min=(salary.get("min") if isinstance(salary, dict) and salary else item.get("minSalary")),
                     salary_max=(salary.get("max") if isinstance(salary, dict) and salary else item.get("maxSalary")),
@@ -552,7 +559,7 @@ def _xml_text(item: ElementTree.Element, tag: str) -> str:
 class PersonioCollector(Collector):
     """Collect a complete current Personio board from its public, no-key XML feed."""
 
-    async def collect(self, since: datetime, cursor: str = "") -> list[CollectedJob]:
+    async def collect(self, since: datetime, cursor: str = "") -> CollectionBatch:
         if not self.config.host:
             raise ValueError("Personio source requires a board host")
         base = self.config.host.rstrip("/")
@@ -604,25 +611,31 @@ class PersonioCollector(Collector):
                     },
                 )
             )
-        return result
+        return CollectionBatch(jobs=result, complete_snapshot=True, provider_total=len(result))
 
 
 class SmartRecruitersCollector(Collector):
-    async def collect(self, since: datetime, cursor: str = "") -> list[CollectedJob]:
+    async def collect(self, since: datetime, cursor: str = "") -> CollectionBatch:
         if not self.config.slug:
             raise ValueError("SmartRecruiters source requires a company identifier")
         result = []
         offset = 0
-        for _ in range(20):
+        total = 0
+        requests = 0
+        complete = False
+        for _ in range(max(1, self.config.max_pages)):
             response = await self.client.get(
                 f"https://api.smartrecruiters.com/v1/companies/{self.config.slug}/postings",
                 params={"limit": 100, "offset": offset},
             )
+            requests += 1
             response.raise_for_status()
             payload = response.json()
+            total = int(payload.get("totalFound", 0))
             items = payload.get("content", [])
             for summary in items:
                 detail_response = await self.client.get(summary.get("ref") or f"https://api.smartrecruiters.com/v1/companies/{self.config.slug}/postings/{summary['id']}")
+                requests += 1
                 detail_response.raise_for_status()
                 item = detail_response.json()
                 location_value = item.get("location") or {}
@@ -650,30 +663,40 @@ class SmartRecruitersCollector(Collector):
                 )
                 result.append(job)
             offset += len(items)
-            if not items or offset >= payload.get("totalFound", 0):
+            if not items or offset >= total:
+                complete = True
                 break
-        return result
+        return CollectionBatch(
+            jobs=result, complete_snapshot=complete, provider_total=total, requests_made=requests,
+            truncated=not complete,
+        )
 
 
 class WorkdayCollector(Collector):
-    async def collect(self, since: datetime, cursor: str = "") -> list[CollectedJob]:
+    async def collect(self, since: datetime, cursor: str = "") -> CollectionBatch:
         if not all((self.config.host, self.config.tenant, self.config.site)):
             raise ValueError("Workday source requires host, tenant, and site")
         host = self.config.host.rstrip("/")
         base = f"{host}/wday/cxs/{self.config.tenant}/{self.config.site}"
         result = []
         offset = 0
-        for _ in range(20):
+        total = 0
+        requests = 0
+        complete = False
+        for _ in range(max(1, self.config.max_pages)):
             response = await self.client.post(
                 f"{base}/jobs",
                 json={"appliedFacets": {}, "limit": 20, "offset": offset, "searchText": ""},
             )
+            requests += 1
             response.raise_for_status()
             payload = response.json()
+            total = int(payload.get("total", 0))
             items = payload.get("jobPostings", [])
             for summary in items:
                 external_path = summary.get("externalPath", "")
                 detail_response = await self.client.get(f"{base}{external_path}")
+                requests += 1
                 detail_response.raise_for_status()
                 item = detail_response.json().get("jobPostingInfo", {})
                 url = item.get("externalUrl") or urljoin(f"{host}/", external_path.lstrip("/"))
@@ -693,9 +716,13 @@ class WorkdayCollector(Collector):
                 )
                 result.append(job)
             offset += len(items)
-            if not items or offset >= payload.get("total", 0):
+            if not items or offset >= total:
+                complete = True
                 break
-        return result
+        return CollectionBatch(
+            jobs=result, complete_snapshot=complete, provider_total=total, requests_made=requests,
+            truncated=not complete,
+        )
 
 
 class GoogleCareersCollector(Collector):
@@ -705,6 +732,7 @@ class GoogleCareersCollector(Collector):
         jobs: list[CollectedJob] = []
         seen_urls: set[str] = set()
         requests = 0
+        truncated = False
         for page_number in range(1, max(1, self.config.max_pages) + 1):
             search_url = str(httpx.URL(self.config.url).copy_set_param("page", str(page_number)))
             try:
@@ -717,6 +745,7 @@ class GoogleCareersCollector(Collector):
                 # already found on the pages before it - keep them and stop paginating.
                 if page_number == 1:
                     raise
+                truncated = True
                 break
             links = [item for item in google_result_links(response.text, str(response.url)) if item[0] not in seen_urls]
             if not links:
@@ -744,7 +773,9 @@ class GoogleCareersCollector(Collector):
                         metadata={"official_first_party": True, "careers_system": "google_careers"},
                     )
                 )
-        return CollectionBatch(jobs=jobs, requests_made=requests, attribution="Google Careers")
+        else:
+            truncated = True
+        return CollectionBatch(jobs=jobs, requests_made=requests, attribution="Google Careers", truncated=truncated)
 
 
 # Some teams (DeepMind, Ads, Pixel...) prepend an "about us" blurb that itself mentions "Google"
@@ -788,6 +819,8 @@ class AmazonJobsCollector(Collector):
         jobs: list[CollectedJob] = []
         requests = 0
         page_size = 100
+        truncated = False
+        provider_total = 0
         for page_number in range(max(1, self.config.max_pages)):
             try:
                 response = await self.client.get(
@@ -804,8 +837,10 @@ class AmazonJobsCollector(Collector):
                 # page failing must not discard the jobs already found on earlier pages.
                 if page_number == 0:
                     raise
+                truncated = True
                 break
             payload = response.json()
+            provider_total = int(payload.get("hits", 0))
             provider_items = payload.get("jobs", [])
             items = [item for item in provider_items if amazon_location_matches(item, self.config)]
             for item in items:
@@ -839,9 +874,14 @@ class AmazonJobsCollector(Collector):
                 )
                 if is_recent(job, since):
                     jobs.append(job)
-            if not provider_items or (page_number + 1) * page_size >= int(payload.get("hits", 0)):
+            if not provider_items or (page_number + 1) * page_size >= provider_total:
                 break
-        return CollectionBatch(jobs=jobs, requests_made=requests, attribution="Amazon Jobs")
+        else:
+            truncated = provider_total > max(1, self.config.max_pages) * page_size
+        return CollectionBatch(
+            jobs=jobs, provider_total=provider_total, requests_made=requests,
+            attribution="Amazon Jobs", truncated=truncated,
+        )
 
 
 def _month_date(value: Any) -> datetime | None:
@@ -896,7 +936,7 @@ class ArbeitnowCollector(Collector):
             if not next_url or (oldest and oldest < since):
                 break
             url = str(httpx.URL(next_url).copy_merge_params(filters))
-        return CollectionBatch(jobs=jobs, complete_snapshot=True, provider_total=provider_total, requests_made=requests)
+        return CollectionBatch(jobs=jobs, provider_total=provider_total, requests_made=requests)
 
 
 class JobicyCollector(Collector):
@@ -930,7 +970,7 @@ class JobicyCollector(Collector):
             )
             if is_recent(job, since):
                 jobs.append(job)
-        return CollectionBatch(jobs=jobs, complete_snapshot=True, provider_total=payload.get("jobCount"), requests_made=1)
+        return CollectionBatch(jobs=jobs, provider_total=payload.get("jobCount"), requests_made=1)
 
 
 class RemotiveCollector(Collector):
@@ -965,7 +1005,7 @@ class RemotiveCollector(Collector):
             if is_recent(job, since):
                 jobs.append(job)
         return CollectionBatch(
-            jobs=jobs, complete_snapshot=True, requests_made=1,
+            jobs=jobs, requests_made=1,
             attribution="Jobs provided by Remotive (https://remotive.com).",
         )
 
@@ -1077,9 +1117,12 @@ class GmailLinkedInCollector(Collector):
         except ImportError as error:
             raise RuntimeError("Install RoleBeacon with the gmail extra to enable Gmail alerts") from error
 
-        root = Path(__file__).resolve().parents[2]
-        credentials_path = Path(self.config.options.get("credentials_file") or os.getenv("GMAIL_CREDENTIALS_FILE") or root / "data" / "gmail-credentials.json")
-        token_path = Path(self.config.options.get("token_file") or os.getenv("GMAIL_TOKEN_FILE") or root / "data" / "gmail-token.json")
+        configured_data_dir = str(self.config.options.get("data_dir") or "").strip()
+        if not configured_data_dir:
+            raise RuntimeError("Gmail collector requires the configured application-data directory")
+        data_dir = Path(configured_data_dir).expanduser()
+        credentials_path = Path(self.config.options.get("credentials_file") or os.getenv("GMAIL_CREDENTIALS_FILE") or data_dir / "gmail-credentials.json")
+        token_path = Path(self.config.options.get("token_file") or os.getenv("GMAIL_TOKEN_FILE") or data_dir / "gmail-token.json")
         scopes = ["https://www.googleapis.com/auth/gmail.readonly"]
         credentials = Credentials.from_authorized_user_file(token_path, scopes) if token_path.exists() else None
         if credentials and credentials.expired and credentials.refresh_token:
@@ -1089,7 +1132,17 @@ class GmailLinkedInCollector(Collector):
                 raise RuntimeError(f"Gmail credentials file not found: {credentials_path}")
             flow = InstalledAppFlow.from_client_secrets_file(credentials_path, scopes)
             credentials = flow.run_local_server(port=0)
-            token_path.write_text(credentials.to_json(), encoding="utf-8")
+            token_path.parent.mkdir(parents=True, exist_ok=True)
+            descriptor, temporary_name = tempfile.mkstemp(prefix=".gmail-token.", dir=token_path.parent)
+            try:
+                os.fchmod(descriptor, stat.S_IRUSR | stat.S_IWUSR)
+                with os.fdopen(descriptor, "w", encoding="utf-8") as token_file:
+                    token_file.write(credentials.to_json())
+                    token_file.flush()
+                    os.fsync(token_file.fileno())
+                os.replace(temporary_name, token_path)
+            finally:
+                Path(temporary_name).unlink(missing_ok=True)
         service = build("gmail", "v1", credentials=credentials, cache_discovery=False)
         label = self.config.options.get("label") or os.getenv("GMAIL_LABEL", "Job Alerts")
         query = f'label:"{label}" after:{int(since.timestamp())}'

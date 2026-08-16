@@ -1,8 +1,17 @@
 from __future__ import annotations
 
+import pytest
+
 from rolebeacon.domain import EligibilityStatus
 from rolebeacon.profile import CandidateProfileV1, MobilityProfileV1, SearchPreferencesV1, generate_strategies
-from rolebeacon.scoring import evaluate_eligibility, extract_experience_requirements, location_requirement, rule_score
+from rolebeacon.scoring import (
+    clearance_requirements,
+    evaluate_eligibility,
+    extract_experience_requirements,
+    location_requirement,
+    rule_score,
+    scoring_behavior_version,
+)
 
 CANDIDATE = CandidateProfileV1.model_validate(
     {
@@ -119,7 +128,7 @@ def test_north_america_relocation_target_matches_a_us_state_and_city_location() 
         PREFERENCES.model_dump(mode="json"), mobility.model_dump(mode="json"), strategies,
     )
 
-    assert result.location_fit == "mobility-unknown:NORTH_AMERICA"
+    assert result.location_fit == "sponsorship-unknown:NORTH_AMERICA"
 
 
 def test_remote_job_scoped_to_a_non_home_country_is_flagged_remote_scoped() -> None:
@@ -174,6 +183,118 @@ def test_relocation_role_is_eligible() -> None:
 
     assert result.route == "relocate-de"
     assert result.status == EligibilityStatus.ELIGIBLE
+
+
+def test_relocation_support_never_substitutes_for_required_sponsorship() -> None:
+    result = evaluate(job(location="Berlin, Germany", remote_scope="", description="Relocation assistance is available."))
+
+    assert result.status == EligibilityStatus.UNKNOWN
+    assert result.sponsorship == "unknown"
+    assert result.relocation == "available"
+    assert result.location_fit == "sponsorship-unknown:DE"
+
+
+def test_company_blocklist_uses_identity_equality_not_substrings() -> None:
+    preferences = {**PREFERENCES.model_dump(mode="json"), "company_blocklist": ["Meta", "Go"]}
+
+    metabase = evaluate_eligibility(job(company="Metabase"), preferences, MOBILITY.model_dump(mode="json"), STRATEGIES)
+    google = evaluate_eligibility(job(company="Google"), preferences, MOBILITY.model_dump(mode="json"), STRATEGIES)
+    meta = evaluate_eligibility(job(company="Meta"), preferences, MOBILITY.model_dump(mode="json"), STRATEGIES)
+
+    assert metabase.status != EligibilityStatus.INELIGIBLE
+    assert google.status != EligibilityStatus.INELIGIBLE
+    assert meta.status == EligibilityStatus.INELIGIBLE
+
+
+def test_country_aliases_match_turkey_and_uk_without_short_code_substrings() -> None:
+    authorized = MobilityProfileV1.model_validate({
+        **MOBILITY.model_dump(mode="json"), "work_authorizations": ["TR", "GB"],
+        "relocation_targets": [{"country_code": "GB", "country_name": "United Kingdom"}],
+    })
+    strategies = [item.model_dump(mode="json") for item in generate_strategies(CANDIDATE, authorized, PREFERENCES)]
+
+    turkey = evaluate_eligibility(job(location="Istanbul, Turkey", remote_scope=""), PREFERENCES.model_dump(mode="json"), authorized.model_dump(mode="json"), strategies)
+    uk = evaluate_eligibility(job(location="Remote UK", remote_scope="UK"), PREFERENCES.model_dump(mode="json"), authorized.model_dump(mode="json"), strategies)
+
+    assert turkey.status == EligibilityStatus.ELIGIBLE
+    assert uk.status == EligibilityStatus.ELIGIBLE
+
+
+def test_clearance_negation_preference_unknown_and_explicit_conflict() -> None:
+    no_clearance = evaluate(job(description="No security clearance is required. Build Java services."))
+    preferred = evaluate(job(description="Security clearance is preferred but not required."))
+    required = evaluate(job(description="An active US Secret clearance is required."))
+    conflicting_mobility = {
+        **MOBILITY.model_dump(mode="json"),
+        "clearance_policy": {"status": "cannot_meet", "willing_to_undergo_vetting": False},
+    }
+    conflict = evaluate_eligibility(
+        job(description="An active US Secret clearance is required."), PREFERENCES.model_dump(mode="json"),
+        conflicting_mobility, STRATEGIES,
+    )
+
+    assert no_clearance.status == EligibilityStatus.ELIGIBLE
+    assert preferred.status == EligibilityStatus.ELIGIBLE
+    assert any("preferred, not required" in risk for risk in preferred.risks)
+    assert required.status == EligibilityStatus.UNKNOWN
+    assert "active US Secret clearance is required" in required.risks[0]
+    assert conflict.status == EligibilityStatus.INELIGIBLE
+
+
+def test_rules_only_vocabulary_includes_verified_detailed_profile_evidence() -> None:
+    candidate = {
+        **CANDIDATE.model_dump(mode="json"),
+        "experience": [{"company": "Example", "title": "Engineer", "highlights": ["Built Rust services"]}],
+        "projects": [{"name": "Queue", "technologies": ["NATS"]}],
+    }
+    result = rule_score(
+        job(description="Requires 5 years of Rust experience and NATS."), evaluate(job()),
+        {**PREFERENCES.model_dump(mode="json"), "preferred_skills": ["Rust", "NATS"]}, candidate, STRATEGIES,
+    )
+
+    assert result.dimensions["stack"] == 10
+    assert not any("years of Rust" in gap["requirement"] for gap in result.gaps)
+
+
+def test_clearance_classifier_distinguishes_requirement_kinds_and_preserves_evidence() -> None:
+    cases = {
+        "This role does not require security clearance.": "not_required",
+        "A TS/SCI clearance is preferred but not required.": "preferred",
+        "You must have the ability to obtain a security clearance.": "ability_to_obtain",
+        "An active top-secret clearance is required.": "active_required",
+        "We build tools used in clearance workflows.": "ambiguous",
+    }
+    for evidence, expected in cases.items():
+        result = clearance_requirements(evidence)
+        assert result[0]["kind"] == expected
+        assert result[0]["evidence"] == evidence
+    assert clearance_requirements("Sicherheitsüberprüfung erforderlich.") == []
+
+
+def test_matching_active_clearance_continues_to_other_deterministic_rules() -> None:
+    mobility = {
+        **MOBILITY.model_dump(mode="json"),
+        "clearance_policy": {
+            "status": "has_active_clearance", "willing_to_undergo_vetting": True,
+            "credentials": [{"jurisdiction": "US", "level": "Secret", "status": "active"}],
+        },
+    }
+    result = evaluate_eligibility(
+        job(location="Remote Worldwide", description="An active US Secret clearance is required."),
+        {**PREFERENCES.model_dump(mode="json"), "exclude_phrases": []}, mobility, STRATEGIES,
+    )
+
+    assert result.status == EligibilityStatus.ELIGIBLE
+    assert any("matching active clearance" in reason.casefold() for reason in result.reasons)
+
+
+def test_clearance_rules_are_repeatable_and_user_exclusions_keep_precedence() -> None:
+    preferences = {**PREFERENCES.model_dump(mode="json"), "exclude_phrases": ["TS/SCI"]}
+    value = job(description="An active TS/SCI clearance is required.")
+    results = [evaluate_eligibility(value, preferences, MOBILITY.model_dump(mode="json"), STRATEGIES) for _ in range(3)]
+
+    assert all(result.status == EligibilityStatus.INELIGIBLE for result in results)
+    assert len({tuple(result.risks) for result in results}) == 1
 
 
 def test_a_short_country_code_does_not_match_a_substring_of_an_unrelated_place_name() -> None:
@@ -375,3 +496,42 @@ def test_rule_score_does_not_flag_an_experience_requirement_the_candidate_alread
     result = score(job(description="Build distributed systems. Requires 4 years of Java experience."))
 
     assert not any("years of Java" in gap["requirement"] for gap in result.gaps)
+
+
+def test_custom_score_distribution_is_validated_and_deterministic() -> None:
+    custom = {
+        **PREFERENCES.model_dump(mode="json"),
+        "score_weights": {
+            "role_domain": 40,
+            "stack": 30,
+            "domain_experience": 0,
+            "seniority": 10,
+            "location_authorization": 15,
+            "salary_employment": 5,
+        },
+    }
+    validated = SearchPreferencesV1.model_validate(custom).model_dump(mode="json")
+    eligibility = evaluate_eligibility(job(), validated, MOBILITY.model_dump(mode="json"), STRATEGIES)
+
+    first = rule_score(job(), eligibility, validated, CANDIDATE.model_dump(mode="json"), STRATEGIES)
+    second = rule_score(job(), eligibility, validated, CANDIDATE.model_dump(mode="json"), STRATEGIES)
+
+    assert first == second
+    assert first.dimensions["domain_experience"] == 0
+    assert first.dimensions["role_domain"] <= 40
+    assert sum(first.dimensions.values()) == first.total
+
+
+def test_weight_change_has_one_stable_scoring_version_suffix() -> None:
+    default = PREFERENCES.model_dump(mode="json")
+    custom = {**default, "score_weights": {**default["score_weights"], "role_domain": 31, "stack": 19}}
+
+    assert scoring_behavior_version(default) == scoring_behavior_version(default)
+    assert scoring_behavior_version(default) != scoring_behavior_version(custom)
+
+
+def test_score_distribution_requires_all_dimensions() -> None:
+    invalid = {**PREFERENCES.model_dump(mode="json"), "score_weights": {"role_domain": 100}}
+
+    with pytest.raises(ValueError, match="exactly the supported"):
+        SearchPreferencesV1.model_validate(invalid)

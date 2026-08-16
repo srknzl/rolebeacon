@@ -89,6 +89,16 @@ Official references:
 | 5 | Jooble | Requested API key | Broad international coverage and keyword/location search | Aggregated provenance and duplicate quality need a benchmark | Optional and disabled by default |
 | 6 | SerpApi Google Jobs | Paid API key | Fills coverage gaps through structured Google Jobs results and geolocation | Commercial dependency, cost, duplicates, and upstream layout changes | Optional and disabled by default |
 
+Collector completeness is explicit. Only a non-truncated complete snapshot participates in
+absence-based closure; partial, date-bounded, failed, or page-limited responses never deactivate a
+posting. Source status shows when a configured page ceiling truncated coverage. A job remains active
+while any active source still reports it, and provenance is preserved during reconciliation.
+
+Gmail OAuth credentials are stored under the configured operating-system application-data directory
+unless the user explicitly supplies a token path. Token refresh uses an atomic replacement and
+owner-only file permissions. Authenticated LinkedIn pages are never fetched; only user-owned alert
+messages may supply LinkedIn job URLs and summaries.
+
 Official provider references:
 
 - [Arbeitnow Job Board API](https://www.arbeitnow.com/blog/job-board-api)
