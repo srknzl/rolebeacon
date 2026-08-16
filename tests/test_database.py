@@ -172,9 +172,17 @@ def test_v1_database_is_migrated_in_place(tmp_path) -> None:
     with database.connect() as migrated:
         job_columns = {row["name"] for row in migrated.execute("PRAGMA table_info(jobs)")}
         source_columns = {row["name"] for row in migrated.execute("PRAGMA table_info(job_sources)")}
+        source_state_columns = {row["name"] for row in migrated.execute("PRAGMA table_info(source_state)")}
         version = migrated.execute("SELECT version FROM schema_migrations WHERE version = 2").fetchone()
     assert {"primary_source_id", "merged_into_job_id", "normalized_title"} <= job_columns
     assert {"source_priority", "metadata_json", "content_hash"} <= source_columns
+    assert {
+        "last_complete_snapshot_count",
+        "pending_snapshot_count",
+        "pending_snapshot_confirmations",
+        "pending_snapshot_fingerprint",
+        "last_snapshot_warning",
+    } <= source_state_columns
     assert version["version"] == 2
 
 
@@ -601,6 +609,121 @@ def test_complete_snapshot_deactivates_only_when_no_active_source_remains(tmp_pa
     assert database.get_job(first_id)["active"] == 1
     database.reconcile_source_snapshot("source-b", set())
     assert database.get_job(first_id)["active"] == 0
+
+
+def test_dramatic_snapshot_drop_requires_a_second_consistent_complete_snapshot(tmp_path) -> None:
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    source_job_ids: set[str] = set()
+    for index in range(20):
+        value = sample_job()
+        value.source_job_id = f"job-{index}"
+        value.title = f"Backend Engineer {index}"
+        value.url = f"https://example.com/jobs/{index}"
+        database.upsert_job(value)
+        source_job_ids.add(value.source_job_id)
+
+    baseline = database.reconcile_source_snapshot_guarded("source-a", source_job_ids)
+    partial_ids = {"job-0", "job-1", "job-2"}
+    first_drop = database.reconcile_source_snapshot_guarded("source-a", partial_ids)
+
+    assert baseline.reconciled is True
+    assert first_drop.reconciled is False
+    assert first_drop.baseline_count == 20
+    assert first_drop.confirmation_count == 1
+    assert database.active_source_job_count("source-a") == 20
+    first_state = database.source_state("source-a")
+    assert first_state is not None
+    assert first_state["pending_snapshot_count"] == 3
+    assert "second consistent complete snapshot" in first_state["last_snapshot_warning"]
+
+    different_partial_ids = {"job-3", "job-4", "job-5"}
+    different_subset = database.reconcile_source_snapshot_guarded("source-a", different_partial_ids)
+
+    assert different_subset.reconciled is False
+    assert database.active_source_job_count("source-a") == 20
+
+    confirmed = database.reconcile_source_snapshot_guarded("source-a", different_partial_ids)
+
+    assert confirmed.reconciled is True
+    assert confirmed.deactivated == 17
+    assert confirmed.confirmation_count == 2
+    assert database.active_source_job_count("source-a") == 3
+    confirmed_state = database.source_state("source-a")
+    assert confirmed_state is not None
+    assert confirmed_state["last_complete_snapshot_count"] == 3
+    assert confirmed_state["pending_snapshot_count"] is None
+    assert confirmed_state["last_snapshot_warning"] == ""
+
+
+def test_provider_total_mismatch_never_confirms_an_incomplete_snapshot(tmp_path) -> None:
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    source_job_ids: set[str] = set()
+    for index in range(20):
+        value = sample_job()
+        value.source_job_id = f"job-{index}"
+        value.title = f"Backend Engineer {index}"
+        value.url = f"https://example.com/jobs/{index}"
+        database.upsert_job(value)
+        source_job_ids.add(value.source_job_id)
+    database.reconcile_source_snapshot_guarded("source-a", source_job_ids, provider_total=20)
+
+    for _ in range(2):
+        result = database.reconcile_source_snapshot_guarded(
+            "source-a", {"job-0", "job-1", "job-2"}, provider_total=20
+        )
+        assert result.reconciled is False
+        assert "reported 20 jobs but returned 3" in result.warning
+
+    assert database.active_source_job_count("source-a") == 20
+    state = database.source_state("source-a")
+    assert state is not None
+    assert state["pending_snapshot_count"] is None
+
+
+def test_provider_total_accepts_complete_raw_records_that_deduplicate_to_fewer_ids(tmp_path) -> None:
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    source_job_ids: set[str] = set()
+    for index in range(30):
+        value = sample_job()
+        value.source_job_id = f"job-{index}"
+        value.title = f"Backend Engineer {index}"
+        value.url = f"https://example.com/jobs/{index}"
+        database.upsert_job(value)
+        source_job_ids.add(value.source_job_id)
+
+    result = database.reconcile_source_snapshot_guarded(
+        "source-a",
+        source_job_ids,
+        provider_total=33,
+        returned_count=33,
+    )
+
+    assert result.reconciled is True
+    assert result.observed_count == 30
+    assert result.warning == ""
+    state = database.source_state("source-a")
+    assert state is not None
+    assert state["last_complete_snapshot_count"] == 30
+
+
+def test_successful_non_guarded_finish_clears_an_old_snapshot_warning(tmp_path) -> None:
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    value = sample_job()
+    database.upsert_job(value)
+    database.reconcile_source_snapshot_guarded("source-a", {value.source_job_id})
+    quarantined = database.reconcile_source_snapshot_guarded("source-a", set())
+    assert quarantined.warning
+
+    database.finish_source("source-a", seen=1, changed=0, truncated=True)
+
+    state = database.source_state("source-a")
+    assert state is not None
+    assert state["last_snapshot_warning"] == ""
+    assert state["last_truncated"] == 1
 
 
 def test_literal_fts_search_handles_unmatched_quotes(tmp_path) -> None:

@@ -47,6 +47,16 @@ class JobFilters:
     hide_mismatched_titles: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class SnapshotReconciliationResult:
+    reconciled: bool
+    deactivated: int
+    observed_count: int
+    baseline_count: int
+    confirmation_count: int
+    warning: str = ""
+
+
 # Artifact preparation stages, in the only order they may advance.
 ARTIFACT_STAGES = ("saved", "preparing", "ready")
 # Kanban columns on the pipeline board, in display order. The board is driven directly by
@@ -183,7 +193,12 @@ CREATE TABLE IF NOT EXISTS source_state (
     jobs_changed INTEGER NOT NULL DEFAULT 0,
     next_eligible_sync_at TEXT,
     last_skipped_reason TEXT NOT NULL DEFAULT '',
-    last_truncated INTEGER NOT NULL DEFAULT 0
+    last_truncated INTEGER NOT NULL DEFAULT 0,
+    last_complete_snapshot_count INTEGER,
+    pending_snapshot_count INTEGER,
+    pending_snapshot_confirmations INTEGER NOT NULL DEFAULT 0,
+    pending_snapshot_fingerprint TEXT NOT NULL DEFAULT '',
+    last_snapshot_warning TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS source_sync_runs (
@@ -421,6 +436,15 @@ class Database:
             self._ensure_column(connection, "source_state", "next_eligible_sync_at", "TEXT")
             self._ensure_column(connection, "source_state", "last_skipped_reason", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(connection, "source_state", "last_truncated", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(connection, "source_state", "last_complete_snapshot_count", "INTEGER")
+            self._ensure_column(connection, "source_state", "pending_snapshot_count", "INTEGER")
+            self._ensure_column(
+                connection, "source_state", "pending_snapshot_confirmations", "INTEGER NOT NULL DEFAULT 0"
+            )
+            self._ensure_column(
+                connection, "source_state", "pending_snapshot_fingerprint", "TEXT NOT NULL DEFAULT ''"
+            )
+            self._ensure_column(connection, "source_state", "last_snapshot_warning", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(connection, "source_sync_runs", "truncated", "INTEGER NOT NULL DEFAULT 0")
             self._ensure_column(connection, "company_evidence", "etag", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(connection, "company_evidence", "last_modified", "TEXT NOT NULL DEFAULT ''")
@@ -593,23 +617,143 @@ class Database:
         """Atomically deactivate associations absent from a proven complete provider snapshot."""
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            rows = connection.execute(
-                "SELECT source_job_id, job_id FROM job_sources WHERE source_id = ? AND active = 1",
+            return self._reconcile_source_snapshot(connection, source_id, seen_source_job_ids)
+
+    def reconcile_source_snapshot_guarded(
+        self,
+        source_id: str,
+        seen_source_job_ids: set[str],
+        *,
+        provider_total: int | None = None,
+        returned_count: int | None = None,
+        drop_ratio: float = 0.5,
+        minimum_baseline: int = 20,
+    ) -> SnapshotReconciliationResult:
+        """Reconcile a complete snapshot unless a large count drop still needs confirmation.
+
+        The accepted baseline, pending observation, warning, and job deactivations share one
+        transaction. A crash therefore cannot accept the count without applying its closures, or
+        apply closures without recording the accepted count.
+        """
+        observed_count = len(seen_source_job_ids)
+        received_count = observed_count if returned_count is None else returned_count
+        if (
+            isinstance(received_count, bool)
+            or not isinstance(received_count, int)
+            or received_count < observed_count
+        ):
+            raise ValueError(
+                "returned_count must be an integer at least as large as the unique source-job ID count"
+            )
+        snapshot_fingerprint = hashlib.sha256(
+            "\n".join(sorted(seen_source_job_ids)).encode("utf-8")
+        ).hexdigest()
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "INSERT INTO source_state(source_id) VALUES (?) ON CONFLICT(source_id) DO NOTHING",
                 (source_id,),
-            ).fetchall()
-            missing = [row for row in rows if str(row["source_job_id"]) not in seen_source_job_ids]
-            for row in missing:
-                connection.execute(
-                    "UPDATE job_sources SET active = 0 WHERE source_id = ? AND source_job_id = ?",
-                    (source_id, row["source_job_id"]),
+            )
+            state = connection.execute(
+                "SELECT * FROM source_state WHERE source_id = ?", (source_id,)
+            ).fetchone()
+            active = connection.execute(
+                "SELECT COUNT(*) AS count FROM job_sources WHERE source_id = ? AND active = 1",
+                (source_id,),
+            ).fetchone()
+            active_count = int(active["count"]) if active else 0
+            stored_baseline = state["last_complete_snapshot_count"] if state else None
+            baseline_count = int(stored_baseline) if stored_baseline is not None else active_count
+
+            if provider_total is not None and provider_total > received_count:
+                warning = (
+                    f"Provider reported {provider_total} jobs but returned {received_count}; "
+                    "missing jobs were preserved because the snapshot is incomplete."
                 )
-            affected = {int(row["job_id"]) for row in missing}
-            for job_id in affected:
-                active = connection.execute(
-                    "SELECT 1 FROM job_sources WHERE job_id = ? AND active = 1 LIMIT 1", (job_id,)
-                ).fetchone()
-                connection.execute("UPDATE jobs SET active = ? WHERE id = ?", (1 if active else 0, job_id))
-            return len(missing)
+                connection.execute(
+                    """
+                    UPDATE source_state SET pending_snapshot_count = NULL,
+                        pending_snapshot_confirmations = 0, pending_snapshot_fingerprint = '',
+                        last_snapshot_warning = ?
+                    WHERE source_id = ?
+                    """,
+                    (warning, source_id),
+                )
+                return SnapshotReconciliationResult(
+                    False, 0, observed_count, baseline_count, 0, warning
+                )
+
+            dramatic_drop = bool(
+                active_count > 0
+                and (
+                    observed_count == 0
+                    or (
+                        baseline_count >= minimum_baseline
+                        and observed_count < baseline_count * drop_ratio
+                    )
+                )
+            )
+            pending = state["pending_snapshot_count"] if state else None
+            confirmations = int(state["pending_snapshot_confirmations"] or 0) if state else 0
+            confirmed = bool(
+                dramatic_drop
+                and pending is not None
+                and confirmations >= 1
+                and state["pending_snapshot_fingerprint"] == snapshot_fingerprint
+            )
+            if dramatic_drop and not confirmed:
+                warning = (
+                    f"Snapshot count fell from {baseline_count} to {observed_count}; missing jobs "
+                    "are preserved until a second consistent complete snapshot confirms the drop."
+                )
+                connection.execute(
+                    """
+                    UPDATE source_state SET pending_snapshot_count = ?,
+                        pending_snapshot_confirmations = 1, pending_snapshot_fingerprint = ?,
+                        last_snapshot_warning = ?
+                    WHERE source_id = ?
+                    """,
+                    (observed_count, snapshot_fingerprint, warning, source_id),
+                )
+                return SnapshotReconciliationResult(
+                    False, 0, observed_count, baseline_count, 1, warning
+                )
+
+            deactivated = self._reconcile_source_snapshot(connection, source_id, seen_source_job_ids)
+            connection.execute(
+                """
+                UPDATE source_state SET last_complete_snapshot_count = ?, pending_snapshot_count = NULL,
+                    pending_snapshot_confirmations = 0, pending_snapshot_fingerprint = '',
+                    last_snapshot_warning = ''
+                WHERE source_id = ?
+                """,
+                (observed_count, source_id),
+            )
+            return SnapshotReconciliationResult(
+                True, deactivated, observed_count, baseline_count, 2 if confirmed else 0
+            )
+
+    @staticmethod
+    def _reconcile_source_snapshot(
+        connection: sqlite3.Connection, source_id: str, seen_source_job_ids: set[str]
+    ) -> int:
+        rows = connection.execute(
+            "SELECT source_job_id, job_id FROM job_sources WHERE source_id = ? AND active = 1",
+            (source_id,),
+        ).fetchall()
+        missing = [row for row in rows if str(row["source_job_id"]) not in seen_source_job_ids]
+        for row in missing:
+            connection.execute(
+                "UPDATE job_sources SET active = 0 WHERE source_id = ? AND source_job_id = ?",
+                (source_id, row["source_job_id"]),
+            )
+        affected = {int(row["job_id"]) for row in missing}
+        for job_id in affected:
+            active = connection.execute(
+                "SELECT 1 FROM job_sources WHERE job_id = ? AND active = 1 LIMIT 1", (job_id,)
+            ).fetchone()
+            connection.execute("UPDATE jobs SET active = ? WHERE id = ?", (1 if active else 0, job_id))
+        return len(missing)
 
     def active_source_job_count(self, source_id: str) -> int:
         with self.connect() as connection:
@@ -1105,21 +1249,30 @@ class Database:
                 "SELECT * FROM api_usage ORDER BY period DESC, provider"
             ).fetchall()]
 
-    def finish_source(self, source_id: str, seen: int, changed: int, cursor: str = "", truncated: bool = False) -> None:
+    def finish_source(
+        self,
+        source_id: str,
+        seen: int,
+        changed: int,
+        cursor: str = "",
+        truncated: bool = False,
+        snapshot_warning: str = "",
+    ) -> None:
         with self.connect() as connection:
             connection.execute(
                 """
                 INSERT INTO source_state (
                     source_id, status, last_started_at, last_successful_sync_at, cursor, jobs_seen, jobs_changed,
-                    last_truncated
-                ) VALUES (?, 'idle', ?, ?, ?, ?, ?, ?)
+                    last_truncated, last_snapshot_warning
+                ) VALUES (?, 'idle', ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(source_id) DO UPDATE SET
                     status = 'idle', last_successful_sync_at = excluded.last_successful_sync_at,
                     last_error = '', cursor = excluded.cursor, jobs_seen = excluded.jobs_seen,
                     jobs_changed = excluded.jobs_changed, next_eligible_sync_at = NULL,
-                    last_skipped_reason = '', last_truncated = excluded.last_truncated
+                    last_skipped_reason = '', last_truncated = excluded.last_truncated,
+                    last_snapshot_warning = excluded.last_snapshot_warning
                 """,
-                (source_id, _iso(), _iso(), cursor, seen, changed, int(truncated)),
+                (source_id, _iso(), _iso(), cursor, seen, changed, int(truncated), snapshot_warning[:1000]),
             )
 
     def fail_source(self, source_id: str, error: str, retry_seconds: int = 900) -> None:

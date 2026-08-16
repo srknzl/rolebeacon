@@ -17,6 +17,7 @@ from rolebeacon.sync import (
     deduplicate_source_jobs,
     engineering_job,
     personalize_source,
+    snapshot_guard_thresholds,
 )
 
 
@@ -52,6 +53,16 @@ def test_friendly_error_prefix_covers_the_common_httpx_failures() -> None:
     assert _friendly_error_prefix(ValueError("unrelated")) == ""
 
 
+def test_snapshot_guard_options_are_runtime_validated() -> None:
+    assert snapshot_guard_thresholds({}) == (0.5, 20)
+    assert snapshot_guard_thresholds(
+        {"snapshot_drop_ratio": 0.25, "snapshot_drop_minimum_baseline": 100}
+    ) == (0.25, 100)
+    assert snapshot_guard_thresholds(
+        {"snapshot_drop_ratio": "invalid", "snapshot_drop_minimum_baseline": -1}
+    ) == (0.5, 20)
+
+
 def test_collector_duplicates_are_collapsed_before_upsert() -> None:
     first = CollectedJob(
         source="feed",
@@ -76,6 +87,66 @@ def test_collector_duplicates_are_collapsed_before_upsert() -> None:
 
     assert len(result) == 1
     assert result[0].description == "Updated representation"
+
+
+async def test_complete_provider_total_uses_raw_count_before_source_id_deduplication(
+    tmp_path, monkeypatch
+) -> None:
+    payload = {
+        "candidate": {
+            "schema_version": "1.0",
+            "name": "Candidate",
+            "location": {"country_code": "TR", "country_name": "Türkiye"},
+            "skills": {},
+        },
+        "mobility": {
+            "schema_version": "1.0",
+            "current_country_code": "TR",
+            "work_authorizations": ["TR"],
+        },
+        "preferences": {"schema_version": "1.0", "target_roles": ["Backend Engineer"]},
+        "enabled_source_ids": ["arbeitnow"],
+        "llm": {"mode": "rules"},
+        "activate": True,
+    }
+    settings = SetupService(Settings.load(tmp_path)).complete(payload)
+    database = Database(settings.database_path)
+    database.initialize()
+    first = CollectedJob(
+        source="arbeitnow",
+        source_job_id="duplicate",
+        title="Backend Engineer",
+        company="Example",
+        location="Remote",
+        description="First representation",
+        url="https://example.test/jobs/duplicate",
+    )
+    updated = CollectedJob(
+        source="arbeitnow",
+        source_job_id="duplicate",
+        title="Backend Engineer",
+        company="Example",
+        location="Remote",
+        description="Updated representation",
+        url="https://example.test/jobs/duplicate",
+    )
+
+    class Collector:
+        async def collect(self, _since, _cursor=""):
+            return CollectionBatch(
+                jobs=[first, updated],
+                complete_snapshot=True,
+                provider_total=2,
+            )
+
+    monkeypatch.setattr("rolebeacon.sync.create_collector", lambda *_args: Collector())
+    await SyncService(settings, database, LlmClient(settings)).run(force=True)
+
+    state = database.source_state("arbeitnow")
+    assert state is not None
+    assert state["last_complete_snapshot_count"] == 1
+    assert state["last_truncated"] == 0
+    assert state["last_snapshot_warning"] == ""
 
 
 def test_ingestion_filter_uses_only_candidate_authored_terms_and_exact_role_phrases() -> None:
@@ -270,6 +341,7 @@ async def test_empty_complete_snapshot_preserves_previously_active_posting(tmp_p
 
     assert database.get_job(job_id)["active"] == 1
     assert database.source_state("arbeitnow")["last_truncated"] == 1
+    assert "second consistent complete snapshot" in database.source_state("arbeitnow")["last_snapshot_warning"]
 
 
 async def test_process_lock_prevents_two_refresh_processes_from_racing(tmp_path) -> None:

@@ -15,6 +15,7 @@ OpenAI-compatible model is an optional quality layer for evidence-rich scoring a
 
 - Incremental catch-up after downtime, with a 30-day first scan and 72-hour overlap thereafter.
 - Public ATS and remote-job adapters with per-source health, retry, attribution, and deduplication.
+- Guarded complete-snapshot reconciliation that preserves jobs when a provider returns an anomalous drop.
 - Versioned candidate, mobility, and search-preference JSON schemas.
 - Generated search strategies instead of hardcoded countries or companies.
 - Eligibility gates before fit scoring: authorization, sponsorship, relocation, remote scope,
@@ -28,16 +29,26 @@ OpenAI-compatible model is an optional quality layer for evidence-rich scoring a
 
 ## Screenshots
 
-All screenshots use synthetic candidate, company, and job data.
+All screenshots use synthetic candidate, company, source, and job data in an isolated local database.
+No external source was contacted to produce them.
 
 <p align="center">
   <img src="docs/screenshots/dashboard.png" alt="RoleBeacon dashboard with recommended opportunities" width="49%">
-  <img src="docs/screenshots/jobs.png" alt="RoleBeacon job discovery and filters" width="49%">
+  <img src="docs/screenshots/jobs.png" alt="RoleBeacon job discovery showing visible and hidden result counts and a removable default filter" width="49%">
 </p>
 <p align="center">
   <img src="docs/screenshots/job-detail.png" alt="RoleBeacon evidence-based job detail and application controls" width="49%">
-  <img src="docs/screenshots/setup-import.png" alt="RoleBeacon first-run setup wizard" width="49%">
+  <img src="docs/screenshots/score-factors.png" alt="RoleBeacon expanded accessible score-factor explanation" width="49%">
 </p>
+<p align="center">
+  <img src="docs/screenshots/company-detail.png" alt="RoleBeacon provenance-backed company assessment and fact coverage" width="49%">
+  <img src="docs/screenshots/job-tracking.png" alt="RoleBeacon human-owned application tracking board" width="49%">
+</p>
+<p align="center">
+  <img src="docs/screenshots/sources.png" alt="RoleBeacon curated source packs and explicit enablement controls" width="49%">
+  <img src="docs/screenshots/source-health.png" alt="RoleBeacon per-source metrics and anomalous snapshot preservation warning" width="49%">
+</p>
+<p align="center"><img src="docs/screenshots/setup-import.png" alt="RoleBeacon first-run setup with separate job-search and CV-and-applications sections" width="75%"></p>
 
 ## Requirements
 
@@ -79,8 +90,9 @@ uv run rolebeacon setup --from-json /path/to/setup.json --activate
 ### Rules only — recommended starting point
 
 Rules-only mode is the default and requires no model, API key, or additional service. It provides
-deterministic eligibility and transparent dimension scores. If an LLM later becomes unavailable,
-collection still completes and affected jobs remain queued for enhanced scoring.
+deterministic eligibility and transparent dimension scores. If an enabled model becomes unavailable,
+refresh reports the failed preflight without contacting job sources; switch explicitly to Rules only
+or restore the configured model before refreshing again.
 
 ### Guided Ollama
 
@@ -136,7 +148,7 @@ uv run rolebeacon model test --model qwen3:8b
 ### Custom OpenAI-compatible endpoint
 
 Choose **Ollama** for local or LAN Ollama servers so RoleBeacon can use Ollama's native structured
-output and `think: false` controls. Choose **Custom** for LM Studio, `llama.cpp`'s `llama-server`,
+output and measured, model-specific reasoning controls. Choose **Custom** for LM Studio, `llama.cpp`'s `llama-server`,
 or another OpenAI-compatible service, then provide its base URL, model, and optional API key. The
 browser never receives the stored API key.
 
@@ -160,7 +172,7 @@ GET /api/schemas/candidate-profile
 The conversion prompt instructs any chosen model to use only explicit CV facts. RoleBeacon
 validates the result and rejects timeline contradictions before generating application artifacts.
 
-The three stable setup schemas are:
+The four stable setup schemas are:
 
 - `CandidateProfileV1`
 - `MobilityProfileV1`
@@ -179,6 +191,10 @@ Setup generates strategies from the user's actual configuration:
 - relocation targets that may require sponsorship;
 - remote work from the candidate's current country;
 - an explicit fallback strategy.
+
+The Jobs page hides titles from a clearly different role family by default, but this active default is
+never silent: the page shows the visible-versus-total count, the number hidden, and a removable filter
+chip that reveals those postings without changing the saved profile.
 
 The deterministic score totals 100 points:
 
@@ -227,8 +243,9 @@ deterministic rules score; a genuine endpoint failure still stops LLM scoring an
 The tradeoffs are model memory, latency, and an extra inference call when repair is required. For large
 source packs, add the sources disabled, enable only the useful boards, and run the first collection in
 rules-only mode before turning on LLM scoring. Use Ollama mode for local or LAN Ollama because it supports
-native JSON Schema and a per-request context length. RoleBeacon leaves model-specific reasoning at
-Ollama's default; forcing Qwen3 thinking off produced materially worse scores in the measured sample.
+native JSON Schema and a per-request context length. RoleBeacon leaves reasoning at each model's default
+except for a measured `qwen3.6`-specific override; forcing it off for `qwen3:14b` produced materially worse
+scores. The [local model guide](docs/local-model-guide.md) records the model-by-model evidence.
 
 ## Sources
 
@@ -260,6 +277,13 @@ over official public board URLs, not bundled job data. **Add pack** stores board
 idempotent and preserves sources the user already enabled. The complete catalog can also be searched by
 company or connector and each board can be added separately. Catalog entries include a verification date,
 but upstream ATS ownership can still change, so failures remain isolated per source.
+
+Complete provider snapshots are reconciled defensively. A sharp fall from the last accepted baseline is
+preserved as an incomplete run and shown on the Sources page; RoleBeacon closes missing jobs only after the
+same complete set of source job IDs is observed again. A response whose declared provider total exceeds the
+raw returned records is never accepted as complete. Baselines and confirmation fingerprints use unique
+source job IDs. See [docs/data-sources.md](docs/data-sources.md) for the
+default thresholds and per-source overrides.
 
 Job descriptions are normalized without an LLM. The ingestion layer repairs common encoding damage,
 preserves paragraphs and source lists, removes non-content script/style markup, and the detail page
@@ -336,7 +360,7 @@ Gmail tokens, browser profiles, or LLM API keys. Reauthorize Gmail and browser s
 
 ## HTTP API
 
-Core endpoints:
+Core endpoints are listed below; the running app exposes the complete interactive contract at `/docs`.
 
 - `GET /api/setup/status`
 - `GET /api/schemas/candidate-profile`
@@ -349,6 +373,8 @@ Core endpoints:
 - `POST /api/sync`
 - `GET /api/sync/status`
 - `GET /api/model/status`
+- `GET /api/source-packs`
+- `POST /api/source-packs/{id}/install`
 - `POST /api/sources/discover`
 - `POST /api/sources`
 - `POST /api/sources/{id}/enabled`
@@ -357,7 +383,13 @@ Core endpoints:
 - `POST /api/jobs/{id}/resume`
 - `POST /api/jobs/{id}/cover-letter`
 - `POST /api/jobs/{id}/prepare-application`
+- `POST /api/jobs/{id}/research-company`
+- `GET /api/companies`
+- `GET /api/companies/{id}`
+- `POST /api/companies/{id}/research`
 - `GET /api/applications`
+- `POST /api/imports/preview`
+- `POST /api/imports`
 
 ## Development
 
@@ -371,19 +403,22 @@ uv run python -m build
 
 `AGENTS.md` and `CLAUDE.md` are intentionally byte-for-byte identical and must be updated together.
 
-## Phase 2 roadmap
+## Remaining roadmap
 
-- A complete web and CLI setup wizard that collects critical matching and mobility facts,
-  includes explicit source selection, and requires confirmation before activation. See the
-  [product backlog](docs/product-backlog.md) for acceptance criteria.
-- Gmail OAuth setup and LinkedIn Job Alert ingestion in the web wizard.
-- Managed, checksum-verified `llama.cpp` runtime as an Ollama-free optional path.
-- User-editable ATS and company registries.
-- Deeper provenance-backed company intelligence, hiring signals, and evidence freshness.
-- Evidence-based opportunity scoring that combines job fit and company fit without hiding either.
-- Selective tailored cover letters with claim-level evidence review.
-- Greenhouse, Lever, and Ashby application preparation followed by Workday, Google, and Microsoft.
-- Calibration after at least 50 explicit user decisions, measured with precision at 10 and
+The web setup flow and schema-driven headless import are complete. A separate interactive terminal
+questionnaire remains deferred until it can share the same accessible review semantics and receive
+terminal UX coverage; see [docs/product-backlog.md](docs/product-backlog.md). Other remaining work is:
+
+- compose sync plus ranked job output into a single headless command, as scoped in
+  [docs/cli-headless-mode.md](docs/cli-headless-mode.md);
+- add Gmail OAuth and LinkedIn Job Alert onboarding to the web wizard (the read-only collector exists);
+- provide a managed, checksum-verified `llama.cpp` runtime as an Ollama-free optional path;
+- make ATS and company registries user-editable without weakening runtime validation;
+- add dedicated first-party connectors for unsupported company-specific sites such as Microsoft,
+  Meta, Apple, and Netflix;
+- extend human-reviewed browser preparation beyond Greenhouse, Lever, and Ashby while preserving the
+  prohibition on final submission; and
+- calibrate ranking after at least 50 explicit user decisions, measured with precision at 10 and the
   eligibility false-positive rate.
 
 ## Contributing and security

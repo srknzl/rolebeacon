@@ -4,6 +4,7 @@ import hashlib
 import json
 import secrets
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -163,11 +164,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             jobs = database.list_jobs(filters, sort=sort, limit=page_size, offset=(page - 1) * page_size)
             total = database.count_jobs(filters)
+            all_matches_total = database.count_jobs(replace(filters, hide_mismatched_titles=False))
         except Exception as error:
-            jobs, total = [], 0
+            jobs, total, all_matches_total = [], 0, 0
             query_error = str(error)
         else:
             query_error = ""
+        hidden_title_count = max(0, all_matches_total - total)
         source_names = {item.id: item.name for item in sources}
         for job in jobs:
             job["source_name"] = source_names.get(job.get("primary_source_id") or "", "")
@@ -181,10 +184,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 selected=values,
                 sort=sort,
                 total=total,
+                all_matches_total=all_matches_total,
+                hidden_title_count=hidden_title_count,
                 page=page,
                 page_size=page_size,
                 page_count=max(1, -(-total // page_size)),
-                active_chips=_active_filter_chips(request.query_params, sources=sources),
+                active_chips=_active_filter_chips(
+                    request.query_params, sources=sources, hidden_title_count=hidden_title_count
+                ),
                 sort_options=JOB_SORT_LABELS,
                 technology_options=preferences.get("preferred_skills", []),
                 sources=_source_filter_options(sources),
@@ -762,7 +769,6 @@ FILTER_CHIP_LABELS: dict[str, str] = {
     "salary_floor": "Salary at least",
     "has_salary": "Has stated salary",
     "hide_unmet_experience": "Hiding unmet experience requirements",
-    "show_mismatched_titles": "Showing mismatched titles",
 }
 
 # These two kinds generate one source row per relocation-target country - dozens of otherwise
@@ -848,11 +854,24 @@ def _job_filters_from_query(
     )
 
 
-def _active_filter_chips(params: Any, sources: list[SourceConfig] | None = None) -> list[dict[str, str]]:
+def _active_filter_chips(
+    params: Any,
+    sources: list[SourceConfig] | None = None,
+    hidden_title_count: int = 0,
+) -> list[dict[str, Any]]:
     """One removable chip per active filter, so an empty result set is always explainable."""
     values = dict(params)
     source_labels = {item["value"]: item["label"] for item in _source_filter_options(sources or [])}
-    chips = []
+    chips: list[dict[str, Any]] = []
+    if hidden_title_count > 0 and values.get("show_mismatched_titles", "") not in {"1", "true", "on"}:
+        chips.append(
+            {
+                "key": "show_mismatched_titles",
+                "label": "Hiding different-role titles",
+                "value": f"{hidden_title_count} job{'' if hidden_title_count == 1 else 's'}",
+                "inverse": True,
+            }
+        )
     for key, label in FILTER_CHIP_LABELS.items():
         if key == "tech":
             selected = [item for item in params.getlist("tech") if item.strip()]

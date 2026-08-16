@@ -28,6 +28,26 @@ from .scoring import (
 # caps just keep any one provider from being hammered hard enough to get rate-limited/blocked.
 SOURCE_CONCURRENCY = 6
 PER_KIND_CONCURRENCY = 2
+DEFAULT_SNAPSHOT_DROP_RATIO = 0.5
+DEFAULT_SNAPSHOT_MINIMUM_BASELINE = 20
+
+
+def snapshot_guard_thresholds(options: Any) -> tuple[float, int]:
+    """Validate advanced per-source snapshot guard options before they influence closures."""
+    values = options if isinstance(options, dict) else {}
+    try:
+        ratio = float(values.get("snapshot_drop_ratio", DEFAULT_SNAPSHOT_DROP_RATIO))
+    except (TypeError, ValueError):
+        ratio = DEFAULT_SNAPSHOT_DROP_RATIO
+    if not 0 < ratio < 1:
+        ratio = DEFAULT_SNAPSHOT_DROP_RATIO
+    try:
+        minimum = int(values.get("snapshot_drop_minimum_baseline", DEFAULT_SNAPSHOT_MINIMUM_BASELINE))
+    except (TypeError, ValueError):
+        minimum = DEFAULT_SNAPSHOT_MINIMUM_BASELINE
+    if not 2 <= minimum <= 1_000_000:
+        minimum = DEFAULT_SNAPSHOT_MINIMUM_BASELINE
+    return ratio, minimum
 
 
 def _friendly_error_prefix(error: Exception) -> str:
@@ -279,6 +299,12 @@ class SyncService:
             personalized.options = {**personalized.options, "data_dir": str(self.settings.data_dir)}
             collector = create_collector(personalized, client)
             batch = as_batch(await collector.collect(since, state.get("cursor", "")))
+            if batch.provider_total is not None and (
+                isinstance(batch.provider_total, bool)
+                or not isinstance(batch.provider_total, int)
+                or batch.provider_total < 0
+            ):
+                raise ValueError("Collector provider_total must be a non-negative integer or null")
             raw_count = len(batch.jobs)
             jobs = deduplicate_source_jobs(batch.jobs)
             duplicate_count = raw_count - len(jobs)
@@ -301,20 +327,30 @@ class SyncService:
                 if did_change:
                     changed_ids.add(job_id)
                     changed += 1
-            active_before_reconciliation = self.database.active_source_job_count(source.id)
-            implausible_empty_snapshot = bool(
-                batch.complete_snapshot and not batch.truncated and not jobs and active_before_reconciliation
-            )
-            if implausible_empty_snapshot:
-                # A successful-but-empty provider response is indistinguishable from a schema
-                # change or transient board failure. Preserve the last known active snapshot and
-                # surface incomplete coverage instead of closing every posting in one run.
-                batch.truncated = True
-            elif batch.complete_snapshot and not batch.truncated:
-                self.database.reconcile_source_snapshot(
-                    source.id, {job.source_job_id for job in jobs}
+            if batch.complete_snapshot and not batch.truncated:
+                drop_ratio, minimum_baseline = snapshot_guard_thresholds(personalized.options)
+                reconciliation = self.database.reconcile_source_snapshot_guarded(
+                    source.id,
+                    {job.source_job_id for job in jobs},
+                    provider_total=batch.provider_total,
+                    returned_count=raw_count,
+                    drop_ratio=drop_ratio,
+                    minimum_baseline=minimum_baseline,
                 )
-            self.database.finish_source(source.id, len(jobs), changed, batch.cursor, batch.truncated)
+                if not reconciliation.reconciled:
+                    batch.truncated = True
+            else:
+                reconciliation = None
+            self.database.finish_source(
+                source.id,
+                len(jobs),
+                changed,
+                batch.cursor,
+                batch.truncated,
+                snapshot_warning=(
+                    reconciliation.warning if reconciliation and not reconciliation.reconciled else ""
+                ),
+            )
             self.database.finish_sync_run(
                 run_id, status="success", started_at=run_started, jobs_seen=len(jobs),
                 jobs_new=created, jobs_changed=changed, jobs_filtered=filtered,
