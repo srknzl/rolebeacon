@@ -224,7 +224,9 @@ class SyncService:
             else:
                 import fcntl
 
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                getattr(fcntl, "flock")(
+                    handle.fileno(), getattr(fcntl, "LOCK_EX") | getattr(fcntl, "LOCK_NB")
+                )
             handle.seek(0)
             handle.truncate()
             handle.write(f"pid={os.getpid()} started={datetime.now(UTC).isoformat()}\n")
@@ -245,7 +247,7 @@ class SyncService:
             else:
                 import fcntl
 
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                getattr(fcntl, "flock")(handle.fileno(), getattr(fcntl, "LOCK_UN"))
         finally:
             handle.close()
 
