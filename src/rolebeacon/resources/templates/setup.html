@@ -92,6 +92,21 @@
     <div id="model-connection" class="model-health model-health-rules">Rules-only scoring is selected until you choose and test an LLM endpoint.</div>
     <p class="safety-note">Starting Ollama or downloading a model happens only when you click the corresponding button. The recommended model is qwen3:8b; qwen2.5:14b-instruct-q6_k offers higher quality on hardware with enough memory (measured with <code>rolebeacon evaluate-model</code> - qwen3:14b's reasoning behavior scored worse on this rubric despite being larger).</p>
     <p class="safety-note">Scoring prompts run 2-8k tokens depending on posting length. A self-hosted Ollama needs <code>OLLAMA_CONTEXT_LENGTH</code> set to at least that (RoleBeacon requests 16384 tokens of context per call), or long postings are silently truncated before scoring - this is a setting on your Ollama host, not something RoleBeacon can set for you.</p>
+    <h3>Recommended models by hardware</h3>
+    <p class="muted-cell">Measured on RoleBeacon's own rubric with <code>rolebeacon evaluate-model</code>; see <code>docs/local-model-guide.md</code> for the full write-up. VRAM is rough guidance for a 4-6 bit quantization.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Tier / VRAM</th><th>Model</th><th>Verdict</th></tr></thead>
+        <tbody>
+          <tr><td>Small<br><small>6-8 GB</small></td><td>qwen3:8b</td><td>Shipped default. Not yet run through <code>evaluate-model</code>.</td></tr>
+          <tr><td>Medium<br><small>12-16 GB</small></td><td>qwen2.5:14b-instruct-q6_k</td><td><strong>Recommended.</strong> 0.87 rank correlation with rules, 97% evidence grounding.</td></tr>
+          <tr><td>Medium<br><small>12-16 GB</small></td><td>qwen3:14b</td><td>Not recommended. 0.32 correlation - reasoning mode fights the JSON schema.</td></tr>
+          <tr><td>Medium<br><small>12-16 GB</small></td><td>phi4:14b</td><td>Not recommended. Fast (7.4s median) but 3 of 4 test cases rejected for echoing the dimension name back as the evidence requirement.</td></tr>
+          <tr><td>Large<br><small>20-24 GB</small></td><td>qwen3.6:27b</td><td>Not recommended as configured. Reasons by default; every test call exceeded RoleBeacon's 120s request timeout.</td></tr>
+          <tr><td>Very large<br><small>48 GB+</small></td><td>qwen2.5:72b-instruct, llama3.3:70b-instruct</td><td>Not yet tested. Same-family non-reasoning picks if this tier is available.</td></tr>
+        </tbody>
+      </table>
+    </div>
     </div>
   </section>
 

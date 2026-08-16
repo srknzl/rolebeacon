@@ -17,6 +17,8 @@ on a 25-job stratified sample plus a 5-case rubric fixture (`rolebeacon evaluate
 | `qwen2.5:14b-instruct-q6_k` | 0.87 | 97% | Instruct-only, no reasoning mode. **Recommended.** |
 | `qwen3:14b`, reasoning forced off | 0.32 | lower, 21 generic-label violations | Frequently collapsed relevant jobs toward zero. |
 | `qwen3:14b`, reasoning on | better than above, still trailing | - | 2-4x slower; still lost to qwen2.5 on the same jobs. |
+| `phi4:14b` | n/a - 3 of 4 model-scored rubric cases rejected | n/a | Fast (7.4s median latency) but returns the literal dimension name (`role_domain`, `stack`, ...) as the evidence `requirement` text instead of an actual requirement - fails validation, not a speed problem. |
+| `qwen3.6:27b`, default settings | n/a - 0 of 4 calls completed | n/a | Reasons by default (confirms the caveat below). Every call exceeded RoleBeacon's 120s request timeout (median/max ~240s = both retry attempts timing out). Untested with a longer timeout or a forced non-thinking mode. |
 
 **Prefer instruct-tuned, non-reasoning models over reasoning models of the same or larger size for
 this specific task.** A reasoning model spends its budget arguing with the JSON schema instead of
@@ -27,27 +29,64 @@ quality - the same reasoning model may well be the better choice for a different
 ## Tiers
 
 Sizes are rough VRAM/unified-memory guidance for a 4-6 bit quantization; check the specific
-quant's memory footprint before pulling.
+quant's memory footprint before pulling. Corrected from an earlier draft: a 16 GB card (e.g. an
+RTX 5080) is the *Medium* tier below, not Small - it already comfortably runs both models in the
+measured table.
 
-### Small - 8-16 GB (base Apple Silicon, one mid-range consumer GPU)
+### Small - 6-8 GB (entry laptop GPU, base unified-memory machines)
 
 - **`qwen3:8b`** - RoleBeacon's shipped default. Chosen for size, not yet run through
   `rolebeacon evaluate-model` by this project - if you're on this tier, running the command below
   and sharing the result would turn this into a measured entry.
 - Worth trying: `qwen2.5:7b-instruct` - same non-reasoning family as the measured 14B winner.
+- Worth trying: `qwen3.5:9b-instruct` (non-thinking variant, not `-thinking`) - newer Alibaba
+  generation (Feb 2026) in the same size class; Qwen3.5 defaults to thinking mode, so the
+  `-instruct` tag specifically must be used to get the direct-answer behavior this task wants.
 
-### Medium - 24-32 GB (RTX 4090/5090 class, higher-memory Macs)
+### Medium - 12-16 GB (RTX 4070 Ti/4080/5080 class, most gaming laptops, base Mac Studio)
 
 - **`qwen2.5:14b-instruct-q6_k`** - measured, recommended (table above).
 - `qwen3:14b` - measured, **not recommended** for this task (table above).
-- Worth trying: `qwen2.5:32b-instruct` - same proven family, one size up, not yet measured here.
+- `phi4:14b` (Microsoft) - measured, **not recommended**: fast but structurally unreliable on
+  this rubric (table above). Its general reputation for JSON extraction didn't carry over to
+  this specific validation-heavy prompt; worth a retry if the evidence-requirement prompt
+  wording is loosened, but not swapping in as-is.
+- Worth trying: Google's `gemma-4-12b-it` (Jun 2026) - different vendor, non-reasoning-first,
+  sized to fit this tier with headroom. Check Ollama library availability at pull time; not yet
+  confirmed there as of this research pass.
 
-### Large - 48 GB+ (multi-GPU rigs, Mac Studio class)
+### Large - 20-24 GB (RTX 3090/4090/5090 class, higher-memory Macs)
 
-Nothing in this tier has been run against RoleBeacon's rubric yet. Reasonable non-reasoning
-candidates to start from: `qwen2.5:72b-instruct`, `llama3.3:70b-instruct`. Given the finding
-above, a reasoning-capable large model is not automatically the better pick - test before trusting
-size as a proxy for quality on this task.
+- `qwen3.6:27b` (Alibaba, Apr 2026) - measured, **not recommended as configured** (table above).
+  It does reason by default, confirming the earlier caveat - and reasons long enough that every
+  test call exceeded RoleBeacon's 120s request timeout, so zero of 4 rubric cases produced a
+  usable response at all. Untested: a longer `ROLEBEACON_LLM_TIMEOUT_SECONDS` or a way to force
+  non-thinking mode for this specific family (Ollama's `"think"` field, left unset by
+  RoleBeacon, had no effect here the way it does for `qwen3:14b`). Given the added latency cost
+  is already disqualifying for a per-job scoring call, not worth further tuning time unless a
+  working non-thinking switch turns up.
+- `mistral-small3.2` (Mistral, 24B dense, ~15 GB) - different vendor, explicitly built around
+  instruction-following and function calling rather than reasoning. Not yet tested.
+- Also plausible, not yet tested: `qwen2.5:32b-instruct` - same proven family as the current
+  winner, one size up.
+
+### Not worth pursuing for this task
+
+Found in this research pass and ruled out, so the reasoning doesn't need re-deriving:
+
+- **GLM-5.2** (744B total / ~40B active MoE) and **Qwen3.5's 397B-A17B flagship** - both need
+  far more memory than any tier above even quantized; effectively datacenter hardware.
+- **Mistral "Small 4"** (119B total / 6.5B active hybrid) - despite the name, a MoE needing much
+  more memory than "Small" implies.
+- **DeepSeek-R1 distills** - trained on R1's chain-of-thought traces, i.e. reasoning-first by
+  construction; expect the same schema-fighting failure mode measured for qwen3:14b above.
+- **Llama 4 Maverick/Scout** - 109B-400B total MoE; not realistically single-GPU.
+
+### Very large - 48 GB+ (multi-GPU rigs, top-end Mac Studio)
+
+Not measured. `qwen2.5:72b-instruct` and `llama3.3:70b-instruct` are the safer non-reasoning
+starting points if this tier is available; the finding above still applies; don't assume bigger
+or newer beats the measured Medium-tier winner without actually running the eval.
 
 ## Test your own candidate
 
