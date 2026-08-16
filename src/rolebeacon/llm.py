@@ -299,19 +299,29 @@ class LlmClient:
         # 2k response budget can end with done_reason=length and an empty content field after the
         # model spends the whole budget thinking, so reserve enough room for both phases. This
         # does not affect non-reasoning models such as the measured qwen2.5 alternative.
-        response_tokens = max(max_tokens, 4096) if "qwen3" in self.settings.llm_model.casefold() else max_tokens
-        return {
+        model_cf = self.settings.llm_model.casefold()
+        response_tokens = max(max_tokens, 4096) if "qwen3" in model_cf else max_tokens
+        payload: dict[str, Any] = {
             "model": self.settings.llm_model,
             "messages": messages,
             "stream": False,
-            # No "think" key: let Ollama use each model's own default. Measured directly against
-            # qwen3:14b - forcing think=False collapsed scores to near-zero with no evidence on
-            # jobs rules scored 70+ (structured output stayed valid JSON either way; "content" is
-            # unaffected by thinking, Ollama returns reasoning separately). Thinking costs 2-4x
-            # latency, which is why sync.py only LLM-scores a rules-shortlisted subset of jobs.
+            # No "think" key by default: let Ollama use each model's own default. Measured
+            # directly against qwen3:14b - forcing think=False collapsed scores to near-zero with
+            # no evidence on jobs rules scored 70+ (structured output stayed valid JSON either
+            # way; "content" is unaffected by thinking, Ollama returns reasoning separately).
+            # Thinking costs 2-4x latency, which is why sync.py only LLM-scores a
+            # rules-shortlisted subset of jobs.
             "format": schema,
             "options": {"temperature": temperature, "num_predict": response_tokens, "num_ctx": 16384},
         }
+        # qwen3.6 is the one measured exception to the rule above: left at its own default it
+        # reasons long enough to exceed llm_timeout_seconds outright (0/4 rubric calls completed
+        # in testing), but with think explicitly forced off it matched qwen2.5:14b-instruct-q6_k's
+        # pass rate on the same rubric at ~24s median latency. Scoped to "qwen3.6" specifically,
+        # not the broader "qwen3" prefix above - qwen3:14b measurably got worse forced off.
+        if "qwen3.6" in model_cf:
+            payload["think"] = False
+        return payload
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}

@@ -360,6 +360,20 @@ def test_ollama_native_payload_uses_json_schema_and_context_length(tmp_path) -> 
     assert payload["options"]["num_ctx"] == 16384
 
 
+def test_ollama_native_payload_forces_thinking_off_for_qwen3_6(tmp_path) -> None:
+    settings = replace(Settings.load(tmp_path), llm_mode="ollama", llm_enabled=True, llm_model="qwen3.6:27b")
+    schema = {"type": "object", "properties": {"result": {"type": "string"}}, "required": ["result"]}
+
+    payload = LlmClient(settings)._ollama_payload(
+        [{"role": "user", "content": "Return JSON"}], schema, temperature=0.1, max_tokens=900
+    )
+
+    # Opposite of qwen3:14b above: left at its own default, qwen3.6 reasons long enough to exceed
+    # llm_timeout_seconds outright, but scores as well as the recommended model with think forced
+    # off. Scoped to "qwen3.6" specifically since qwen3:14b measurably got worse this way.
+    assert payload["think"] is False
+
+
 def test_setup_shows_searchable_country_catalog_and_rules_model_status(tmp_path) -> None:
     app = create_app(Settings.load(tmp_path))
 

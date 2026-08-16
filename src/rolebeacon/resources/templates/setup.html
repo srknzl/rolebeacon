@@ -102,7 +102,7 @@
           <tr><td>Medium<br><small>12-16 GB</small></td><td>qwen2.5:14b-instruct-q6_k</td><td><strong>Recommended.</strong> 0.87 rank correlation with rules, 97% evidence grounding.</td></tr>
           <tr><td>Medium<br><small>12-16 GB</small></td><td>qwen3:14b</td><td>Not recommended. 0.32 correlation - reasoning mode fights the JSON schema.</td></tr>
           <tr><td>Medium<br><small>12-16 GB</small></td><td>phi4:14b</td><td>Not recommended. Fast (7.4s median) but 3 of 4 test cases rejected for echoing the dimension name back as the evidence requirement.</td></tr>
-          <tr><td>Large<br><small>20-24 GB</small></td><td>qwen3.6:27b</td><td>Not recommended as configured. Reasons by default; every test call exceeded RoleBeacon's 120s request timeout.</td></tr>
+          <tr><td>Large<br><small>20-24 GB</small></td><td>qwen3.6:27b</td><td>Recommended for this tier. Reasons by default (RoleBeacon sends <code>think:false</code> for this model automatically) - matches qwen2.5:14b-instruct-q6_k's pass rate at ~4x the latency and VRAM.</td></tr>
           <tr><td>Very large<br><small>48 GB+</small></td><td>qwen2.5:72b-instruct, llama3.3:70b-instruct</td><td>Not yet tested. Same-family non-reasoning picks if this tier is available.</td></tr>
         </tbody>
       </table>

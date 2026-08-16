@@ -18,13 +18,21 @@ on a 25-job stratified sample plus a 5-case rubric fixture (`rolebeacon evaluate
 | `qwen3:14b`, reasoning forced off | 0.32 | lower, 21 generic-label violations | Frequently collapsed relevant jobs toward zero. |
 | `qwen3:14b`, reasoning on | better than above, still trailing | - | 2-4x slower; still lost to qwen2.5 on the same jobs. |
 | `phi4:14b` | n/a - 3 of 4 model-scored rubric cases rejected | n/a | Fast (7.4s median latency) but returns the literal dimension name (`role_domain`, `stack`, ...) as the evidence `requirement` text instead of an actual requirement - fails validation, not a speed problem. |
-| `qwen3.6:27b`, default settings | n/a - 0 of 4 calls completed | n/a | Reasons by default (confirms the caveat below). Every call exceeded RoleBeacon's 120s request timeout (median/max ~240s = both retry attempts timing out). Untested with a longer timeout or a forced non-thinking mode. |
+| `qwen3.6:27b`, default settings | n/a - 0 of 4 calls completed | n/a | Reasons by default. Every call exceeded RoleBeacon's 120s request timeout (median/max ~240s = both retry attempts timing out). |
+| `qwen3.6:27b`, `think:false` forced | 4/5 rubric cases passed, both ranking checks passed | grounded, cites specific profile phrases | RoleBeacon now sends `think:false` for this model specifically (`llm.py`). Matches `qwen2.5:14b-instruct-q6_k`'s pass rate at ~24s median latency (vs. ~5.8s) - a real Large-tier option, not a fallback. The one miss: scored 84 against an expected ceiling of 82 on the unknown-eligibility case, a 2-point calibration overshoot, not a validation failure. |
 
 **Prefer instruct-tuned, non-reasoning models over reasoning models of the same or larger size for
 this specific task.** A reasoning model spends its budget arguing with the JSON schema instead of
 reliably filling it, which is exactly what produced qwen3's generic-evidence and empty-response
 rejections in live testing. This is a property of *this task*, not a general claim about model
 quality - the same reasoning model may well be the better choice for a different job.
+
+**This does not generalize to "always force thinking off for a Qwen3-family model."** `qwen3:14b`
+measurably got *worse* with `think:false` forced (0.32 correlation, collapsed evidence) than with
+its own reasoning left on. `qwen3.6:27b` is the opposite: unusable at its own default (every call
+timed out) and strong with `think:false` forced. RoleBeacon's request-building code
+(`LlmClient._ollama_payload`) scopes the override to `qwen3.6` specifically for exactly this
+reason - test each model rather than assuming the family behaves consistently.
 
 ## Tiers
 
@@ -57,14 +65,13 @@ measured table.
 
 ### Large - 20-24 GB (RTX 3090/4090/5090 class, higher-memory Macs)
 
-- `qwen3.6:27b` (Alibaba, Apr 2026) - measured, **not recommended as configured** (table above).
-  It does reason by default, confirming the earlier caveat - and reasons long enough that every
-  test call exceeded RoleBeacon's 120s request timeout, so zero of 4 rubric cases produced a
-  usable response at all. Untested: a longer `ROLEBEACON_LLM_TIMEOUT_SECONDS` or a way to force
-  non-thinking mode for this specific family (Ollama's `"think"` field, left unset by
-  RoleBeacon, had no effect here the way it does for `qwen3:14b`). Given the added latency cost
-  is already disqualifying for a per-job scoring call, not worth further tuning time unless a
-  working non-thinking switch turns up.
+- **`qwen3.6:27b`** (Alibaba, Apr 2026) - measured, **recommended for this tier** (table above).
+  It does reason by default, and left alone it's unusable (every call exceeded RoleBeacon's 120s
+  timeout). RoleBeacon now sends `think:false` for this model automatically, which matches
+  `qwen2.5:14b-instruct-q6_k`'s pass rate at ~4x the latency (~24s vs. ~6s median) and ~4x the
+  VRAM - pick it over the Medium tier's winner only if you have the memory to spare and want the
+  slightly more detailed evidence citations it produced in testing, not because it's a clear
+  quality upgrade.
 - `mistral-small3.2` (Mistral, 24B dense, ~15 GB) - different vendor, explicitly built around
   instruction-following and function calling rather than reasoning. Not yet tested.
 - Also plausible, not yet tested: `qwen2.5:32b-instruct` - same proven family as the current
