@@ -86,12 +86,12 @@
     <div id="model-details" class="model-details">
     <div class="form-grid">
       <label>Endpoint {{ tip("Local Ollama normally uses http://127.0.0.1:11434/v1. A LAN or compatible endpoint can be used instead.") }}<input id="llm-base-url" value="http://127.0.0.1:11434/v1"></label>
-      <label>Model {{ tip("The model identifier at the selected endpoint. qwen3:8b is a practical local default.") }}<input id="llm-model" value="qwen3:8b"></label>
+      <label>Model {{ tip("The model identifier at the selected endpoint. qwen3:8b is RoleBeacon's shipped default but hasn't been measured on this project's rubric; qwen2.5:14b-instruct-q6_k is the measured recommendation if your hardware fits it - see the table below.") }}<input id="llm-model" value="qwen3:8b"></label>
       <label>API key {{ tip("Optional for endpoints that require one. It stays in the local permission-restricted secrets file and is never sent to the browser again.") }}<input id="llm-api-key" type="password" autocomplete="off"></label>
     </div>
     <p><button id="discover-model" class="button" type="button">Detect Ollama</button> <button id="start-model" class="button" type="button">Start Ollama</button> <button id="pull-model" class="button" type="button">Pull selected model</button> <button id="test-model" class="button" type="button">Test endpoint</button></p>
     <div id="model-connection" class="model-health model-health-rules">Rules-only scoring is selected until you choose and test an LLM endpoint.</div>
-    <p class="safety-note">Starting Ollama or downloading a model happens only when you click the corresponding button. The recommended model is qwen3:8b; qwen2.5:14b-instruct-q6_k offers higher quality on hardware with enough memory (measured with <code>rolebeacon evaluate-model</code> - qwen3:14b's reasoning behavior scored worse on this rubric despite being larger).</p>
+    <p class="safety-note">Starting Ollama or downloading a model happens only when you click the corresponding button. qwen3:8b is the shipped default but not yet measured on this project's rubric; qwen2.5:14b-instruct-q6_k is the measured recommendation on hardware with enough memory (via <code>rolebeacon evaluate-model</code> - qwen3:14b's reasoning behavior scored worse on this rubric despite being larger).</p>
     <p class="safety-note">Scoring prompts run 2-8k tokens depending on posting length. A self-hosted Ollama needs <code>OLLAMA_CONTEXT_LENGTH</code> set to at least that (RoleBeacon requests 16384 tokens of context per call), or long postings are silently truncated before scoring - this is a setting on your Ollama host, not something RoleBeacon can set for you.</p>
     <h3>Recommended models by hardware</h3>
     <p class="muted-cell">Measured on RoleBeacon's own rubric with <code>rolebeacon evaluate-model</code>; see <code>docs/local-model-guide.md</code> for the full write-up. VRAM is rough guidance for a 4-6 bit quantization.</p>

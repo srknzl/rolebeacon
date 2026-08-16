@@ -182,7 +182,7 @@ class LocalModelService:
             "ollama_reachable": reachable,
             "endpoint": base_url,
             "models": models,
-            "recommended_model": "qwen3:8b",
+            "default_model": "qwen3:8b",
             "high_quality_model": "qwen2.5:14b-instruct-q6_k",
             "rules_only_available": True,
         }
