@@ -676,7 +676,8 @@ def test_preferences_separate_search_from_application_and_hide_rules_details(tmp
     assert 'modelDetails.hidden = document.getElementById("llm-mode").value === "rules"' in page.text
     assert 'message("Preferences saved.", true)' in page.text
     assert "Arbeitnow roles that explicitly advertise visa sponsorship" in page.text
-    assert "Searches every relocation-target country or continent you've added" in page.text
+    assert "Searches every country you're authorized to work in or willing to relocate to" in page.text
+    assert "Remote-eligible search covering roles with no fixed country" in page.text
 
 
 def test_settings_round_trip_preserves_omitted_fields_and_saved_api_key(tmp_path) -> None:

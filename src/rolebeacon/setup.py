@@ -153,8 +153,13 @@ class SetupService:
         if issues:
             raise ValueError("; ".join(issues))
 
+        # Google/Amazon sources are generated per country, so search coverage must include every
+        # country the candidate can already work in (work_authorizations, which always contains
+        # current_country_code), not just relocation_targets - otherwise a job posted in the
+        # candidate's own country, needing no relocation at all, is never searched for.
         countries = relocation_countries(
-            [item.model_dump(mode="json") for item in payload.mobility.relocation_targets]
+            [{"country_code": code} for code in payload.mobility.work_authorizations]
+            + [item.model_dump(mode="json") for item in payload.mobility.relocation_targets]
         )
         generated, _ = self.settings.save_sources(relocation_source_candidates(countries))
         enabled_source_ids = list(payload.enabled_source_ids)
@@ -206,7 +211,7 @@ class LocalModelService:
             "ollama_reachable": reachable,
             "endpoint": base_url,
             "models": models,
-            "recommended_model": "qwen3:8b",
+            "default_model": "qwen3:8b",
             "high_quality_model": "qwen2.5:14b-instruct-q6_k",
             "rules_only_available": True,
         }

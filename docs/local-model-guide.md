@@ -20,6 +20,7 @@ on a 25-job stratified sample plus a 5-case rubric fixture (`rolebeacon evaluate
 | `phi4:14b` | n/a - 3 of 4 model-scored rubric cases rejected | n/a | Fast (7.4s median latency) but returns the literal dimension name (`role_domain`, `stack`, ...) as the evidence `requirement` text instead of an actual requirement - fails validation, not a speed problem. |
 | `qwen3.6:27b`, default settings | n/a - 0 of 4 calls completed | n/a | Reasons by default. Every call exceeded RoleBeacon's 120s request timeout (median/max ~240s = both retry attempts timing out). |
 | `qwen3.6:27b`, `think:false` forced | 4/5 rubric cases passed, both ranking checks passed | grounded, cites specific profile phrases | RoleBeacon now sends `think:false` for this model specifically (`llm.py`). Matches `qwen2.5:14b-instruct-q6_k`'s pass rate at ~24s median latency (vs. ~5.8s) - a real Large-tier option, not a fallback. The one miss: scored 84 against an expected ceiling of 82 on the unknown-eligibility case, a 2-point calibration overshoot, not a validation failure. |
+| `qwen3:30b-a3b-instruct-2507-q4_K_M` | 3/5 rubric cases passed, 1 of 2 ranking checks passed | evidence present but self-contradictory on the miss below | MoE (30.5B total / 3.3B active), non-reasoning by design - no `think` override needed, and genuinely fast: 4.0s median latency, faster than the Medium-tier winner. But it over-scores: 98 against a 50-85 expected range on the big-tech-transfer case, 88 against a 40-82 range on the unknown-eligibility case (both "review"-verdict), and on that second case it listed Kafka and Java as gaps in the same response where its own evidence array cites both as direct matches. Speed doesn't offset a real evidence-grounding defect - **not recommended.** |
 
 **Prefer instruct-tuned, non-reasoning models over reasoning models of the same or larger size for
 this specific task.** A reasoning model spends its budget arguing with the JSON schema instead of
@@ -76,6 +77,14 @@ measured table.
   instruction-following and function calling rather than reasoning. Not yet tested.
 - Also plausible, not yet tested: `qwen2.5:32b-instruct` - same proven family as the current
   winner, one size up.
+- `qwen3:30b-a3b-instruct-2507-q4_K_M` (Alibaba, MoE, 30.5B total / 3.3B active) - measured,
+  **not recommended** despite being the fastest model tested (table above). Non-reasoning by
+  design, so it sidesteps the `think:false` workaround qwen3.6:27b needs, and at 4.0s median
+  latency it beats every other tier's winner. But speed isn't the bottleneck this project is
+  optimizing for: it over-scored two cases past their expected ceiling and, on one of them,
+  listed skills (Kafka, Java) as gaps that its own evidence array cited as matches in the same
+  response - a real grounding defect, not calibration noise. Worth re-testing if a future quant
+  or fine-tune addresses this; not swapping in as-is.
 
 ### Not worth pursuing for this task
 

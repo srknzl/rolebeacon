@@ -618,7 +618,7 @@ class SmartRecruitersCollector(Collector):
     async def collect(self, since: datetime, cursor: str = "") -> CollectionBatch:
         if not self.config.slug:
             raise ValueError("SmartRecruiters source requires a company identifier")
-        result = []
+        summaries: list[dict[str, Any]] = []
         offset = 0
         total = 0
         requests = 0
@@ -633,41 +633,51 @@ class SmartRecruitersCollector(Collector):
             payload = response.json()
             total = int(payload.get("totalFound", 0))
             items = payload.get("content", [])
-            for summary in items:
-                detail_response = await self.client.get(summary.get("ref") or f"https://api.smartrecruiters.com/v1/companies/{self.config.slug}/postings/{summary['id']}")
-                requests += 1
-                detail_response.raise_for_status()
-                item = detail_response.json()
-                location_value = item.get("location") or {}
-                location = ", ".join(filter(None, (location_value.get("city"), location_value.get("region"), location_value.get("country"))))
-                sections = item.get("jobAd") or {}
-                description = "\n\n".join(
-                    plain_text(section.get("text"))
-                    for section in sections.get("sections", {}).values()
-                    if isinstance(section, dict)
-                )
-                job = CollectedJob(
-                    source=self.config.id,
-                    source_job_id=str(item["id"]),
-                    title=item.get("name", ""),
-                    company=self.config.company or self.config.name,
-                    location=location,
-                    description=description,
-                    url=item.get("ref", summary.get("ref", "")),
-                    apply_url=item.get("applyUrl", item.get("ref", "")),
-                    remote_scope=location if "remote" in location.casefold() else "",
-                    employment_type=(item.get("typeOfEmployment") or {}).get("label", ""),
-                    published_at=parse_datetime(item.get("releasedDate")),
-                    updated_at=parse_datetime(item.get("lastUpdatedDate")),
-                    metadata={"department": (item.get("department") or {}).get("label", "")},
-                )
-                result.append(job)
+            summaries.extend(items)
             offset += len(items)
             if not items or offset >= total:
                 complete = True
                 break
+        # The listing endpoint has no full description, so every posting needs its own detail
+        # request. A large board (hundreds of open roles at a company like Bosch) made that a
+        # multi-minute sync when fetched one at a time; bound the concurrency instead of either
+        # serializing it or opening hundreds of connections at once.
+        semaphore = asyncio.Semaphore(10)
+
+        async def fetch_detail(summary: dict[str, Any]) -> CollectedJob:
+            nonlocal requests
+            async with semaphore:
+                detail_response = await self.client.get(summary.get("ref") or f"https://api.smartrecruiters.com/v1/companies/{self.config.slug}/postings/{summary['id']}")
+                requests += 1
+            detail_response.raise_for_status()
+            item = detail_response.json()
+            location_value = item.get("location") or {}
+            location = ", ".join(filter(None, (location_value.get("city"), location_value.get("region"), location_value.get("country"))))
+            sections = item.get("jobAd") or {}
+            description = "\n\n".join(
+                plain_text(section.get("text"))
+                for section in sections.get("sections", {}).values()
+                if isinstance(section, dict)
+            )
+            return CollectedJob(
+                source=self.config.id,
+                source_job_id=str(item["id"]),
+                title=item.get("name", ""),
+                company=self.config.company or self.config.name,
+                location=location,
+                description=description,
+                url=item.get("ref", summary.get("ref", "")),
+                apply_url=item.get("applyUrl", item.get("ref", "")),
+                remote_scope=location if "remote" in location.casefold() else "",
+                employment_type=(item.get("typeOfEmployment") or {}).get("label", ""),
+                published_at=parse_datetime(item.get("releasedDate")),
+                updated_at=parse_datetime(item.get("lastUpdatedDate")),
+                metadata={"department": (item.get("department") or {}).get("label", "")},
+            )
+
+        jobs = list(await asyncio.gather(*(fetch_detail(summary) for summary in summaries)))
         return CollectionBatch(
-            jobs=result, complete_snapshot=complete, provider_total=total, requests_made=requests,
+            jobs=jobs, complete_snapshot=complete, provider_total=total, requests_made=requests,
             truncated=not complete,
         )
 
