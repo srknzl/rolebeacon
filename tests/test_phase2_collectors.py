@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -12,6 +13,7 @@ from rolebeacon.collectors import (
     JobicyCollector,
     PersonioCollector,
     RemotiveCollector,
+    SmartRecruitersCollector,
     description_blocks,
     plain_text,
     repair_text,
@@ -218,6 +220,35 @@ async def test_remote_collectors_preserve_location_and_attribution() -> None:
     assert jobicy.jobs[0].remote_scope == "Europe"
     assert "Remotive" in remotive.attribution
     assert remotive.jobs[0].remote_scope == "Worldwide"
+
+
+@pytest.mark.asyncio
+async def test_smartrecruiters_detail_fetches_stay_in_listing_order() -> None:
+    # Detail requests run concurrently (bounded); this asserts result order still matches the
+    # listing order regardless of which detail response comes back first.
+    detail_delay = {"1": 0.02, "2": 0.0}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/postings"):
+            return httpx.Response(200, json={
+                "totalFound": 2,
+                "content": [{"id": "1", "ref": "https://api.smartrecruiters.test/postings/1"},
+                            {"id": "2", "ref": "https://api.smartrecruiters.test/postings/2"}],
+            })
+        posting_id = request.url.path.rsplit("/", 1)[-1]
+        await asyncio.sleep(detail_delay[posting_id])
+        return httpx.Response(200, json={
+            "id": posting_id, "name": f"Engineer {posting_id}",
+            "location": {"city": "Berlin", "country": "Germany"},
+            "jobAd": {"sections": {"jobDescription": {"text": f"Role {posting_id}"}}},
+        })
+
+    config = SourceConfig.from_dict({"id": "sr", "kind": "smartrecruiters", "name": "Example", "slug": "example"})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        jobs = await SmartRecruitersCollector(config, client).collect(datetime.now(UTC) - timedelta(days=30))
+
+    assert [job.source_job_id for job in jobs] == ["1", "2"]
+    assert jobs[0].description == "Role 1"
 
 
 def test_alert_ids_are_stable_across_email_messages() -> None:
