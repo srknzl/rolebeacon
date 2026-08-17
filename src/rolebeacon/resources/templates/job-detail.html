@@ -10,7 +10,12 @@
     <p class="detail-company">{{ job.company }} · {{ job.location or 'Location unknown' }}</p>
     <p class="safety-note">{{ (job.location_fit or '')|location_requirement }}</p>
   </div>
-  <div class="detail-score" title="Overall score from 0 to 100. It combines eligibility, role fit, skills, seniority, and work-model constraints."><strong>{{ job.opportunity_score or job.score or '—' }}</strong><span>opportunity score</span><small>job {{ job.score or '—' }} · company {{ job.company_score or '—' }}</small></div>
+  <div class="detail-header-actions">
+    <div class="detail-score" title="Overall score from 0 to 100. It combines eligibility, role fit, skills, seniority, and work-model constraints."><strong>{{ job.opportunity_score or job.score or '—' }}</strong><span>opportunity score</span><small>job {{ job.score or '—' }} · company {{ job.company_score or '—' }}</small></div>
+    {% if application and application.packet_path %}<a class="artifact-link" data-packet-link href="/artifacts/{{ job.id }}/application-packet.json" title="Open the prepared answers RoleBeacon assembled for this application.">Open prepared application packet</a>{% endif %}
+    <label class="checkbox" title="When on, Prepare application also opens a real browser window on the original posting and auto-fills the fields it can find (name, email, phone, website, GitHub, LinkedIn, résumé upload). Salary, relocation, legal questions, and final submission always stay manual."><input type="checkbox" id="open-browser-toggle" {{ 'checked' if open_browser }}> Open a browser and auto-fill supported fields</label>
+    <form action="/api/jobs/{{ job.id }}/prepare-application" method="post" data-prepare-form><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button-primary wide" title="Assemble your saved answers into a reviewable packet. RoleBeacon never submits an application.">Prepare application</button></form>
+  </div>
 </section>
 
 <section class="detail-grid">
@@ -51,7 +56,7 @@
       <h2>Decision</h2>
       <form action="/api/jobs/{{ job.id }}/feedback" method="post" class="decision-grid" data-decision-form>
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button name="status" data-toggle="bookmarked" value="{{ 'new' if job.status == 'bookmarked' else 'bookmarked' }}" class="button button-primary" title="Keep this job in your shortlist for follow-up.">{{ 'Remove bookmark' if job.status == 'bookmarked' else 'Bookmark' }}</button>
+        <button name="status" data-toggle="bookmarked" value="{{ 'new' if job.status == 'bookmarked' else 'bookmarked' }}" class="button button-primary" title="Keep this job in your bookmarks for follow-up.">{{ 'Remove bookmark' if job.status == 'bookmarked' else 'Bookmark' }}</button>
         <button name="status" data-toggle="not_interested" value="{{ 'new' if job.status == 'not_interested' else 'not_interested' }}" class="button button-quiet" title="Hide this job from recommendations. The original posting is not changed.">{{ 'Undo not interested' if job.status == 'not_interested' else 'Not interested' }}</button>
       </form>
       <p class="safety-note">Record where this application stands. RoleBeacon cannot see the employer's system, so these are your own notes.</p>
@@ -62,6 +67,15 @@
         <button name="status" value="rejected" class="button button-quiet" title="The employer rejected this application.">Rejected</button>
       </form>
       <hr>
+      <h2>Application kit</h2>
+      <p class="safety-note">The tailored résumé uses only your locally stored candidate profile and this job description. It works without an LLM and never invents experience.</p>
+      {% if application and application.resume_path %}<a class="artifact-link" href="/artifacts/{{ job.id }}/resume.pdf" title="Open the locally generated resume PDF for review.">Open tailored resume</a>{% else %}<form action="/api/jobs/{{ job.id }}/resume" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button wide" title="Create a factual resume draft using only verified profile evidence.">Generate tailored resume</button></form>{% endif %}
+      <div class="recommendation {% if cover_letter_recommended %}recommended{% endif %}"><strong>{{ 'Recommended' if cover_letter_recommended else 'Optional' }} cover letter</strong><p>{{ cover_letter_reason }}</p></div>
+      {% if application and application.cover_letter_path %}<a class="artifact-link" href="/artifacts/{{ job.id }}/cover-letter.txt" title="Open the locally generated cover letter for review.">Open cover letter</a>{% elif llm_enabled %}<form action="/api/jobs/{{ job.id }}/cover-letter" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button wide" title="Create an on-demand factual cover letter. You must review it before use.">Generate cover letter</button></form>{% else %}<button class="button wide" disabled title="Choose and test an LLM in Settings to generate a cover letter.">Cover letter requires an LLM</button>{% endif %}
+      <p class="safety-note">Prepare application and its browser-fill option are at the top of the page, next to the opportunity score.</p>
+      <a class="button button-quiet wide" href="{{ job.apply_url or job.canonical_url }}" target="_blank" rel="noopener" title="Open the original posting in a new tab for your review and final submission.">Open original posting ↗</a>
+      <p class="trust-banner">RoleBeacon never submits the application. Review every answer and press Submit yourself.</p>
+      <hr>
       <h2>Company intelligence</h2>
       {% if job.company_id %}
       <a class="artifact-link" href="/companies/{{ job.company_id }}">Open company profile · {{ job.company_score }}/100</a>
@@ -69,16 +83,6 @@
       <p class="muted">Research this employer's remote-work, relocation, sponsorship, engineering, and compensation signals.</p>
       {% endif %}
       <form action="/api/jobs/{{ job.id }}/research-company" method="post" data-company-research data-research-start-url="/api/jobs/{{ job.id }}/research-company/start"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button wide" title="Collect provenance-backed company evidence. It does not change job eligibility.">{{ 'Refresh' if job.company_id else 'Research' }} company</button></form>
-      <hr>
-      <h2>Application kit</h2>
-      <p class="safety-note">The tailored résumé uses only your locally stored candidate profile and this job description. It works without an LLM and never invents experience.</p>
-      {% if application and application.resume_path %}<a class="artifact-link" href="/artifacts/{{ job.id }}/resume.pdf" title="Open the locally generated resume PDF for review.">Open tailored resume</a>{% else %}<form action="/api/jobs/{{ job.id }}/resume" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button wide" title="Create a factual resume draft using only verified profile evidence.">Generate tailored resume</button></form>{% endif %}
-      <div class="recommendation {% if cover_letter_recommended %}recommended{% endif %}"><strong>{{ 'Recommended' if cover_letter_recommended else 'Optional' }} cover letter</strong><p>{{ cover_letter_reason }}</p></div>
-      {% if application and application.cover_letter_path %}<a class="artifact-link" href="/artifacts/{{ job.id }}/cover-letter.txt" title="Open the locally generated cover letter for review.">Open cover letter</a>{% elif llm_enabled %}<form action="/api/jobs/{{ job.id }}/cover-letter" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button wide" title="Create an on-demand factual cover letter. You must review it before use.">Generate cover letter</button></form>{% else %}<button class="button wide" disabled title="Choose and test an LLM in Settings to generate a cover letter.">Cover letter requires an LLM</button>{% endif %}
-      {% if application and application.packet_path %}<a class="artifact-link" data-packet-link href="/artifacts/{{ job.id }}/application-packet.json" title="Open the prepared answers RoleBeacon assembled for this application.">Open prepared application packet</a>{% endif %}
-      <form action="/api/jobs/{{ job.id }}/prepare-application" method="post" data-prepare-form><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button-primary wide" title="Assemble your saved answers into a reviewable packet. RoleBeacon never submits an application.">Prepare application</button></form>
-      <a class="button button-quiet wide" href="{{ job.apply_url or job.canonical_url }}" target="_blank" rel="noopener" title="Open the original posting in a new tab for your review and final submission.">Open original posting ↗</a>
-      <p class="trust-banner">RoleBeacon never submits the application. Review every answer and press Submit yourself.</p>
     </div>
   </aside>
 </section>
@@ -110,12 +114,13 @@
     showJobMessage(`Marked as ${newStatus}.`);
   }));
   const prepareForm = document.querySelector("[data-prepare-form]");
+  const openBrowserToggle = document.getElementById("open-browser-toggle");
   prepareForm?.addEventListener("submit", async event => {
     event.preventDefault();
     const button = prepareForm.querySelector("button");
     button.disabled = true;
     try {
-      const response = await fetch(prepareForm.action, {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
+      const response = await fetch(prepareForm.action, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({open_browser: !!openBrowserToggle?.checked})});
       const result = await response.json();
       if (!response.ok) throw new Error(result.detail?.message || result.detail || "The application packet could not be prepared.");
       if (!document.querySelector("[data-packet-link]")) {

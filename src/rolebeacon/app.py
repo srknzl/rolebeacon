@@ -233,6 +233,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 cover_letter_reason=recommendation_reason,
                 cover_letter_text=cover_letter_text,
                 dimension_meta=dimension_metadata(app_settings.load_search_profile()),
+                open_browser=app_settings.open_browser,
             ),
         )
 
@@ -526,6 +527,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/jobs/{job_id}/prepare-application")
     async def prepare_application(job_id: int, request: Request) -> Response:
+        nonlocal app_settings
+        payload = await _payload(request)
+        if "open_browser" in payload:
+            app_settings = app_settings.save_open_browser(bool(payload["open_browser"]))
+            artifacts.settings = app_settings
+            app.state.settings = app_settings
         try:
             path = artifacts.prepare_application(job_id)
         except LookupError as error:

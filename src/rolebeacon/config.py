@@ -138,7 +138,9 @@ class Settings:
             host=os.getenv("ROLEBEACON_HOST", "127.0.0.1"),
             port=int(os.getenv("ROLEBEACON_PORT", "8787")),
             auto_sync=_boolean("ROLEBEACON_AUTO_SYNC", True),
-            open_browser=_boolean("ROLEBEACON_OPEN_BROWSER", False),
+            # The env var can still force this at deploy time; otherwise it's the persisted
+            # setting a user flips from the "Prepare application" control on a job's page.
+            open_browser=_boolean("ROLEBEACON_OPEN_BROWSER", bool(setup.get("open_browser", False))),
             sync_interval_seconds=int(os.getenv("ROLEBEACON_SYNC_INTERVAL_SECONDS", str(4 * 60 * 60))),
             overlap_hours=int(os.getenv("ROLEBEACON_OVERLAP_HOURS", "72")),
             initial_lookback_days=int(os.getenv("ROLEBEACON_INITIAL_LOOKBACK_DAYS", "30")),
@@ -332,6 +334,16 @@ class Settings:
             if source["url"] not in boards:
                 boards.append(source["url"])
         return sorted(by_name.values(), key=lambda item: str(item["name"]).casefold())
+
+    def save_open_browser(self, value: bool) -> Settings:
+        """Persist the "open a browser and auto-fill supported fields" choice made from the
+        Prepare application control so it survives restarts without needing an env var."""
+        setup = _read_json(self.setup_state_path, {})
+        if not isinstance(setup, dict):
+            setup = {}
+        self.ensure_directories()
+        _write_private_json(self.setup_state_path, {**setup, "open_browser": value})
+        return replace(self, open_browser=value)
 
     def save_company_search_key(self, api_key: str) -> Settings:
         secrets = _read_json(self.secrets_path, {})
