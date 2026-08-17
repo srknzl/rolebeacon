@@ -445,6 +445,34 @@ def test_any_engineering_title_matches_and_a_target_role_matches_fully() -> None
     assert score(job(title="Staff Distributed Systems Engineer")).dimensions["role_domain"] == 30
 
 
+def _role_match_score(title: str, target_roles: list[str]) -> int:
+    preferences = {**PREFERENCES.model_dump(mode="json"), "target_roles": target_roles}
+    value = job(title=title)
+    eligibility = evaluate_eligibility(value, preferences, MOBILITY.model_dump(mode="json"), STRATEGIES)
+    return rule_score(value, eligibility, preferences, CANDIDATE.model_dump(mode="json"), STRATEGIES).dimensions[
+        "role_domain"
+    ]
+
+
+def test_a_leftover_word_from_an_already_engineering_target_role_does_not_match_an_unrelated_title() -> None:
+    # "Developer Experience Engineer" already contains "developer" and "engineer" - the specifics
+    # fallback exists so a target role with NO engineering word of its own (e.g. "Data Scientist")
+    # can still be recognized, not so a role that already has one can lend its one leftover word
+    # ("experience") as free-standing proof of family membership to an unrelated, non-engineering title.
+    target_roles = ["Developer Experience Engineer"]
+
+    # No engineering term and no fallback-eligible specific word left -> not the same family,
+    # same low outcome as any other unrelated title (role_domain 6, same_role_family False).
+    assert _role_match_score("VP Client Success & Experience UK", target_roles) == 6
+    # The same leftover word still earns its scoring bonus once the title is genuinely in-family.
+    assert _role_match_score("Staff Developer Experience Engineer", target_roles) == 30
+
+
+def test_a_target_role_with_no_engineering_word_still_matches_via_its_specifics() -> None:
+    assert _role_match_score("Data Scientist", ["Data Scientist"]) == 30
+    assert _role_match_score("Warehouse Operations Lead", ["Data Scientist"]) == 6
+
+
 def test_a_priority_company_does_not_lift_a_role_the_candidate_is_not_looking_for() -> None:
     # The floor exists to surface a wanted company's engineering roles, not its procurement openings.
     result = score(job(company="Google", title="Manager, Procurement", location="Unknown", remote_scope=""))

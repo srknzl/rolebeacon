@@ -9,7 +9,7 @@ from typing import Any
 from .domain import EligibilityResult, EligibilityStatus, ScoreResult
 from .profile import CONTINENT_COUNTRY_CODES, DEFAULT_SCORE_WEIGHTS, country_names_by_code
 
-SCORING_PROMPT_VERSION = "job-fit-v15"
+SCORING_PROMPT_VERSION = "job-fit-v16"
 
 # Ineligibility is a hard gate: no combination of fit signals may push a total above this cap.
 # LLM scoring is only ever invoked for eligible jobs (see sync.py), so every ineligible job's
@@ -651,9 +651,23 @@ def _role_match(title: str, preferences: dict[str, Any]) -> tuple[int, bool]:
         for word in re.findall(r"[a-z0-9+#.]+", role)
         if len(word) >= 3 and word not in GENERIC_ROLE_WORDS
     }
+    # Only a target role with no ENGINEERING_ROLE_TERMS word of its own (e.g. "Data Scientist")
+    # needs its leftover words to establish the family by themselves - that is what lets a
+    # non-"engineer/developer"-titled role the candidate actually asked for through. A role that
+    # already contains "developer" or "engineer" (e.g. "Developer Experience Engineer") is already
+    # covered by the ENGINEERING_ROLE_TERMS branch below, so its one leftover word ("experience")
+    # must not also double as free-standing proof of family membership - that is how an unrelated
+    # "VP Client Success & Experience" title picked up a role-match score it had no business getting.
+    fallback_specifics = {
+        word
+        for role in targets
+        if not any(term in role for term in ENGINEERING_ROLE_TERMS)
+        for word in re.findall(r"[a-z0-9+#.]+", role)
+        if len(word) >= 3 and word not in GENERIC_ROLE_WORDS
+    }
     if any(term in title for term in OTHER_ROLE_FAMILY_TERMS if term not in wanted):
         return 2, False
-    if not any(term in title for term in ENGINEERING_ROLE_TERMS) and not any(word in title for word in specifics):
+    if not any(term in title for term in ENGINEERING_ROLE_TERMS) and not any(word in title for word in fallback_specifics):
         return 6, False
     if any(role in title for role in targets):
         return 30, True
