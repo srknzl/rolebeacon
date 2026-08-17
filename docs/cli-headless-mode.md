@@ -35,7 +35,8 @@ rolebeacon jobs [--from-json PATH] [--no-sync] [--start-ollama] [--output-dir PA
 The command refreshes by default through `SyncService.run()` and uses `--no-sync` for a strictly local
 export. `--start-ollama` checks the configured model first, starts only an installed Ollama when needed,
 and waits up to 30 seconds; it never installs a runtime or downloads a model. Startup is restricted to
-loopback endpoints because a configured LAN Ollama must be managed on its own host.
+HTTP loopback endpoints and binds Ollama to the configured host and port. A configured LAN Ollama must be
+managed on its own host.
 
 `--from-json` accepts one complete `SetupPayloadV1` containing candidate, mobility, preferences, selected
 sources, model settings, and activation. It is validated and persisted through the same `SetupService` as

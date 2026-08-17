@@ -216,7 +216,8 @@ async def _ensure_ollama_ready(
     timeout_seconds: float = 30,
     poll_interval_seconds: float = 1,
 ) -> dict[str, Any]:
-    hostname = urlsplit(settings.llm_base_url).hostname or ""
+    endpoint = urlsplit(settings.llm_base_url)
+    hostname = endpoint.hostname or ""
     loopback = hostname == "localhost" or hostname.endswith(".localhost")
     if not loopback:
         try:
@@ -228,13 +229,22 @@ async def _ensure_ollama_ready(
             "--start-ollama can manage only a loopback endpoint such as "
             "http://127.0.0.1:11434/v1; start a configured LAN Ollama on its own host"
         )
+    if endpoint.scheme != "http":
+        raise RuntimeError("--start-ollama requires an HTTP loopback endpoint")
+
+    try:
+        port = endpoint.port or 80
+    except ValueError as error:
+        raise RuntimeError(f"--start-ollama received an invalid endpoint port: {error}") from error
+    bind_hostname = f"[{hostname}]" if ":" in hostname else hostname
+    ollama_host = f"{bind_hostname}:{port}"
 
     llm = LlmClient(settings)
     health = await llm.health()
     if health["available"]:
         return {"started": False, "health": health}
 
-    started = LocalModelService(settings).start_ollama()
+    started = LocalModelService(settings).start_ollama(host=ollama_host)
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout_seconds
     while True:

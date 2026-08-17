@@ -122,9 +122,10 @@ uv run rolebeacon jobs --output-dir /path/to/exports
 uv run rolebeacon jobs --start-ollama
 ```
 
-`--start-ollama` is valid only when the saved scoring mode is Ollama and its endpoint is loopback, such as
-`http://127.0.0.1:11434/v1`; manage a configured LAN Ollama on its own host. The command never installs
-Ollama or pulls a model. Fatal refresh or model-start failures still export the existing local database and return exit code 1;
+`--start-ollama` is valid only when the saved scoring mode is Ollama and its endpoint is HTTP loopback, such as
+`http://127.0.0.1:11434/v1`; the command binds the process to that exact host and port. Manage a configured
+LAN Ollama on its own host. The command never installs Ollama or pulls a model. Fatal refresh or model-start
+failures still export the existing local database and return exit code 1;
 partial source failures export usable results with a warning and return 0. Invalid flag combinations return 2
 without writing an export.
 

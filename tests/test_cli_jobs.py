@@ -217,24 +217,31 @@ def test_jobs_exports_existing_data_after_ollama_start_failure(tmp_path, monkeyp
     assert "Ollama executable is unavailable" in exported["sync"]["status"]["error"]
 
 
-def test_jobs_exports_existing_data_when_sync_run_raises(tmp_path, capsys) -> None:
+def test_jobs_exports_existing_data_when_sync_run_raises(tmp_path, capsys, monkeypatch) -> None:
     settings = _configured_settings(tmp_path)
     database = Database(settings.database_path)
     database.initialize()
     _seed(database)
-    (settings.data_dir / "sync.lock").mkdir()
+    class FailingSyncService:
+        def __init__(self, _settings, _database, _llm) -> None:
+            pass
+
+        async def run(self) -> dict:
+            raise RuntimeError("sync boundary failure")
+
+    monkeypatch.setattr(cli, "SyncService", FailingSyncService)
     args = argparse.Namespace(no_sync=False, start_ollama=False, output_dir=tmp_path / "exports")
 
     assert cli._run_jobs_command(args, settings, database) == 1
 
-    assert "IsADirectoryError" in capsys.readouterr().err
+    assert "RuntimeError: sync boundary failure" in capsys.readouterr().err
     run_directory = next((tmp_path / "exports").glob("rolebeacon-jobs-*"))
     exported = json.loads((run_directory / "all-jobs.json").read_text(encoding="utf-8"))
     assert exported["count"] == 1
     assert exported["sync"]["requested"] is True
     assert exported["sync"]["performed"] is True
     assert exported["sync"]["status"]["phase"] == "failed"
-    assert "IsADirectoryError" in exported["sync"]["status"]["error"]
+    assert exported["sync"]["status"]["error"] == "RuntimeError: sync boundary failure"
 
 
 def test_jobs_rejects_invalid_start_ollama_invocations(tmp_path, monkeypatch) -> None:
@@ -287,7 +294,7 @@ async def test_ensure_ollama_ready_starts_and_polls_without_pulling(tmp_path, mo
             {"available": True, "status": "available", "error": ""},
         )
     )
-    started: list[bool] = []
+    started: list[str] = []
 
     class StartingClient:
         def __init__(self, _settings) -> None:
@@ -300,8 +307,8 @@ async def test_ensure_ollama_ready_starts_and_polls_without_pulling(tmp_path, mo
         def __init__(self, _settings) -> None:
             pass
 
-        def start_ollama(self) -> dict:
-            started.append(True)
+        def start_ollama(self, *, host: str = "") -> dict:
+            started.append(host)
             return {"started": True, "pid": 123}
 
     async def no_wait(_seconds: float) -> None:
@@ -313,7 +320,7 @@ async def test_ensure_ollama_ready_starts_and_polls_without_pulling(tmp_path, mo
 
     result = await cli._ensure_ollama_ready(settings)
 
-    assert started == [True]
+    assert started == ["127.0.0.1:11434"]
     assert result["started"] is True
     assert result["health"]["available"] is True
 
@@ -333,7 +340,7 @@ async def test_ensure_ollama_ready_times_out(tmp_path, monkeypatch) -> None:
         def __init__(self, _settings) -> None:
             pass
 
-        def start_ollama(self) -> dict:
+        def start_ollama(self, *, host: str = "") -> dict:
             return {"started": True, "pid": 123}
 
     monkeypatch.setattr(cli, "LlmClient", OfflineClient)
@@ -365,3 +372,43 @@ async def test_ensure_ollama_ready_rejects_lan_endpoint_before_starting(tmp_path
 
     with pytest.raises(RuntimeError, match="loopback endpoint"):
         await cli._ensure_ollama_ready(settings)
+
+
+@pytest.mark.asyncio
+async def test_ensure_ollama_ready_binds_configured_non_default_port(tmp_path, monkeypatch) -> None:
+    settings = replace(
+        _configured_settings(tmp_path),
+        llm_mode="ollama",
+        llm_enabled=True,
+        llm_base_url="http://127.0.0.1:9999/v1",
+    )
+    health = iter(
+        (
+            {"available": False, "status": "unavailable", "error": "offline"},
+            {"available": True, "status": "available", "error": ""},
+        )
+    )
+    started: list[str] = []
+
+    class StartingClient:
+        def __init__(self, _settings) -> None:
+            pass
+
+        async def health(self) -> dict:
+            return next(health)
+
+    class Models:
+        def __init__(self, _settings) -> None:
+            pass
+
+        def start_ollama(self, *, host: str = "") -> dict:
+            started.append(host)
+            return {"started": True, "pid": 123}
+
+    monkeypatch.setattr(cli, "LlmClient", StartingClient)
+    monkeypatch.setattr(cli, "LocalModelService", Models)
+
+    result = await cli._ensure_ollama_ready(settings)
+
+    assert started == ["127.0.0.1:9999"]
+    assert result["started"] is True

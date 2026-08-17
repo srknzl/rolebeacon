@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from rolebeacon.cli import main
 from rolebeacon.config import Settings
-from rolebeacon.setup import SetupService
+from rolebeacon.setup import LocalModelService, SetupService
 
 
 def _payload() -> dict:
@@ -65,3 +65,27 @@ def test_cli_port_override_updates_the_app_origin_allowlist(tmp_path, monkeypatc
     main()
 
     assert observed == {"host": "127.0.0.1", "port": 9911, "configured_port": 9911, "status_code": 200}
+
+
+def test_start_ollama_sets_requested_bind_host(tmp_path, monkeypatch) -> None:
+    settings = Settings.load(tmp_path)
+    observed: dict[str, object] = {}
+
+    class Process:
+        pid = 123
+
+    def popen(arguments, **options):
+        observed.update(arguments=arguments, options=options)
+        return Process()
+
+    monkeypatch.setattr("rolebeacon.setup.shutil.which", lambda _name: "/usr/local/bin/ollama")
+    monkeypatch.setattr("rolebeacon.setup.subprocess.Popen", popen)
+    monkeypatch.setenv("ROLEBEACON_TEST_ENV", "preserved")
+
+    result = LocalModelService(settings).start_ollama(host="127.0.0.1:9999")
+
+    assert observed["arguments"] == ["/usr/local/bin/ollama", "serve"]
+    environment = observed["options"]["env"]
+    assert environment["OLLAMA_HOST"] == "127.0.0.1:9999"
+    assert environment["ROLEBEACON_TEST_ENV"] == "preserved"
+    assert result["pid"] == 123
