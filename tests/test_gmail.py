@@ -147,6 +147,7 @@ def test_setup_page_and_gmail_api_expose_readiness_without_secrets(tmp_path, mon
 
     with TestClient(app) as client:
         page = client.get("/setup")
+        settings_page = client.get("/settings")
         saved = client.post("/api/setup/gmail/credentials", json={"client_config": desktop_client()})
         authorization = client.post(
             "/api/setup/gmail/authorize", json={"login_hint": "candidate@example.com"}
@@ -154,9 +155,18 @@ def test_setup_page_and_gmail_api_expose_readiness_without_secrets(tmp_path, mon
         tested = client.post("/api/setup/gmail/test")
 
     assert page.status_code == 200
+    assert 'id="setup-wizard"' in page.text
+    assert "Fill the important fields yourself" in page.text
+    assert "Ask an LLM for setup JSON" in page.text
+    assert "Curated source packs" in page.text
+    assert "Developer infrastructure" in page.text
+    assert 'class="source-pack-choice"' in page.text
     assert "LinkedIn Job Alerts through Gmail" in page.text
     assert 'id="linkedin-alerts-source"' in page.text
     assert "client-secret" not in page.text
+    assert settings_page.status_code == 200
+    assert 'id="setup-wizard"' not in settings_page.text
+    assert "Edit your RoleBeacon preferences" in settings_page.text
     assert saved.status_code == 200
     assert "client-secret" not in saved.text
     assert authorization.json() == {"authorization_url": "https://accounts.google.test/authorize"}

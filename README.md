@@ -68,8 +68,11 @@ uv run playwright install chromium
 uv run rolebeacon serve
 ```
 
-Open `http://127.0.0.1:8787`. The first-run wizard collects your profile and preferences.
-No source request or scheduled sync occurs until you review and activate setup.
+Open `http://127.0.0.1:8787`. The first-run wizard offers a guided manual path or a strict prompt for
+producing `SetupPayloadV1` JSON with an LLM of your choice. It then walks through the candidate profile,
+eligibility-critical authorization and mobility facts, optional LinkedIn/Gmail alerts, focused source-pack
+selection, optional scoring/application settings, and a final activation review. No source request or
+scheduled sync occurs until you review and activate setup.
 
 Run a readiness check at any time:
 
@@ -201,12 +204,13 @@ can implement the existing provider boundary without changing scoring or profile
 
 ## Candidate profile
 
-Setup supports basic form entry, a complete `CandidateProfileV1` JSON document, or a complete
-`SetupPayloadV1` document containing the profile, mobility, preferences, selected sources, and
-model settings. The wizard uses searchable country pickers backed by the ISO 3166-1 catalog,
-then stores the corresponding country codes for matching.
-It can also generate a review-only preference draft with an explicitly configured LLM, or copy a
-structured planning prompt for any LLM the candidate chooses. Neither path activates collection.
+Setup supports guided form entry, a complete `CandidateProfileV1` JSON document, or a complete
+`SetupPayloadV1` document containing the profile, mobility, preferences, selected sources, and model
+settings. The first step can copy a schema-backed prompt for any LLM the candidate chooses; its JSON-only
+result is validated locally and loaded into the same review flow. Source selection remains a later explicit
+step, so the prompt leaves sources disabled and activation false. The wizard uses searchable country pickers
+backed by the ISO 3166-1 catalog, then stores the corresponding country codes for matching. It can also
+generate a review-only preference draft with an explicitly configured LLM. Neither path activates collection.
 The public schema and CV-conversion prompt are available at:
 
 ```text
