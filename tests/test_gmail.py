@@ -11,6 +11,13 @@ from rolebeacon.app import create_app
 from rolebeacon.config import Settings
 from rolebeacon.gmail import GMAIL_LABEL, GmailOnboardingService
 
+# Rules-only mode is a complete product mode, so the documented `uv sync --extra dev` workflow must
+# stay green without the optional Gmail packages. CI installs the extra so these still run there.
+requires_gmail_extra = pytest.mark.skipif(
+    not GmailOnboardingService.dependency_available(),
+    reason="requires the optional gmail extra",
+)
+
 
 def desktop_client() -> dict:
     return {
@@ -55,6 +62,7 @@ def test_client_config_rejects_wrong_oauth_client_shapes(tmp_path, value, messag
         GmailOnboardingService(tmp_path).save_client_config(value)
 
 
+@requires_gmail_extra
 def test_authorization_url_uses_loopback_pkce_and_private_pending_state(tmp_path) -> None:
     service = GmailOnboardingService(tmp_path, port=9876)
     service.save_client_config(desktop_client())
@@ -70,6 +78,7 @@ def test_authorization_url_uses_loopback_pkce_and_private_pending_state(tmp_path
     assert stat.S_IMODE(service.pending_path.stat().st_mode) == stat.S_IRUSR | stat.S_IWUSR
 
 
+@requires_gmail_extra
 def test_authorization_callback_rejects_expired_or_replayed_state(tmp_path) -> None:
     service = GmailOnboardingService(tmp_path)
     service.save_client_config(desktop_client())
