@@ -173,6 +173,21 @@ def test_setup_page_and_gmail_api_expose_readiness_without_secrets(tmp_path, mon
     assert tested.json()["ready"] is True
 
 
+def test_hidden_wizard_steps_cannot_leak_the_activate_and_save_bar(tmp_path) -> None:
+    # .setup-actions sets display: flex, which outranks the hidden attribute the wizard uses to
+    # switch steps. Without an explicit opt-out the final activate-and-save bar stays on screen
+    # for all seven steps, and pressing it there dies in native validation of hidden required
+    # inputs without ever reaching the submit handler.
+    app = create_app(Settings.load(tmp_path))
+
+    with TestClient(app) as client:
+        page = client.get("/setup")
+        stylesheet = client.get("/static/style.css")
+
+    assert 'class="setup-actions wizard-panel" data-wizard-step="review"' in page.text
+    assert ".wizard-panel[hidden] { display: none; }" in stylesheet.text
+
+
 def test_gmail_credentials_api_rejects_web_clients_without_writing(tmp_path) -> None:
     app = create_app(Settings.load(tmp_path))
 

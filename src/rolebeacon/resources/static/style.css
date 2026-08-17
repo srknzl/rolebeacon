@@ -264,6 +264,10 @@ textarea { resize: vertical; }
 .wizard-review-row.is-warning { border-left: 4px solid var(--warning); background: var(--warning-bg); }
 .wizard-controls { position: sticky; bottom: 12px; z-index: 10; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 16px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-md); background: rgba(255, 255, 255, .96); box-shadow: var(--shadow-md); }
 .wizard-controls span { color: var(--muted); font-size: 13px; text-align: center; }
+/* The wizard hides steps with the hidden attribute, so every panel that sets its own display
+   value must opt back out - otherwise .setup-actions (display: flex) keeps the final
+   activate-and-save bar on screen during all seven steps. */
+.wizard-panel[hidden] { display: none; }
 label.checkbox { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 500; color: var(--ink); }
 label.checkbox input { min-width: auto; width: auto; margin: 0; }
 
