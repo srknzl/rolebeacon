@@ -9,7 +9,7 @@ from typing import Any
 from .domain import EligibilityResult, EligibilityStatus, ScoreResult
 from .profile import CONTINENT_COUNTRY_CODES, DEFAULT_SCORE_WEIGHTS, country_names_by_code
 
-SCORING_PROMPT_VERSION = "job-fit-v14"
+SCORING_PROMPT_VERSION = "job-fit-v15"
 
 # Ineligibility is a hard gate: no combination of fit signals may push a total above this cap.
 # LLM scoring is only ever invoked for eligible jobs (see sync.py), so every ineligible job's
@@ -33,6 +33,39 @@ DIMENSION_MAXIMUMS: dict[str, int] = dict(DEFAULT_SCORE_WEIGHTS)
 # The only place location_authorization is scored, for both providers - it is a pure lookup from
 # the deterministic eligibility gate, never a model judgment call. rule_score uses it directly;
 # llm.py's _normalize_score splices it into the model's dimensions before summing.
+# Recognized job-title seniority buckets, in priority order (first match wins when a title
+# names more than one, e.g. "Mid to Senior Engineer"). This is also the seniority picker's
+# vocabulary (see seniority_level_options) - a preference can only ever match a level this
+# extraction actually produces, so "mid" needs its own word-boundary check: an unguarded
+# substring match would fire on "Midwest", "Middleware", or "amid".
+SENIORITY_LEVELS: tuple[str, ...] = ("intern", "junior", "mid", "senior", "staff", "principal", "lead", "manager")
+_SENIORITY_LEVEL_LABELS = {
+    "intern": "Intern",
+    "junior": "Junior",
+    "mid": "Mid-level",
+    "senior": "Senior",
+    "staff": "Staff",
+    "principal": "Principal",
+    "lead": "Lead",
+    "manager": "Manager",
+}
+_MID_SENIORITY_PATTERN = re.compile(r"\bmid\b")
+
+
+def seniority_level_options() -> list[dict[str, str]]:
+    return [{"code": level, "label": _SENIORITY_LEVEL_LABELS[level]} for level in SENIORITY_LEVELS]
+
+
+def _title_seniority(title: str) -> str:
+    for level in SENIORITY_LEVELS:
+        if level == "mid":
+            if _MID_SENIORITY_PATTERN.search(title):
+                return level
+        elif level in title:
+            return level
+    return "unspecified"
+
+
 LOCATION_SCORES: dict[EligibilityStatus, int] = {
     EligibilityStatus.ELIGIBLE: 15,
     EligibilityStatus.UNKNOWN: 8,
@@ -653,10 +686,7 @@ def rule_score(
 
     seniority_score = 10
     preferred_seniority = {str(value).casefold() for value in preferences.get("preferred_seniority", [])}
-    title_seniority = next(
-        (level for level in ("intern", "junior", "senior", "staff", "principal", "lead", "manager") if level in title),
-        "unspecified",
-    )
+    title_seniority = _title_seniority(title)
     if preferred_seniority:
         seniority_score = 15 if title_seniority in preferred_seniority else 6
     elif title_seniority in {"intern", "junior"}:

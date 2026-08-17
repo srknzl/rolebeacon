@@ -23,7 +23,7 @@ from .database import JOB_SORTS, PIPELINE_COLUMNS, Database, JobFilters, company
 from .domain import CollectedJob, JobStatus, SourceConfig
 from .llm import LlmClient, LlmResponseRejected, LlmUnavailable
 from .profile import country_catalog, relocation_region_options
-from .scoring import INELIGIBLE_SCORE_CAP, dimension_metadata, location_requirement
+from .scoring import INELIGIBLE_SCORE_CAP, dimension_metadata, location_requirement, seniority_level_options
 from .services import ArtifactService, ProfileValidationError, cover_letter_recommendation
 from .setup import LocalModelService, SetupService
 from .source_catalog import SourceCatalog, SourceCatalogError
@@ -319,6 +319,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 source_catalog=source_catalog.view(),
                 countries=country_catalog(),
                 region_options=relocation_region_options(),
+                seniority_levels=seniority_level_options(),
                 editing=True,
                 saved=bool(saved),
                 company_search={
@@ -343,6 +344,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 source_catalog=source_catalog.view(),
                 countries=country_catalog(),
                 region_options=relocation_region_options(),
+                seniority_levels=seniority_level_options(),
             ),
         )
 
