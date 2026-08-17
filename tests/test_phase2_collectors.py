@@ -19,7 +19,6 @@ from rolebeacon.collectors import (
     description_blocks,
     plain_text,
     repair_text,
-    stable_alert_job_id,
 )
 from rolebeacon.domain import SourceConfig
 
@@ -287,10 +286,3 @@ async def test_smartrecruiters_detail_fetches_stay_in_listing_order() -> None:
 
     assert [job.source_job_id for job in jobs] == ["1", "2"]
     assert jobs[0].description == "Role 1"
-
-
-def test_alert_ids_are_stable_across_email_messages() -> None:
-    first = "https://www.linkedin.com/jobs/view/backend-engineer-123456/?trackingId=one"
-    second = "https://linkedin.com/jobs/view/123456?trackingId=two"
-
-    assert stable_alert_job_id(first) == stable_alert_job_id(second)

@@ -11,10 +11,9 @@
     <button type="button" data-wizard-target="start" aria-current="step"><span>1</span>Start</button>
     <button type="button" data-wizard-target="profile"><span>2</span>Profile</button>
     <button type="button" data-wizard-target="eligibility"><span>3</span>Eligibility</button>
-    <button type="button" data-wizard-target="alerts"><span>4</span>Job alerts</button>
-    <button type="button" data-wizard-target="sources"><span>5</span>Sources</button>
-    <button type="button" data-wizard-target="advanced"><span>6</span>Optional</button>
-    <button type="button" data-wizard-target="review"><span>7</span>Review</button>
+    <button type="button" data-wizard-target="sources"><span>4</span>Sources</button>
+    <button type="button" data-wizard-target="advanced"><span>5</span>Optional</button>
+    <button type="button" data-wizard-target="review"><span>6</span>Review</button>
   </nav>
   <section class="panel wizard-panel wizard-start" data-wizard-step="start" id="wizard-start">
     <p class="eyebrow">CHOOSE A STARTING POINT</p>
@@ -45,7 +44,6 @@
   <nav class="settings-quicknav settings-tab-panel" data-settings-panel="search" aria-label="Job search sections">
     <a href="#panel-profile">Profile</a>
     <a href="#panel-mobility">Mobility &amp; search</a>
-    <a href="#panel-linkedin">LinkedIn alerts</a>
     <a href="#panel-sources">Sources</a>
     <a href="#panel-scoring">Scoring</a>
     <a href="#panel-company-research">Company research</a>
@@ -103,47 +101,6 @@
     </details>{% endif %}
   </section>
 
-  {% set linkedin_source = sources|selectattr('id', 'equalto', 'linkedin-alerts')|first %}
-  <section class="panel settings-tab-panel wizard-panel source-onboarding" data-settings-panel="search" data-wizard-step="alerts" id="panel-linkedin" aria-labelledby="gmail-onboarding-heading">
-    <div>
-      <p class="eyebrow">OPTIONAL USER-OWNED ALERTS</p>
-      <h2 id="gmail-onboarding-heading">LinkedIn Job Alerts through Gmail</h2>
-      <p>Skip this step if you only want public sources. RoleBeacon never signs in to or scrapes LinkedIn. It reads only messages in the private Gmail label <code>Job Alerts</code>, extracts the job links LinkedIn sent to you, and keeps the original alert as provenance.</p>
-    </div>
-    {% if not editing %}<div class="wizard-guidance"><strong>Optional:</strong> this can be completed now or later in Settings. Enabling it requires a verified Gmail connection and the exact label below.</div>{% endif %}
-    <label><input class="source-choice" id="linkedin-alerts-source" type="checkbox" value="linkedin-alerts" {% if linkedin_source and linkedin_source.enabled %}checked{% endif %}> Enable LinkedIn Job Alerts via Gmail</label>
-    <div id="gmail-connection-status" class="model-health model-health-rules" role="status" aria-live="polite"></div>
-    <ol class="onboarding-steps">
-      <li>
-        <strong>Install optional Gmail support.</strong>
-        <span id="gmail-dependency-help"><code>uv sync --extra dev --extra gmail --locked</code></span>
-      </li>
-      <li>
-        <strong>Import a Google Desktop OAuth client.</strong>
-        <p class="muted">Create a Desktop app client in your own Google Cloud project, then select its downloaded JSON. The client configuration is copied into the private RoleBeacon application-data directory and is never returned by the API.</p>
-        <input id="gmail-client-file" type="file" accept="application/json,.json" aria-label="Google Desktop OAuth client JSON">
-        <button id="gmail-import-client" class="button" type="button">Import client JSON</button>
-      </li>
-      <li>
-        <strong>Authorize read-only Gmail access.</strong>
-        <div class="form-grid compact-grid">
-          <label>Google account hint <input id="gmail-login-hint" type="email" autocomplete="email" placeholder="you@gmail.com" value="{{ gmail.account_email }}"></label>
-        </div>
-        <p><button id="gmail-connect" class="button button-primary" type="button">Connect or reconnect Gmail</button> <button id="gmail-test" class="button" type="button">Test account and label</button></p>
-      </li>
-      <li>
-        <strong>Create the private Gmail label and filter.</strong>
-        <p class="muted">Create a label named exactly <code>Job Alerts</code> and a filter for <code>from:(jobalerts-noreply@linkedin.com)</code>. Applying the label is enough; do not archive, delete, forward, or mark the messages read.</p>
-        <p><a href="https://mail.google.com/mail/u/0/#settings/filters" target="_blank" rel="noopener">Open Gmail filters ↗</a></p>
-      </li>
-      <li>
-        <strong>Create LinkedIn alerts.</strong>
-        <p class="muted">LinkedIn supports up to 20 alerts. Keep the searches focused and enable email delivery so the messages reach the label above.</p>
-        <p><a href="https://www.linkedin.com/jobs/jam" target="_blank" rel="noopener">Open LinkedIn job alerts ↗</a></p>
-      </li>
-    </ol>
-  </section>
-
   <section class="panel settings-tab-panel wizard-panel" data-settings-panel="search" data-wizard-step="sources" id="panel-sources">
     <h2>Job sources</h2>
     <p>Selected sources are saved now and contacted only after activation.</p>
@@ -165,7 +122,7 @@
     {% endif %}
     <div class="checkbox-row">
       {% for source in sources %}
-        {% if source.kind not in ['adzuna', 'jooble', 'serpapi', 'gmail_linkedin', 'google_careers', 'amazon_jobs'] %}
+        {% if source.kind not in ['adzuna', 'jooble', 'serpapi', 'google_careers', 'amazon_jobs'] %}
         {% set source_help = "Public Europe-focused jobs feed, useful for relocation opportunities." if source.id == 'arbeitnow' else "Arbeitnow roles that explicitly advertise visa sponsorship." if source.id == 'arbeitnow-sponsored' else "Public remote engineering jobs feed; target roles are applied during ingestion." if source.kind == 'jobicy' else "Remote software-development feed; your target roles filter collected jobs." if source.kind == 'remotive' else "Remote job board feed; country eligibility and target roles are checked after collection." if source.kind == 'remoteok' else "Remote job board API; country eligibility and target roles are checked after collection." if source.kind == 'himalayas' else "Programming feed; your target roles filter collected jobs after collection." if source.kind == 'wwr' else "A public source contacted only after setup is activated." %}
         <label title="{{ source_help }}"><input class="source-choice" type="checkbox" value="{{ source.id }}"> {{ source.name }} {{ tip(source_help) }}</label>
         {% endif %}
@@ -281,7 +238,7 @@
   {% if not editing %}
   <div class="wizard-controls">
     <button id="wizard-back" class="button" type="button">Back</button>
-    <span id="wizard-position" aria-live="polite">Step 1 of 7</span>
+    <span id="wizard-position" aria-live="polite">Step 1 of 6</span>
     <button id="wizard-next" class="button button-primary" type="button">Continue</button>
   </div>
   {% endif %}
@@ -291,7 +248,6 @@
   let savedRelocationTargets = [];
   let setupClearancePolicy = {};
   let removeLlmKey = false;
-  let gmailReady = false;
   const selectedPackSourceIds = new Map();
   let messageTimer;
   const message = (text, ok = false) => {
@@ -561,43 +517,6 @@
   document.getElementById("test-model").addEventListener("click", async () => { try { const data = modelConfig(); const value = await post("/api/setup/model/test", data); const text = value.ok ? `Connected to ${data.base_url}. ${value.model_found ? `Model ${data.model} is ready.` : `The endpoint did not list ${data.model}.`}` : value.error; showModelConnection(text, value.ok && value.model_found ? "success" : "warning"); message(text, value.ok && value.model_found); } catch (error) { showModelConnection(error.message, "warning"); message(error.message); } });
   document.getElementById("remove-llm-key").addEventListener("click", () => { removeLlmKey = true; document.getElementById("llm-api-key").value = ""; document.getElementById("llm-api-key").placeholder = "Saved key will be removed when you save"; message("The saved model API key will be removed when you save preferences.", true); });
   document.getElementById("save-company-search").addEventListener("click", async () => { try { const value = await post("/api/setup/company-search", {api_key: document.getElementById("company-search-api-key").value}); const status = document.getElementById("company-search-status"); status.className = `model-health ${value.configured ? "model-health-success" : "model-health-rules"}`; status.textContent = value.configured ? "Brave Search enrichment is configured." : "Brave Search disabled; no-key company research remains active."; document.getElementById("company-search-api-key").value = ""; message("Company research configuration saved.", true); } catch (error) { message(error.message); } });
-  const gmailStatus = document.getElementById("gmail-connection-status");
-  const renderGmailStatus = value => {
-    gmailReady = Boolean(value.ready);
-    const text = !value.dependency_available ? "Gmail support is not installed yet. Run the command in step 1, restart RoleBeacon, then return here."
-      : !value.credentials_configured ? "Import a Google Desktop OAuth client JSON to continue."
-      : !value.authorized ? "OAuth client configured. Connect the Gmail account next."
-      : value.reauthorization_required ? "Gmail authorization expired or was revoked. Reconnect the account."
-      : !value.label_found ? `Gmail is authorized${value.account_email ? ` as ${value.account_email}` : ""}, but the exact ${value.label} label has not been verified.`
-      : `Ready: ${value.account_email || "Gmail"} is connected and the ${value.label} label exists.`;
-    gmailStatus.className = `model-health ${value.ready ? "model-health-success" : "model-health-warning"}`;
-    gmailStatus.textContent = text;
-    document.getElementById("gmail-dependency-help").hidden = value.dependency_available;
-    if (value.account_email) document.getElementById("gmail-login-hint").value = value.account_email;
-  };
-  renderGmailStatus({{ gmail|tojson }});
-  document.getElementById("gmail-import-client").addEventListener("click", async () => {
-    try {
-      const file = document.getElementById("gmail-client-file").files[0];
-      if (!file) throw new Error("Choose the downloaded Google Desktop OAuth client JSON first.");
-      const value = await post("/api/setup/gmail/credentials", {client_config: JSON.parse(await file.text())});
-      renderGmailStatus(value);
-      message("Google Desktop OAuth client imported into private local storage.", true);
-    } catch (error) { message(`Could not import the OAuth client: ${error.message}`); }
-  });
-  document.getElementById("gmail-connect").addEventListener("click", async () => {
-    try {
-      const value = await post("/api/setup/gmail/authorize", {login_hint: document.getElementById("gmail-login-hint").value.trim()});
-      window.location.assign(value.authorization_url);
-    } catch (error) { message(error.message); }
-  });
-  document.getElementById("gmail-test").addEventListener("click", async () => {
-    try {
-      const value = await post("/api/setup/gmail/test");
-      renderGmailStatus(value);
-      message(value.ready ? "Gmail and the Job Alerts label are ready." : "Gmail connected, but create the exact Job Alerts label before enabling collection.", value.ready);
-    } catch (error) { message(error.message); }
-  });
   document.querySelectorAll(".model-pick").forEach(button => button.addEventListener("click", () => {
     document.getElementById("llm-model").value = button.dataset.model;
     document.getElementById("llm-mode").value = "ollama";
@@ -609,7 +528,7 @@
     try { await navigator.clipboard.writeText(command); message(`Copied: ${command}`, true); }
     catch (error) { message(`Could not copy automatically. Run this on your Ollama host: ${command}`); }
   }));
-  const wizardSteps = ["start", "profile", "eligibility", "alerts", "sources", "advanced", "review"];
+  const wizardSteps = ["start", "profile", "eligibility", "sources", "advanced", "review"];
   let wizardStepIndex = 0;
   let wizardFurthestStep = 0;
   const renderWizardReview = () => {
@@ -617,13 +536,11 @@
     if (!list) return;
     const packCount = document.querySelectorAll(".source-pack-choice:checked").length;
     const directSourceCount = document.querySelectorAll(".source-choice:checked").length;
-    const linkedinEnabled = document.getElementById("linkedin-alerts-source").checked;
     const items = [
       ["Candidate", document.getElementById("name").value.trim() || "Missing name", Boolean(document.getElementById("name").value.trim())],
       ["Target roles", lines("target-roles").join(", ") || "No target roles", lines("target-roles").length > 0],
       ["Work authorization", lines("authorizations").join(", ") || "No authorized country", lines("authorizations").length > 0],
       ["Relocation", lines("relocation-targets").join(", ") || "No relocation targets — local/remote search only", true],
-      ["LinkedIn alerts", linkedinEnabled ? (gmailReady ? "Enabled and Gmail verified" : "Enabled but Gmail is not ready") : "Skipped — can be connected later", !linkedinEnabled || gmailReady],
       ["Sources", `${packCount} pack${packCount === 1 ? "" : "s"} and ${directSourceCount} direct source${directSourceCount === 1 ? "" : "s"}`, packCount + directSourceCount > 0],
       ["Scoring", document.getElementById("llm-mode").value === "rules" ? "Rules only" : `${document.getElementById("llm-mode").value}: ${document.getElementById("llm-model").value}`, true],
     ];
@@ -650,9 +567,6 @@
         if (!lines("authorizations").length) throw new Error("Add at least one country where you can legally work today.");
         lines("authorizations").forEach(value => countryCode(value, "Authorized country code"));
         relocationTargets();
-      }
-      if (step === "alerts" && document.getElementById("linkedin-alerts-source").checked && !gmailReady) {
-        throw new Error("Test Gmail and the Job Alerts label, or disable LinkedIn alerts and connect them later in Settings.");
       }
       if (step === "sources" && !document.querySelector(".source-choice:checked, .source-pack-choice:checked")) {
         throw new Error("Choose at least one focused source pack or public source.");
@@ -709,7 +623,7 @@
     const form = event.currentTarget;
     try {
       if (document.getElementById("setup-wizard")) {
-        if (!["profile", "eligibility", "alerts", "sources", "advanced"].every(validateWizardStep)) return;
+        if (!["profile", "eligibility", "sources", "advanced"].every(validateWizardStep)) return;
         await prepareSelectedSourcePacks();
       }
       const value = await post(form.dataset.completeUrl || "/api/setup/complete", payload());

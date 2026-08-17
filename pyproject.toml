@@ -21,10 +21,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-gmail = [
-  "google-api-python-client>=2.176,<3",
-  "google-auth-oauthlib>=1.2,<2",
-]
 dev = [
   "build>=1.2,<2",
   "cyclonedx-bom>=7,<8",

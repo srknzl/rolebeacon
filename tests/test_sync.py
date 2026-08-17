@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -365,38 +364,3 @@ async def test_process_lock_prevents_two_refresh_processes_from_racing(tmp_path)
         owner._release_process_lock(handle)
 
     assert result.error == "sync_already_running"
-
-
-async def test_sync_injects_application_data_directory_into_credential_collectors(tmp_path, monkeypatch) -> None:
-    payload = {
-        "candidate": {"schema_version": "1.0", "name": "Candidate", "location": {"country_code": "TR", "country_name": "Türkiye"}},
-        "mobility": {"schema_version": "1.0", "current_country_code": "TR", "work_authorizations": ["TR"]},
-        "preferences": {"schema_version": "1.0", "target_roles": ["Backend Engineer"]},
-        "enabled_source_ids": ["linkedin-alerts"], "llm": {"mode": "rules"}, "activate": True,
-    }
-    base = Settings.load(tmp_path)
-    # Enabling the Gmail source now requires a verified connection, so record one before setup.
-    base.data_dir.mkdir(parents=True, exist_ok=True)
-    (base.data_dir / "gmail-token.json").write_text("{}", encoding="utf-8")
-    (base.data_dir / "gmail-connection.json").write_text(
-        json.dumps({"account_email": "candidate@example.com", "label_found": True, "reauthorization_required": False}),
-        encoding="utf-8",
-    )
-    settings = SetupService(base).complete(payload)
-    database = Database(settings.database_path)
-    database.initialize()
-    seen: list[SourceConfig] = []
-
-    class Collector:
-        async def collect(self, _since, _cursor="") -> CollectionBatch:
-            return CollectionBatch(jobs=[])
-
-    def create(config, _client):
-        seen.append(config)
-        return Collector()
-
-    monkeypatch.setattr("rolebeacon.sync.create_collector", create)
-
-    await SyncService(settings, database, LlmClient(settings)).run(force=True)
-
-    assert seen[0].options["data_dir"] == str(settings.data_dir)

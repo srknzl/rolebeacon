@@ -468,6 +468,40 @@ def test_setup_shows_searchable_country_catalog_and_rules_model_status(tmp_path)
     assert model_status.json()["status"] == "rules_only"
 
 
+def test_setup_and_settings_pages_render_wizard_and_source_packs(tmp_path) -> None:
+    app = create_app(Settings.load(tmp_path))
+
+    with TestClient(app) as client:
+        page = client.get("/setup")
+        settings_page = client.get("/settings")
+
+    assert page.status_code == 200
+    assert 'id="setup-wizard"' in page.text
+    assert "Fill the important fields yourself" in page.text
+    assert "Ask an LLM for setup JSON" in page.text
+    assert "Curated source packs" in page.text
+    assert "Developer infrastructure" in page.text
+    assert 'class="source-pack-choice"' in page.text
+    assert settings_page.status_code == 200
+    assert 'id="setup-wizard"' not in settings_page.text
+    assert "Edit your RoleBeacon preferences" in settings_page.text
+
+
+def test_hidden_wizard_steps_cannot_leak_the_activate_and_save_bar(tmp_path) -> None:
+    # .setup-actions sets display: flex, which outranks the hidden attribute the wizard uses to
+    # switch steps. Without an explicit opt-out the final activate-and-save bar stays on screen
+    # for every wizard step, and pressing it there dies in native validation of hidden required
+    # inputs without ever reaching the submit handler.
+    app = create_app(Settings.load(tmp_path))
+
+    with TestClient(app) as client:
+        page = client.get("/setup")
+        stylesheet = client.get("/static/style.css")
+
+    assert 'class="setup-actions wizard-panel" data-wizard-step="review"' in page.text
+    assert ".wizard-panel[hidden] { display: none; }" in stylesheet.text
+
+
 def test_setup_validation_rejects_unknown_iso_country_codes(tmp_path) -> None:
     app = create_app(Settings.load(tmp_path))
     invalid = setup_payload()

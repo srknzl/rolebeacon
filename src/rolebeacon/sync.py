@@ -296,7 +296,6 @@ class SyncService:
         since = self._since(state.get("last_successful_sync_at"))
         try:
             personalized = personalize_source(source, search_profile)
-            personalized.options = {**personalized.options, "data_dir": str(self.settings.data_dir)}
             collector = create_collector(personalized, client)
             batch = as_batch(await collector.collect(since, state.get("cursor", "")))
             if batch.provider_total is not None and (

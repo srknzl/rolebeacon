@@ -70,8 +70,8 @@ uv run rolebeacon serve
 
 Open `http://127.0.0.1:8787`. The first-run wizard offers a guided manual path or a strict prompt for
 producing `SetupPayloadV1` JSON with an LLM of your choice. It then walks through the candidate profile,
-eligibility-critical authorization and mobility facts, optional LinkedIn/Gmail alerts, focused source-pack
-selection, optional scoring/application settings, and a final activation review. No source request or
+eligibility-critical authorization and mobility facts, focused source-pack selection, optional
+scoring/application settings, and a final activation review. No source request or
 scheduled sync occurs until you review and activate setup.
 
 Run a readiness check at any time:
@@ -308,14 +308,10 @@ Built-in source adapters include:
 - Greenhouse, Lever, Ashby, SmartRecruiters, Workday, and Personio public career endpoints
 - Google Careers and Amazon Jobs first-party public-site connectors
 - optional Adzuna, Jooble, and SerpApi adapters
-- optional LinkedIn Job Alert ingestion through a user-owned Gmail label
 
-Only sources selected in setup are enabled. LinkedIn authenticated pages are never scraped.
+Only sources selected in setup are enabled. LinkedIn authenticated pages are never scraped, and
+RoleBeacon has no LinkedIn connector at all.
 See [docs/data-sources.md](docs/data-sources.md) before adding or enabling a source.
-
-For LinkedIn alerts, install the optional dependencies with `uv sync --extra gmail`, then use the
-Sources section of Setup or Settings to import a Google Desktop OAuth client, authorize read-only Gmail
-access, and verify the private `Job Alerts` label. Scheduled collection never launches an OAuth browser.
 
 The Sources page also accepts a public company careers URL. RoleBeacon detects the connector, calls only
 an allow-listed provider endpoint, previews sample jobs, and saves the source after confirmation. Google
@@ -408,7 +404,7 @@ uv run rolebeacon migrate --from /path/to/job-radar
 
 The importer copies the database and application artifacts when safe, records checksums, and
 maps non-secret `JOB_RADAR_*` settings for review. It never moves source data and never imports
-Gmail tokens, browser profiles, or LLM API keys. Reauthorize Gmail and browser sessions manually.
+browser profiles or LLM API keys. Reauthorize browser sessions manually.
 
 ## HTTP API
 
@@ -421,11 +417,6 @@ Core endpoints are listed below; the running app exposes the complete interactiv
 - `POST /api/setup/plan`
 - `POST /api/setup/model/discover`
 - `POST /api/setup/model/test`
-- `GET /api/setup/gmail/status`
-- `POST /api/setup/gmail/credentials`
-- `POST /api/setup/gmail/authorize`
-- `GET /api/setup/gmail/callback`
-- `POST /api/setup/gmail/test`
 - `POST /api/setup/complete`
 - `POST /api/sync`
 - `GET /api/sync/status`
@@ -462,8 +453,8 @@ uv run python -m build
 
 ## Remaining roadmap
 
-The web setup flow—including read-only Gmail/LinkedIn alert onboarding—schema-driven headless import,
-and one-command ranked job export are complete. A separate interactive terminal questionnaire remains
+The web setup flow, schema-driven headless import, and one-command ranked job export are complete.
+A separate interactive terminal questionnaire remains
 deferred until it can share the same accessible review semantics and receive terminal UX coverage; see
 [docs/product-backlog.md](docs/product-backlog.md). Other remaining work is:
 

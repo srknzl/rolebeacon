@@ -207,14 +207,5 @@
     "monthly_request_limit": 0,
     "trust_priority": 45,
     "ingestion_filter": true
-  },
-  {
-    "id": "linkedin-alerts",
-    "kind": "gmail_linkedin",
-    "name": "LinkedIn Job Alerts via Gmail",
-    "enabled": false,
-    "min_sync_interval_seconds": 900,
-    "trust_priority": 45,
-    "ingestion_filter": true
   }
 ]

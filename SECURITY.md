@@ -25,7 +25,7 @@ assessment and an upstream remediation plan.
   browser after setup.
 - Browser automation prepares forms but cannot submit them.
 - External résumé commands run as argument arrays without a shell.
-- Gmail OAuth tokens and persistent browser sessions are not imported from legacy installations.
+- Persistent browser sessions are not imported from legacy installations.
 
 Users remain responsible for reviewing source terms, model endpoints, generated documents, and
 every application answer before submission.

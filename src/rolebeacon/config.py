@@ -169,6 +169,8 @@ class Settings:
 
     def _merge_default_sources(self) -> None:
         """Add newly shipped sources without changing a user's existing enablement choices."""
+        from .collectors import COLLECTORS
+
         defaults = _read_json(self.resource_dir / "config" / "sources.json", [])
         current = _read_json(self.source_config_path, [])
         if not current:
@@ -176,7 +178,10 @@ class Settings:
             return
         current_by_id = {str(item.get("id", "")): item for item in current if isinstance(item, dict)}
         merged = [{**item, **current_by_id.pop(str(item.get("id", "")), {})} for item in defaults]
-        merged.extend(current_by_id.values())
+        # A source instance whose collector kind was retired (e.g. a removed feature) can never
+        # sync again; drop it here instead of leaving it to surface as a permanently-broken,
+        # confusingly-labeled entry in the source list.
+        merged.extend(item for item in current_by_id.values() if item.get("kind") in COLLECTORS)
         if merged != current:
             _write_private_json(self.source_config_path, merged)
 

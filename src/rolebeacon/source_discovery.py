@@ -125,7 +125,7 @@ def detect_source(careers_url: str, company: str = "") -> SourceConfig:
     if host in custom_sites:
         raise SourceDiscoveryError(
             f"{custom_sites[host]} uses a company-specific careers system. "
-            "RoleBeacon needs a dedicated first-party connector for this URL; LinkedIn alerts can cover it meanwhile."
+            "RoleBeacon needs a dedicated first-party connector for this URL."
         )
     raise SourceDiscoveryError(
         "This careers URL is not a supported public ATS board. Use a Greenhouse, Lever, Ashby, "

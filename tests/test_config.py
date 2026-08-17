@@ -22,6 +22,26 @@ def test_atomic_json_write_preserves_previous_generation_when_replace_fails(tmp_
     assert json.loads(settings.search_profile_path.read_text())["target_roles"] == ["Backend Engineer"]
 
 
+def test_merge_default_sources_drops_instances_with_a_retired_collector_kind(tmp_path) -> None:
+    # A source instance whose collector was removed (e.g. a retired feature) can never sync again;
+    # ensure_directories() must prune it instead of leaving a permanently-broken entry behind.
+    settings = Settings.load(tmp_path)
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    settings.source_config_path.write_text(
+        json.dumps(
+            [
+                {"id": "orphaned-source", "kind": "no_longer_supported", "name": "Orphan", "enabled": True},
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    settings.ensure_directories()
+
+    persisted = json.loads(settings.source_config_path.read_text())
+    assert all(item["id"] != "orphaned-source" for item in persisted)
+
+
 def test_save_search_profile_updates_the_manifest_source_of_truth(tmp_path) -> None:
     settings = Settings.load(tmp_path)
     settings.ensure_directories()

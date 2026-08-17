@@ -11,7 +11,7 @@ an LLM must never be required for collection, deterministic scoring, or setup.
 
 ## Architecture
 
-- `src/rolebeacon/collectors.py` contains public ATS, feed, and user-owned alert adapters.
+- `src/rolebeacon/collectors.py` contains public ATS and feed adapters.
 - `src/rolebeacon/sync.py` owns startup catch-up, overlap windows, source isolation, and scoring.
 - `src/rolebeacon/scoring.py` owns deterministic eligibility and generated-strategy ranking.
 - `src/rolebeacon/profile.py` owns versioned public candidate, mobility, and preference schemas.
@@ -27,7 +27,7 @@ an LLM must never be required for collection, deterministic scoring, or setup.
   on-demand generated artifacts (e.g. cover letters), which are written in the job
   posting's own language.
 - Never automate a final application submission. The user must review and submit.
-- Do not scrape authenticated LinkedIn pages. LinkedIn data may enter through user-owned alerts.
+- Do not scrape authenticated LinkedIn pages. RoleBeacon currently has no LinkedIn ingestion path.
 - Keep profiles, generated artifacts, browser sessions, OAuth tokens, secrets, and SQLite files
   in the ignored operating-system application-data directory.
 - Do not contact external sources before setup is explicitly activated.

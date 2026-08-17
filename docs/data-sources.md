@@ -58,36 +58,16 @@ Connect APIs are restricted partner integrations for ATS vendors, job distributo
 customers. They publish employer jobs to LinkedIn or connect applications; they do not provide a
 self-service API for a job seeker to search and download LinkedIn's corpus.
 
-RoleBeacon therefore does not log into or scrape LinkedIn. The supported path is:
-
-1. Create daily LinkedIn Job Alerts from searches derived from your RoleBeacon preferences.
-2. Deliver the alerts by email and apply the private Gmail label `Job Alerts`.
-3. Enable the read-only Gmail collector.
-4. Ingest alert URLs and summaries, deduplicate them, and score them with reduced confidence when
-   the email does not contain the full description.
-5. Open the original posting for final review and application.
-
-LinkedIn currently allows up to 20 job alerts. It officially supports uppercase `AND`, `OR`, and
-`NOT`, exact phrases in quotes, and parentheses. Company-page alerts are useful for high-priority
-employers.
-
-The web setup wizard owns the Gmail onboarding flow. Install the optional `gmail` package extra,
-import a Desktop OAuth client JSON from a user-owned Google Cloud project, authorize the account, and
-test that the exact `Job Alerts` label exists before relying on the collector. Authorization uses a
-PKCE-protected loopback callback and requests only the Gmail read-only scope. Scheduled collection never
-opens an OAuth browser; missing or expired authorization fails only the Gmail source and directs the user
-back to Settings.
-
-Create a Gmail filter for `from:(jobalerts-noreply@linkedin.com)` that applies the exact `Job Alerts`
-label. The filter does not need to archive, delete, forward, or mark messages read. RoleBeacon verifies
-the account and label but deliberately does not request Gmail settings permissions to create the filter.
+RoleBeacon therefore does not log into or scrape LinkedIn, and has no LinkedIn ingestion path. An
+earlier revision read LinkedIn Job Alert emails through a user-owned Gmail label, but a digest email
+carries only a handful of links per message with no per-job description or company name recoverable
+without fetching LinkedIn's authenticated pages, which the no-scraping rule forbids. That collector
+was removed; use LinkedIn's own Job Alerts UI directly rather than through RoleBeacon.
 
 Official references:
 
 - [LinkedIn Job Posting API overview](https://learn.microsoft.com/en-us/linkedin/talent/job-postings/api/overview)
-- [LinkedIn Boolean search](https://www.linkedin.com/help/linkedin/answer/a524335/)
 - [LinkedIn Job Alerts](https://www.linkedin.com/help/linkedin/answer/a511279/)
-- [LinkedIn job filters](https://www.linkedin.com/help/linkedin/answer/a511259/)
 
 ## Recommended additions
 
@@ -116,11 +96,6 @@ Advanced source definitions may override `snapshot_drop_ratio` and
 baseline, pending confirmation, warning, and any eventual job deactivations are persisted
 transactionally. A job remains active while any active source still reports it, and provenance is
 preserved during reconciliation.
-
-Gmail OAuth client configuration and tokens are stored under the configured operating-system
-application-data directory. OAuth transaction state and token refresh use atomic replacement and
-owner-only file permissions. Authenticated LinkedIn pages are never fetched; only user-owned alert
-messages may supply LinkedIn job URLs and summaries.
 
 Official provider references:
 

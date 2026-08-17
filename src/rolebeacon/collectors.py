@@ -9,7 +9,6 @@ from abc import ABC, abstractmethod
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
-from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urljoin, urlsplit
 from xml.etree import ElementTree
@@ -17,7 +16,6 @@ from xml.etree import ElementTree
 import httpx
 
 from .domain import CollectedJob, CollectionBatch, SourceConfig
-from .gmail import GMAIL_LABEL, GmailOnboardingService
 from .source_discovery import amazon_location_matches, amazon_search_params, google_result_links
 
 USER_AGENT = "RoleBeacon/0.2 (+https://github.com/srknzl/rolebeacon)"
@@ -785,7 +783,7 @@ class GoogleCareersCollector(Collector):
                 jobs.append(
                     CollectedJob(
                         source=self.config.id,
-                        source_job_id=identifier_match.group(1) if identifier_match else stable_alert_job_id(url),
+                        source_job_id=identifier_match.group(1) if identifier_match else _stable_job_id_from_url(url),
                         title=title,
                         company=self.config.company or "Google",
                         location=detail["location"],
@@ -798,6 +796,13 @@ class GoogleCareersCollector(Collector):
         else:
             truncated = True
         return CollectionBatch(jobs=jobs, requests_made=requests, attribution="Google Careers", truncated=truncated)
+
+
+def _stable_job_id_from_url(url: str) -> str:
+    # Fallback source_job_id for the rare listing whose URL doesn't carry a numeric job ID.
+    parts = urlsplit(html.unescape(url))
+    normalized = f"{parts.netloc.casefold()}{parts.path.rstrip('/')}"
+    return base64.urlsafe_b64encode(normalized.encode()).decode().rstrip("=")
 
 
 # Some teams (DeepMind, Ads, Pixel...) prepend an "about us" blurb that itself mentions "Google"
@@ -1124,113 +1129,6 @@ class SerpApiCollector(Collector):
         return CollectionBatch(jobs=jobs, provider_total=len(jobs), requests_made=1)
 
 
-class GmailLinkedInCollector(Collector):
-    """Reads only a configured Gmail label; it never logs into a job site."""
-
-    async def collect(self, since: datetime, cursor: str = "") -> list[CollectedJob]:
-        return await asyncio.to_thread(self._collect_sync, since)
-
-    def _collect_sync(self, since: datetime) -> list[CollectedJob]:
-        configured_data_dir = str(self.config.options.get("data_dir") or "").strip()
-        if not configured_data_dir:
-            raise RuntimeError("Gmail collector requires the configured application-data directory")
-        data_dir = Path(configured_data_dir).expanduser()
-        service = GmailOnboardingService(data_dir).authorized_service()
-        label = self.config.options.get("label") or os.getenv("GMAIL_LABEL", GMAIL_LABEL)
-        query = f'label:"{label}" after:{int(since.timestamp())}'
-        page_token = None
-        message_refs: list[dict[str, Any]] = []
-        while True:
-            message_list = service.users().messages().list(
-                userId="me", q=query, maxResults=100, pageToken=page_token
-            ).execute()
-            message_refs.extend(message_list.get("messages", []))
-            page_token = message_list.get("nextPageToken")
-            if not page_token:
-                break
-        result = []
-        for message_ref in message_refs:
-            message = service.users().messages().get(userId="me", id=message_ref["id"], format="full").execute()
-            body = _gmail_body(message.get("payload", {}))
-            urls = extract_job_urls(body)
-            subject = next(
-                (header["value"] for header in message.get("payload", {}).get("headers", []) if header["name"].casefold() == "subject"),
-                "LinkedIn job alert",
-            )
-            for url in dict.fromkeys(urls):
-                clean_url = html.unescape(url).rstrip(".,)")
-                result.append(
-                    CollectedJob(
-                        source=self.config.id,
-                        source_job_id=stable_alert_job_id(clean_url),
-                        title=subject,
-                        company=_alert_company(clean_url),
-                        location="",
-                        description=plain_text(body)[:8000],
-                        url=clean_url,
-                        apply_url=clean_url,
-                        published_at=parse_datetime(int(message.get("internalDate", "0"))),
-                        metadata={"gmail_message_id": message_ref["id"]},
-                    )
-                )
-        return result
-
-
-def extract_job_urls(body: str) -> list[str]:
-    return re.findall(
-        r"https?://(?:www\.)?(?:"
-        r"linkedin\.com/(?:comm/)?jobs/view|"
-        r"google\.com/about/careers/applications/jobs/results|"
-        r"careers\.google\.com/jobs/results|"
-        r"jobs\.careers\.microsoft\.com/global/en/job|"
-        r"amazon\.jobs/(?:en/)?jobs|"
-        r"metacareers\.com/jobs|"
-        r"jobs\.apple\.com/[^\s/]+/details"
-        r")/[^\s<>\"']+",
-        html.unescape(body),
-        re.IGNORECASE,
-    )
-
-
-def stable_alert_job_id(url: str) -> str:
-    clean = html.unescape(url)
-    for pattern in (
-        r"linkedin\.com/(?:comm/)?jobs/view/(?:[^/?#]*-)?(\d+)",
-        r"microsoft\.com/global/en/job/(\d+)",
-        r"amazon\.jobs/(?:en/)?jobs/(\d+)",
-        r"metacareers\.com/jobs/(\d+)",
-    ):
-        match = re.search(pattern, clean, re.IGNORECASE)
-        if match:
-            host = urlsplit(clean).netloc.casefold().removeprefix("www.")
-            return f"{host}:{match.group(1)}"
-    parts = urlsplit(clean)
-    normalized = f"{parts.netloc.casefold()}{parts.path.rstrip('/')}"
-    return base64.urlsafe_b64encode(normalized.encode()).decode().rstrip("=")
-
-
-def _alert_company(url: str) -> str:
-    host = httpx.URL(url).host.casefold()
-    for needle, company in (
-        ("google", "Google"),
-        ("microsoft", "Microsoft"),
-        ("amazon", "Amazon"),
-        ("metacareers", "Meta"),
-        ("apple", "Apple"),
-        ("linkedin", "LinkedIn alert"),
-    ):
-        if needle in host:
-            return company
-    return "Job alert"
-
-
-def _gmail_body(payload: dict[str, Any]) -> str:
-    body = (payload.get("body") or {}).get("data")
-    if body:
-        return base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)).decode(errors="replace")
-    return "\n".join(_gmail_body(part) for part in payload.get("parts", []))
-
-
 COLLECTORS: dict[str, type[Collector]] = {
     "greenhouse": GreenhouseCollector,
     "lever": LeverCollector,
@@ -1249,7 +1147,6 @@ COLLECTORS: dict[str, type[Collector]] = {
     "adzuna": AdzunaCollector,
     "jooble": JoobleCollector,
     "serpapi": SerpApiCollector,
-    "gmail_linkedin": GmailLinkedInCollector,
 }
 
 
