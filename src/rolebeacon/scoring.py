@@ -9,7 +9,7 @@ from typing import Any
 from .domain import EligibilityResult, EligibilityStatus, ScoreResult
 from .profile import CONTINENT_COUNTRY_CODES, DEFAULT_SCORE_WEIGHTS, country_names_by_code
 
-SCORING_PROMPT_VERSION = "job-fit-v16"
+SCORING_PROMPT_VERSION = "job-fit-v17"
 
 # Ineligibility is a hard gate: no combination of fit signals may push a total above this cap.
 # LLM scoring is only ever invoked for eligible jobs (see sync.py), so every ineligible job's
@@ -385,13 +385,20 @@ def _names_united_states(location: str) -> bool:
     return any(re.search(rf"\b{re.escape(marker)}\b", location, re.IGNORECASE) for marker in _US_LOCATION_MARKERS)
 
 
-def _place_match(location: str, code: str, name: str, cities: list[str] | tuple[str, ...] = ()) -> bool:
+def _place_match(
+    location: str, code: str, name: str, cities: list[str] | tuple[str, ...] = (), *, bare_code_match: bool = True
+) -> bool:
     code = str(code).strip()
     # A short ISO code is only trustworthy as an exact-case token (e.g. "Berlin, DE"). Casefolding it
     # like the name/city terms below produces false positives, e.g. "de" inside "Île-de-France" matching
     # country_code "DE" (Germany) for an unrelated French location. See _names_united_states for the
     # other collision this guards against: a US state postal abbreviation matching an unrelated code.
-    if code and re.search(rf"\b{re.escape(code)}\b", location) and (code.upper() == "US" or not _names_united_states(location)):
+    if (
+        bare_code_match
+        and code
+        and re.search(rf"\b{re.escape(code)}\b", location)
+        and (code.upper() == "US" or not _names_united_states(location))
+    ):
         return True
     terms = [name, *COUNTRY_LOCATION_ALIASES.get(code.upper(), ()), *cities]
     text = location.casefold()
@@ -404,11 +411,19 @@ def _country_match(location: str, strategy: dict[str, Any]) -> bool:
         text = location.casefold()
         if any(re.search(rf"\b{re.escape(alias)}\b", text) for alias in REGION_LOCATION_ALIASES.get(code, ())):
             return True
-        # A region match is name/alias only, never a bare 2-letter code - "IT"/"NO" inside an
-        # all-caps location string is a false-positive generator once dozens of member codes are
-        # in play, unlike a single explicitly-configured country (_place_match's own code check).
+        # A region match checks each member's full name and its curated aliases (e.g. GB's "uk",
+        # CZ's "czech republic") but never a bare 2-letter code - "IT"/"NO" inside an all-caps
+        # location string is a false-positive generator once dozens of member codes are in play,
+        # unlike a single explicitly-configured country (_place_match's own code check). Passing
+        # the real member code (not "") only for alias lookup, with bare_code_match off, used to
+        # drop every member's alias list along with the code check - a real job posted as "London,
+        # UK" or "Remote UK" (never spelling out "United Kingdom") was invisible to a Europe
+        # relocation strategy for exactly that reason.
         names = country_names_by_code()
-        return any(_place_match(location, "", names.get(member, ""), ()) for member in CONTINENT_COUNTRY_CODES[code])
+        return any(
+            _place_match(location, member, names.get(member, ""), (), bare_code_match=False)
+            for member in CONTINENT_COUNTRY_CODES[code]
+        )
     return _place_match(location, code, str(strategy.get("country_name", "")), strategy.get("cities", []))
 
 

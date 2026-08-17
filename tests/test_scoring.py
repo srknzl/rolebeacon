@@ -157,6 +157,28 @@ def test_gb_alias_matches_a_constituent_nation_name() -> None:
     assert result.status == EligibilityStatus.ELIGIBLE
 
 
+def test_europe_relocation_target_matches_a_member_alias_not_just_its_full_name() -> None:
+    # Regression guard: the region-member loop used to pass code="" purely to suppress bare
+    # 2-letter-code false positives, which also silently dropped every member's own
+    # COUNTRY_LOCATION_ALIASES - a job posted as "London, UK" or "Remote UK" (never spelling out
+    # "United Kingdom") was invisible to a Europe relocation strategy for exactly that reason,
+    # even though the identical single-country GB strategy already resolved it correctly.
+    mobility = MobilityProfileV1.model_validate(
+        {
+            **MOBILITY.model_dump(mode="json"),
+            "relocation_targets": [{"country_code": "EUROPE", "country_name": "Europe", "cities": []}],
+        }
+    )
+    strategies = [item.model_dump(mode="json") for item in generate_strategies(CANDIDATE, mobility, PREFERENCES)]
+    result = evaluate_eligibility(
+        job(location="Remote UK", remote_scope="", description="Visa sponsorship available."),
+        PREFERENCES.model_dump(mode="json"), mobility.model_dump(mode="json"), strategies,
+    )
+
+    assert result.location_fit == "sponsorship:EUROPE"
+    assert result.status == EligibilityStatus.ELIGIBLE
+
+
 def test_location_requirement_renders_a_plain_sentence_per_prefix() -> None:
     assert "already authorized" in location_requirement("authorized:DE")
     assert "scoped to United States" in location_requirement("remote-scoped:US")
