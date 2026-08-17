@@ -217,6 +217,26 @@ def test_jobs_exports_existing_data_after_ollama_start_failure(tmp_path, monkeyp
     assert "Ollama executable is unavailable" in exported["sync"]["status"]["error"]
 
 
+def test_jobs_exports_existing_data_when_sync_run_raises(tmp_path, capsys) -> None:
+    settings = _configured_settings(tmp_path)
+    database = Database(settings.database_path)
+    database.initialize()
+    _seed(database)
+    (settings.data_dir / "sync.lock").mkdir()
+    args = argparse.Namespace(no_sync=False, start_ollama=False, output_dir=tmp_path / "exports")
+
+    assert cli._run_jobs_command(args, settings, database) == 1
+
+    assert "IsADirectoryError" in capsys.readouterr().err
+    run_directory = next((tmp_path / "exports").glob("rolebeacon-jobs-*"))
+    exported = json.loads((run_directory / "all-jobs.json").read_text(encoding="utf-8"))
+    assert exported["count"] == 1
+    assert exported["sync"]["requested"] is True
+    assert exported["sync"]["performed"] is True
+    assert exported["sync"]["status"]["phase"] == "failed"
+    assert "IsADirectoryError" in exported["sync"]["status"]["error"]
+
+
 def test_jobs_rejects_invalid_start_ollama_invocations(tmp_path, monkeypatch) -> None:
     rules = _configured_settings(tmp_path)
     monkeypatch.setattr(cli.Settings, "load", lambda: rules)
@@ -321,3 +341,27 @@ async def test_ensure_ollama_ready_times_out(tmp_path, monkeypatch) -> None:
 
     with pytest.raises(RuntimeError, match="model missing"):
         await cli._ensure_ollama_ready(settings, timeout_seconds=0, poll_interval_seconds=0)
+
+
+@pytest.mark.asyncio
+async def test_ensure_ollama_ready_rejects_lan_endpoint_before_starting(tmp_path, monkeypatch) -> None:
+    settings = replace(
+        _configured_settings(tmp_path),
+        llm_mode="ollama",
+        llm_enabled=True,
+        llm_base_url="http://desktop.local:11434/v1",
+    )
+
+    class UnexpectedClient:
+        def __init__(self, _settings) -> None:
+            raise AssertionError("LAN endpoint must be rejected before polling or starting Ollama")
+
+    class UnexpectedModels:
+        def __init__(self, _settings) -> None:
+            raise AssertionError("LAN endpoint must not start local Ollama")
+
+    monkeypatch.setattr(cli, "LlmClient", UnexpectedClient)
+    monkeypatch.setattr(cli, "LocalModelService", UnexpectedModels)
+
+    with pytest.raises(RuntimeError, match="loopback endpoint"):
+        await cli._ensure_ollama_ready(settings)

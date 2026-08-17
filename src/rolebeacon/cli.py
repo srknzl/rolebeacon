@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import ipaddress
 import json
 import os
 import sys
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import uvicorn
 
@@ -214,6 +216,19 @@ async def _ensure_ollama_ready(
     timeout_seconds: float = 30,
     poll_interval_seconds: float = 1,
 ) -> dict[str, Any]:
+    hostname = urlsplit(settings.llm_base_url).hostname or ""
+    loopback = hostname == "localhost" or hostname.endswith(".localhost")
+    if not loopback:
+        try:
+            loopback = ipaddress.ip_address(hostname).is_loopback
+        except ValueError:
+            pass
+    if not loopback:
+        raise RuntimeError(
+            "--start-ollama can manage only a loopback endpoint such as "
+            "http://127.0.0.1:11434/v1; start a configured LAN Ollama on its own host"
+        )
+
     llm = LlmClient(settings)
     health = await llm.health()
     if health["available"]:
@@ -247,11 +262,15 @@ def _run_jobs_command(args: argparse.Namespace, settings: Settings, database: Da
             status = {"phase": "failed", "phase_message": fatal_error, "error": fatal_error}
 
     if sync_requested and not fatal_error:
-        sync_service = SyncService(settings, database, LlmClient(settings))
-        sync_result = asyncio.run(sync_service.run())
-        sync_performed = True
-        status = sync_result.to_dict()
-        fatal_error = str(status.get("error") or "")
+        try:
+            sync_service = SyncService(settings, database, LlmClient(settings))
+            sync_performed = True
+            sync_result = asyncio.run(sync_service.run())
+            status = sync_result.to_dict()
+            fatal_error = str(status.get("error") or "")
+        except Exception as error:
+            fatal_error = f"{type(error).__name__}: {error}"
+            status = {"phase": "failed", "phase_message": fatal_error, "error": fatal_error}
 
     sync = {
         "requested": sync_requested,

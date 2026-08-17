@@ -191,3 +191,10 @@ def test_export_cleans_temporary_directory_when_publication_fails(tmp_path, monk
         )
 
     assert not list((tmp_path / "exports").iterdir())
+
+
+def test_interrupted_staging_directories_are_gitignored() -> None:
+    ignore = (Path(__file__).parents[1] / ".gitignore").read_text(encoding="utf-8").splitlines()
+
+    assert "rolebeacon-jobs-*/" in ignore
+    assert ".rolebeacon-jobs-*/" in ignore
