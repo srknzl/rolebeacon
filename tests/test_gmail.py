@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -17,6 +19,15 @@ requires_gmail_extra = pytest.mark.skipif(
     not GmailOnboardingService.dependency_available(),
     reason="requires the optional gmail extra",
 )
+
+
+def assert_owner_only(path: Path) -> None:
+    # Windows has no POSIX permission bits - os.chmod only toggles the read-only flag there, so
+    # st_mode always reports 0o666 and access is governed by inherited ACLs instead. _write_private_json
+    # already tolerates that; assert the guarantee only where the platform can express it.
+    if os.name != "posix":
+        return
+    assert stat.S_IMODE(path.stat().st_mode) == stat.S_IRUSR | stat.S_IWUSR
 
 
 def desktop_client() -> dict:
@@ -40,7 +51,7 @@ def test_client_config_is_validated_and_stored_privately(tmp_path) -> None:
 
     assert status["credentials_configured"] is True
     assert "client-secret" not in json.dumps(status)
-    assert stat.S_IMODE(service.credentials_path.stat().st_mode) == stat.S_IRUSR | stat.S_IWUSR
+    assert_owner_only(service.credentials_path)
 
 
 @pytest.mark.parametrize(
@@ -75,7 +86,7 @@ def test_authorization_url_uses_loopback_pkce_and_private_pending_state(tmp_path
     assert "login_hint=candidate%40example.com" in url
     assert pending["redirect_uri"] == "http://127.0.0.1:9876/api/setup/gmail/callback"
     assert pending["state"] in url
-    assert stat.S_IMODE(service.pending_path.stat().st_mode) == stat.S_IRUSR | stat.S_IWUSR
+    assert_owner_only(service.pending_path)
 
 
 @requires_gmail_extra
