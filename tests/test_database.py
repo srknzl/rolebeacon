@@ -3,6 +3,8 @@ from __future__ import annotations
 import sqlite3
 from datetime import UTC, datetime
 
+import pytest
+
 from rolebeacon.database import Database, JobFilters, canonicalize_url, company_key
 from rolebeacon.domain import CollectedJob, EligibilityResult, EligibilityStatus, JobStatus, ScoreResult
 
@@ -128,6 +130,93 @@ def test_probable_duplicate_can_be_reviewed_and_merged(tmp_path) -> None:
     assert winner == first_id
     assert database.get_job(second_id)["merged_into_job_id"] == first_id
     assert all(job["id"] != second_id for job in database.list_jobs())
+
+
+def test_merge_all_exact_duplicates_chains_without_double_hopping(tmp_path) -> None:
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    first = sample_job()
+    first.url = "https://example.com/jobs/exact-a"
+    first_id, _ = database.upsert_job(first)
+    second = sample_job(source="source-b")
+    second.source_job_id = "job-2"
+    second.url = "https://board.test/positions/exact-b"
+    second_id, _ = database.upsert_job(second)
+    third = sample_job(source="source-c")
+    third.source_job_id = "job-3"
+    third.url = "https://board.test/positions/exact-c"
+    third_id, _ = database.upsert_job(third)
+
+    near = sample_job(source="source-d")
+    near.source_job_id = "job-4"
+    near.title = "Senior Backend Engineeer"  # typo: similar but not exact, must stay open
+    near.url = "https://board.test/positions/near"
+    database.upsert_job(near)
+
+    result = database.merge_all_exact_duplicates()
+
+    assert result["merged"] == 2
+    assert database.get_job(first_id)["active"] == 1
+    assert database.get_job(second_id)["merged_into_job_id"] == first_id
+    # Merged straight into the surviving winner, not chained through the already-merged second job.
+    assert database.get_job(third_id)["merged_into_job_id"] == first_id
+
+    # The near-match (typo title, not exact) against the surviving winner stays open for review.
+    remaining_near = [item for item in database.list_duplicate_candidates() if item["similarity"] < 1.0]
+    assert len(remaining_near) == 1
+    assert remaining_near[0]["job_id"] == first_id
+    assert remaining_near[0]["status"] == "open"
+    # Its near-duplicate pairings against second and third were dismissed as a side effect of
+    # those two jobs being merged away - a suggestion against a job with no active record left
+    # is stale regardless of its similarity score, not something to keep presenting for review.
+    dismissed_near = [
+        item for item in database.list_duplicate_candidates(status="dismissed") if item["similarity"] < 1.0
+    ]
+    assert len(dismissed_near) == 2
+
+
+def test_merge_duplicate_rejects_and_dismisses_a_candidate_whose_job_was_already_merged(tmp_path) -> None:
+    """Regression test: merging first-second used to leave the second-third candidate silently
+    mergeable, so re-running the bulk merge did nothing (its own pre-check skipped it) while a
+    manual single merge on it would go through anyway - burying jobs a hop deeper with no error."""
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    first = sample_job()
+    first.url = "https://example.com/jobs/stale-a"
+    first_id, _ = database.upsert_job(first)
+    second = sample_job(source="source-b")
+    second.source_job_id = "job-2"
+    second.url = "https://board.test/positions/stale-b"
+    second_id, _ = database.upsert_job(second)
+    third = sample_job(source="source-c")
+    third.source_job_id = "job-3"
+    third.url = "https://board.test/positions/stale-c"
+    third_id, _ = database.upsert_job(third)
+
+    candidates = database.list_duplicate_candidates()
+    first_second = next(c for c in candidates if {c["job_id"], c["candidate_job_id"]} == {first_id, second_id})
+    second_third = next(c for c in candidates if {c["job_id"], c["candidate_job_id"]} == {second_id, third_id})
+
+    database.merge_duplicate(first_second["id"])  # second is now inactive, merged into first
+
+    # The second-third candidate is cascade-dismissed as an immediate side effect of that merge,
+    # so it is already gone rather than sitting there mergeable-but-wrong.
+    assert database.get_job(third_id)["active"] == 1
+    assert database.get_job(third_id)["merged_into_job_id"] is None
+    dismissed = next(c for c in database.list_duplicate_candidates(status="dismissed") if c["id"] == second_third["id"])
+    assert dismissed["status"] == "dismissed"
+    with pytest.raises(LookupError):
+        database.merge_duplicate(second_third["id"])  # no longer 'open'
+
+    # Belt-and-suspenders for data that went stale before this fix shipped: a row the cascade
+    # never had a chance to touch (here, reopened by hand to stand in for pre-existing legacy
+    # data) is still rejected - and dismissed - rather than silently merged.
+    with database.connect() as connection:
+        connection.execute("UPDATE duplicate_candidates SET status = 'open' WHERE id = ?", (second_third["id"],))
+    with pytest.raises(ValueError):
+        database.merge_duplicate(second_third["id"])
+    healed = next(c for c in database.list_duplicate_candidates(status="dismissed") if c["id"] == second_third["id"])
+    assert healed["status"] == "dismissed"
 
 
 def test_api_budget_is_hard_limited(tmp_path) -> None:

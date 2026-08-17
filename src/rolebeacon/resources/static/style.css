@@ -171,8 +171,6 @@ code {
   .topbar nav a:hover { background: var(--line-soft); }
   .topbar > #sync-button { white-space: nowrap; }
   .container { padding: 30px 16px; }
-  .detail-grid, .settings-grid { grid-template-columns: 1fr; }
-  .sticky-panel { position: static; }
   .company-grid { grid-template-columns: 1fr; }
 }
 
@@ -226,6 +224,7 @@ textarea { resize: vertical; }
   gap: 5px;
 }
 
+.review-actions { display: flex; gap: 8px; margin-top: 12px; }
 .checkbox-row { display: flex; flex-wrap: wrap; gap: 12px 20px; }
 .checkbox-row label { display: flex; align-items: center; gap: 7px; font-size: 13px; }
 .checkbox-row input { min-width: auto; }
@@ -912,6 +911,7 @@ td small { display: block; color: var(--muted); }
 .source-quote { flex-basis: 100%; font-size: 12px; font-style: italic; color: var(--muted); border-left: 2px solid var(--line); padding-left: 9px; margin: 2px 0; }
 
 @media (max-width: 900px) {
+  .company-grid { grid-template-columns: 1fr; }
   .policy-grid { grid-template-columns: 1fr 1fr; }
 }
 

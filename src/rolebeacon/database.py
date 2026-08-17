@@ -1364,6 +1364,22 @@ class Database:
             ids = (int(candidate["job_id"]), int(candidate["candidate_job_id"]))
             winner = keep_job_id if keep_job_id in ids else ids[0]
             loser = ids[1] if winner == ids[0] else ids[0]
+            active_count = connection.execute(
+                "SELECT COUNT(*) FROM jobs WHERE id IN (?, ?) AND active = 1", (winner, loser)
+            ).fetchone()[0]
+            if active_count != 2:
+                # One side was already merged away by a different pair that shared it - this
+                # candidacy is stale, not actionable (merging into, or out of, a job that no
+                # longer has its own active record would just bury the real winner a hop
+                # deeper). Dismiss it here so it stops lingering in the review queue.
+                connection.execute(
+                    "UPDATE duplicate_candidates SET status = 'dismissed', decided_at = ? WHERE id = ?",
+                    (_iso(), candidate_id),
+                )
+                # connect() only commits on a clean exit of the `with` block, so the dismissal
+                # above would be rolled back along with the exception below unless committed here.
+                connection.commit()
+                raise ValueError("One or both jobs were already merged elsewhere; this candidate is now stale")
             loser_application = connection.execute("SELECT * FROM applications WHERE job_id = ?", (loser,)).fetchone()
             winner_application = connection.execute("SELECT * FROM applications WHERE job_id = ?", (winner,)).fetchone()
             artifact_columns = ("resume_path", "cover_letter_path", "packet_path", "notes")
@@ -1392,7 +1408,36 @@ class Database:
             connection.execute(
                 "UPDATE duplicate_candidates SET status = 'merged', decided_at = ? WHERE id = ?", (_iso(), candidate_id)
             )
+            # Any other open candidate that names the job we just merged away is stale the
+            # instant this commits, at any similarity - dismiss it so it does not keep
+            # showing up as actionable once one side of the pair no longer exists.
+            connection.execute(
+                "UPDATE duplicate_candidates SET status = 'dismissed', decided_at = ? "
+                "WHERE status = 'open' AND id != ? AND (job_id = ? OR candidate_job_id = ?)",
+                (_iso(), candidate_id, loser, loser),
+            )
             return winner
+
+    def merge_all_exact_duplicates(self) -> dict[str, int]:
+        """Merge every open duplicate candidate that is an exact (100%) match, keeping each pair's
+        first job. merge_duplicate() itself now refuses (and dismisses) a candidate once either of
+        its jobs was already merged away earlier in this same batch, so this loop just needs to
+        keep going and count what happened."""
+        with self.connect() as connection:
+            candidate_ids = [
+                row["id"]
+                for row in connection.execute(
+                    "SELECT id FROM duplicate_candidates WHERE status = 'open' AND similarity >= 0.999 ORDER BY id"
+                ).fetchall()
+            ]
+        merged = skipped = 0
+        for candidate_id in candidate_ids:
+            try:
+                self.merge_duplicate(candidate_id)
+                merged += 1
+            except (LookupError, ValueError):
+                skipped += 1
+        return {"merged": merged, "skipped": skipped}
 
     def company_jobs(self, name: str, limit: int = 100) -> list[dict[str, Any]]:
         key = company_key(name)

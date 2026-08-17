@@ -199,6 +199,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ),
         )
 
+    @app.get("/review", response_class=HTMLResponse)
+    async def review_page(request: Request, i: int = Query(0, ge=0)) -> HTMLResponse:
+        filters = JobFilters(status="bookmarked")
+        total = database.count_jobs(filters)
+        jobs = database.list_jobs(filters, sort="job_fit", limit=1, offset=i) if i < total else []
+        return templates.TemplateResponse(
+            request,
+            "review.html",
+            page_context(request, job=jobs[0] if jobs else None, index=i, total=total),
+        )
+
     @app.get("/jobs/{job_id}", response_class=HTMLResponse)
     async def job_detail(request: Request, job_id: int) -> HTMLResponse:
         job = database.get_job(job_id)
@@ -666,6 +677,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if _wants_html(request):
             return RedirectResponse("/duplicates", status_code=303)
         return JSONResponse({"candidate_id": candidate_id, "status": "dismissed"})
+
+    @app.post("/api/duplicates/merge-exact")
+    async def merge_exact_duplicates(request: Request) -> Response:
+        result = database.merge_all_exact_duplicates()
+        if _wants_html(request):
+            return RedirectResponse("/duplicates", status_code=303)
+        return JSONResponse(result)
 
     @app.post("/api/duplicates/{candidate_id}/merge")
     async def merge_duplicate(candidate_id: int, request: Request) -> Response:

@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Review bookmarks · RoleBeacon{% endblock %}
+{% block content %}
+<section class="section-heading">
+  <div><p class="eyebrow">BOOKMARKED</p><h1>Review your bookmarks</h1></div>
+  <a href="/jobs?job_status=bookmarked&sort=job_fit">View all →</a>
+</section>
+{% if not total %}
+<div class="empty-state"><h3>No bookmarked jobs yet</h3><p>Bookmark jobs from the Jobs page to build a review queue here.</p></div>
+{% elif not job %}
+<div class="empty-state"><h3>You've reviewed all {{ total }} bookmarked jobs</h3><p><a href="/review">Start over from the top</a></p></div>
+{% else %}
+<p class="muted">Job {{ index + 1 }} of {{ total }}, highest score first.</p>
+<div class="job-list">
+  {% include "_job-card.html" %}
+</div>
+<div class="review-actions">
+  {% if index > 0 %}<a class="button" href="/review?i={{ index - 1 }}">← Previous</a>{% endif %}
+  <a class="button button-primary" href="/review?i={{ index + 1 }}">Next →</a>
+</div>
+{% endif %}
+{% endblock %}

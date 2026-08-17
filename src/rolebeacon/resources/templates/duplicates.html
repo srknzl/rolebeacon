@@ -1,7 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Duplicates · RoleBeacon{% endblock %}
 {% block content %}
-<section class="page-heading"><div><p class="eyebrow">DATA QUALITY</p><h1>Duplicate review</h1><p>Probable matches stay separate until you decide.</p></div></section>
+{% set exact_count = candidates|selectattr("similarity", "ge", 0.999)|list|length %}
+<section class="page-heading"><div><p class="eyebrow">DATA QUALITY</p><h1>Duplicate review</h1><p>Probable matches stay separate until you decide.</p></div>{% if exact_count %}<form method="post" action="/api/duplicates/merge-exact"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button-primary" title="Merge every pair below that is a 100% exact match, keeping each pair's first job. Anything under 100% stays for you to review individually.">Merge all exact matches ({{ exact_count }})</button></form>{% endif %}</section>
 {% if candidates %}
 <div class="table-wrap"><table><thead><tr><th>First job</th><th>Candidate</th><th>Similarity</th><th>Decision</th></tr></thead><tbody>
 {% for item in candidates %}<tr>
