@@ -245,6 +245,18 @@
 </form>
 <script>
   const lines = id => document.getElementById(id).value.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+  // The skills textarea is a single flat list, but a candidate can be re-imported (multiple
+  // buckets flattened together) or hand-edited more than once, so the same skill (any casing)
+  // can end up entered twice - keep the first casing seen and drop the repeat.
+  const dedupeCaseInsensitive = values => {
+    const seen = new Set();
+    return values.filter(value => {
+      const key = value.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
   const preferredSeniority = () => [...document.querySelectorAll(".seniority-option:checked")].map(item => item.value);
   let savedRelocationTargets = [];
   let setupClearancePolicy = {};
@@ -360,7 +372,7 @@
     return {...detailed, schema_version: "1.0", name: document.getElementById("name").value, headline: document.getElementById("headline").value, summary: document.getElementById("summary").value,
       contact: {...(detailed.contact || {}), email: document.getElementById("email").value, phone: document.getElementById("phone").value, website: optionalUrl("website")},
       location: {country_code: countryCode(document.getElementById("country-code").value, "Country code"), country_name: document.getElementById("country-name").value, city: document.getElementById("city").value},
-      skills: {Skills: lines("skills")}, experience: detailed.experience || [], projects: detailed.projects || [], education: detailed.education || [], languages: detailed.languages || []};
+      skills: {Skills: dedupeCaseInsensitive(lines("skills"))}, experience: detailed.experience || [], projects: detailed.projects || [], education: detailed.education || [], languages: detailed.languages || []};
   };
   const scoreWeights = () => {
     const weights = {role_domain: Number(document.getElementById("weight-role-domain").value), stack: Number(document.getElementById("weight-stack").value), domain_experience: Number(document.getElementById("weight-domain-experience").value), seniority: Number(document.getElementById("weight-seniority").value), location_authorization: Number(document.getElementById("weight-location-authorization").value), salary_employment: Number(document.getElementById("weight-salary-employment").value)};
@@ -396,7 +408,7 @@
       document.getElementById("city").value = imported.location?.city || "";
       document.getElementById("website").value = imported.contact?.website || "";
       document.getElementById("summary").value = imported.summary || "";
-      const skills = Object.values(imported.skills || {}).flat();
+      const skills = dedupeCaseInsensitive(Object.values(imported.skills || {}).flat());
       document.getElementById("skills").value = skills.join("\n");
       return imported;
   };
