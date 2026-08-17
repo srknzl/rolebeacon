@@ -60,7 +60,10 @@
       <label>Country name {{ tip("Human-readable name for your current country. It is displayed as Türkiye for TR.") }}<input id="country-name" value="Türkiye" required></label>
     </div>
     <label>Summary {{ tip("A factual professional summary used only for matching and generated materials.") }}<textarea id="summary" rows="4"></textarea></label>
-    <label>Skills, one per line {{ tip("Each line becomes a matching signal. Prefer specific technologies and domains.") }}<textarea id="skills" rows="5"></textarea></label>
+    <div class="country-field"><span class="field-label">Skills, grouped into categories {{ tip("Each line becomes a matching signal. Group skills the way they should appear on your résumé and cover letters, e.g. \"Languages\", \"Backend & Distributed\", \"Cloud & Infra\" - a category name is required, everything under an empty one is dropped on save.") }}</span>
+      <div class="skill-buckets" id="skill-buckets"></div>
+      <button type="button" class="button button-quiet" id="add-skill-bucket">Add skill category</button>
+    </div>
   </section>
 
   <section class="panel settings-tab-panel wizard-panel" data-settings-panel="search" data-wizard-step="eligibility" id="panel-mobility">
@@ -257,6 +260,34 @@
       return true;
     });
   };
+  // Skills are edited as one card per category (résumé/cover-letter section label -> skill
+  // lines) instead of one flat list, so an imported or hand-built candidate's bucket structure
+  // round-trips through the form instead of always collapsing to a single "Skills" catch-all.
+  const skillBucketsContainer = document.getElementById("skill-buckets");
+  const addSkillBucket = (label = "", itemsText = "") => {
+    const row = document.createElement("div");
+    row.className = "skill-bucket";
+    row.innerHTML = `<div class="skill-bucket-header"><input class="skill-bucket-label" placeholder="Category, e.g. Backend &amp; Distributed" value="${label.replace(/"/g, "&quot;")}"><button type="button" class="button button-quiet remove-skill-bucket" aria-label="Remove category">Remove</button></div><textarea class="skill-bucket-items" rows="4" placeholder="One skill per line"></textarea>`;
+    row.querySelector(".skill-bucket-items").value = itemsText;
+    row.querySelector(".remove-skill-bucket").addEventListener("click", () => row.remove());
+    skillBucketsContainer.appendChild(row);
+  };
+  document.getElementById("add-skill-bucket").addEventListener("click", () => addSkillBucket());
+  const skillBuckets = () => {
+    const buckets = {};
+    document.querySelectorAll(".skill-bucket").forEach(row => {
+      const label = row.querySelector(".skill-bucket-label").value.trim();
+      const items = dedupeCaseInsensitive(row.querySelector(".skill-bucket-items").value.split(/\r?\n/).map(value => value.trim()).filter(Boolean));
+      if (label && items.length) buckets[label] = items;
+    });
+    return buckets;
+  };
+  const loadSkillBuckets = skills => {
+    skillBucketsContainer.innerHTML = "";
+    const entries = Object.entries(skills || {}).filter(([, items]) => Array.isArray(items) && items.length);
+    if (!entries.length) { addSkillBucket("Skills", ""); return; }
+    entries.forEach(([label, items]) => addSkillBucket(label, dedupeCaseInsensitive(items.map(String)).join("\n")));
+  };
   const preferredSeniority = () => [...document.querySelectorAll(".seniority-option:checked")].map(item => item.value);
   let savedRelocationTargets = [];
   let setupClearancePolicy = {};
@@ -372,7 +403,7 @@
     return {...detailed, schema_version: "1.0", name: document.getElementById("name").value, headline: document.getElementById("headline").value, summary: document.getElementById("summary").value,
       contact: {...(detailed.contact || {}), email: document.getElementById("email").value, phone: document.getElementById("phone").value, website: optionalUrl("website")},
       location: {country_code: countryCode(document.getElementById("country-code").value, "Country code"), country_name: document.getElementById("country-name").value, city: document.getElementById("city").value},
-      skills: {Skills: dedupeCaseInsensitive(lines("skills"))}, experience: detailed.experience || [], projects: detailed.projects || [], education: detailed.education || [], languages: detailed.languages || []};
+      skills: skillBuckets(), experience: detailed.experience || [], projects: detailed.projects || [], education: detailed.education || [], languages: detailed.languages || []};
   };
   const scoreWeights = () => {
     const weights = {role_domain: Number(document.getElementById("weight-role-domain").value), stack: Number(document.getElementById("weight-stack").value), domain_experience: Number(document.getElementById("weight-domain-experience").value), seniority: Number(document.getElementById("weight-seniority").value), location_authorization: Number(document.getElementById("weight-location-authorization").value), salary_employment: Number(document.getElementById("weight-salary-employment").value)};
@@ -408,8 +439,7 @@
       document.getElementById("city").value = imported.location?.city || "";
       document.getElementById("website").value = imported.contact?.website || "";
       document.getElementById("summary").value = imported.summary || "";
-      const skills = dedupeCaseInsensitive(Object.values(imported.skills || {}).flat());
-      document.getElementById("skills").value = skills.join("\n");
+      loadSkillBuckets(imported.skills);
       return imported;
   };
   const setLines = (id, values = []) => { document.getElementById(id).value = values.join("\n"); };

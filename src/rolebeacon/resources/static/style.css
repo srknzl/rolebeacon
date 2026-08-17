@@ -798,6 +798,11 @@ td small { display: block; color: var(--muted); }
 
 .country-field { display: grid; gap: 5px; font-size: 12px; font-weight: 700; color: var(--muted); }
 .field-label { display: block; }
+.skill-buckets { display: flex; flex-direction: column; gap: 10px; font-weight: 400; }
+.skill-bucket { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper); }
+.skill-bucket-header { display: flex; gap: 8px; }
+.skill-bucket-label { flex: 1; font-weight: 700; }
+.skill-bucket-items { font-weight: 400; }
 .country-picker { position: relative; }
 .country-search { width: 100%; }
 .country-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; min-height: 0; }
