@@ -71,6 +71,17 @@ LinkedIn currently allows up to 20 job alerts. It officially supports uppercase 
 `NOT`, exact phrases in quotes, and parentheses. Company-page alerts are useful for high-priority
 employers.
 
+The web setup wizard owns the Gmail onboarding flow. Install the optional `gmail` package extra,
+import a Desktop OAuth client JSON from a user-owned Google Cloud project, authorize the account, and
+test that the exact `Job Alerts` label exists before relying on the collector. Authorization uses a
+PKCE-protected loopback callback and requests only the Gmail read-only scope. Scheduled collection never
+opens an OAuth browser; missing or expired authorization fails only the Gmail source and directs the user
+back to Settings.
+
+Create a Gmail filter for `from:(jobalerts-noreply@linkedin.com)` that applies the exact `Job Alerts`
+label. The filter does not need to archive, delete, forward, or mark messages read. RoleBeacon verifies
+the account and label but deliberately does not request Gmail settings permissions to create the filter.
+
 Official references:
 
 - [LinkedIn Job Posting API overview](https://learn.microsoft.com/en-us/linkedin/talent/job-postings/api/overview)
@@ -106,8 +117,8 @@ baseline, pending confirmation, warning, and any eventual job deactivations are 
 transactionally. A job remains active while any active source still reports it, and provenance is
 preserved during reconciliation.
 
-Gmail OAuth credentials are stored under the configured operating-system application-data directory
-unless the user explicitly supplies a token path. Token refresh uses an atomic replacement and
+Gmail OAuth client configuration and tokens are stored under the configured operating-system
+application-data directory. OAuth transaction state and token refresh use atomic replacement and
 owner-only file permissions. Authenticated LinkedIn pages are never fetched; only user-owned alert
 messages may supply LinkedIn job URLs and summaries.
 

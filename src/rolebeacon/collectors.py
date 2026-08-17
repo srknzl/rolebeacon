@@ -5,8 +5,6 @@ import base64
 import html
 import os
 import re
-import stat
-import tempfile
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
@@ -19,6 +17,7 @@ from xml.etree import ElementTree
 import httpx
 
 from .domain import CollectedJob, CollectionBatch, SourceConfig
+from .gmail import GMAIL_LABEL, GmailOnboardingService
 from .source_discovery import amazon_location_matches, amazon_search_params, google_result_links
 
 USER_AGENT = "RoleBeacon/0.2 (+https://github.com/srknzl/rolebeacon)"
@@ -1132,48 +1131,12 @@ class GmailLinkedInCollector(Collector):
         return await asyncio.to_thread(self._collect_sync, since)
 
     def _collect_sync(self, since: datetime) -> list[CollectedJob]:
-        try:
-            from google.auth.transport.requests import Request
-            from google.oauth2.credentials import Credentials
-            from google_auth_oauthlib.flow import InstalledAppFlow
-            from googleapiclient.discovery import build
-        except ImportError as error:
-            raise RuntimeError("Install RoleBeacon with the gmail extra to enable Gmail alerts") from error
-
         configured_data_dir = str(self.config.options.get("data_dir") or "").strip()
         if not configured_data_dir:
             raise RuntimeError("Gmail collector requires the configured application-data directory")
         data_dir = Path(configured_data_dir).expanduser()
-        credentials_path = Path(self.config.options.get("credentials_file") or os.getenv("GMAIL_CREDENTIALS_FILE") or data_dir / "gmail-credentials.json")
-        token_path = Path(self.config.options.get("token_file") or os.getenv("GMAIL_TOKEN_FILE") or data_dir / "gmail-token.json")
-        scopes = ["https://www.googleapis.com/auth/gmail.readonly"]
-        credentials = Credentials.from_authorized_user_file(token_path, scopes) if token_path.exists() else None
-        if credentials and credentials.expired and credentials.refresh_token:
-            credentials.refresh(Request())
-        if not credentials or not credentials.valid:
-            if not credentials_path.exists():
-                raise RuntimeError(f"Gmail credentials file not found: {credentials_path}")
-            flow = InstalledAppFlow.from_client_secrets_file(credentials_path, scopes)
-            credentials = flow.run_local_server(port=0)
-            token_path.parent.mkdir(parents=True, exist_ok=True)
-            descriptor, temporary_name = tempfile.mkstemp(prefix=".gmail-token.", dir=token_path.parent)
-            try:
-                fchmod = getattr(os, "fchmod", None)
-                if fchmod is not None:
-                    fchmod(descriptor, stat.S_IRUSR | stat.S_IWUSR)
-                with os.fdopen(descriptor, "w", encoding="utf-8") as token_file:
-                    token_file.write(credentials.to_json())
-                    token_file.flush()
-                    os.fsync(token_file.fileno())
-                os.replace(temporary_name, token_path)
-                try:
-                    os.chmod(token_path, stat.S_IRUSR | stat.S_IWUSR)
-                except OSError:
-                    pass
-            finally:
-                Path(temporary_name).unlink(missing_ok=True)
-        service = build("gmail", "v1", credentials=credentials, cache_discovery=False)
-        label = self.config.options.get("label") or os.getenv("GMAIL_LABEL", "Job Alerts")
+        service = GmailOnboardingService(data_dir).authorized_service()
+        label = self.config.options.get("label") or os.getenv("GMAIL_LABEL", GMAIL_LABEL)
         query = f'label:"{label}" after:{int(since.timestamp())}'
         page_token = None
         message_refs: list[dict[str, Any]] = []

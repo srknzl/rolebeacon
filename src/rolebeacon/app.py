@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import secrets
@@ -21,6 +22,7 @@ from .company import CompanyResearchCoordinator, CompanyResearchService
 from .config import Settings
 from .database import JOB_SORTS, PIPELINE_COLUMNS, Database, JobFilters, company_key
 from .domain import CollectedJob, JobStatus, SourceConfig
+from .gmail import GmailAuthorizeRequest, GmailCredentialsRequest, GmailOnboardingService
 from .llm import LlmClient, LlmResponseRejected, LlmUnavailable
 from .profile import country_catalog, relocation_region_options
 from .scoring import INELIGIBLE_SCORE_CAP, dimension_metadata, location_requirement
@@ -46,6 +48,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     source_discovery = SourceDiscoveryService()
     source_catalog = SourceCatalog(app_settings)
     local_models = LocalModelService(app_settings)
+    gmail_onboarding = GmailOnboardingService(app_settings.data_dir, app_settings.port)
     csrf_token = secrets.token_urlsafe(32)
     templates = Jinja2Templates(directory=app_settings.resource_dir / "templates")
     templates.env.filters["repair_text"] = repair_text
@@ -72,6 +75,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.setup_service = setup_service
     app.state.source_discovery = source_discovery
     app.state.source_catalog = source_catalog
+    app.state.gmail_onboarding = gmail_onboarding
 
     def guard_rejection(request: Request, detail: str) -> Response:
         if _wants_html(request):
@@ -127,6 +131,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "llm_model": app_settings.llm_model,
             "ineligible_score_cap": INELIGIBLE_SCORE_CAP,
             "csrf_token": csrf_token,
+            "gmail": gmail_onboarding.status(),
             **values,
         }
 
@@ -305,6 +310,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 setup=setup_service.status(),
                 schemas=setup_service.schemas(),
                 sources=app_settings.load_sources(),
+                source_catalog=source_catalog.view(),
                 countries=country_catalog(),
                 region_options=relocation_region_options(),
                 editing=True,
@@ -328,6 +334,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 setup=setup_service.status(),
                 schemas=setup_service.schemas(),
                 sources=app_settings.load_sources(),
+                source_catalog=source_catalog.view(),
                 countries=country_catalog(),
                 region_options=relocation_region_options(),
             ),
@@ -336,6 +343,60 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/setup/status")
     async def setup_status() -> dict[str, Any]:
         return setup_service.status()
+
+    @app.get("/api/setup/gmail/status")
+    async def gmail_status() -> dict[str, Any]:
+        return gmail_onboarding.status()
+
+    @app.post("/api/setup/gmail/credentials")
+    async def save_gmail_credentials(request: GmailCredentialsRequest) -> dict[str, Any]:
+        try:
+            return gmail_onboarding.save_client_config(request.client_config)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @app.post("/api/setup/gmail/authorize")
+    async def authorize_gmail(request: GmailAuthorizeRequest) -> dict[str, str]:
+        try:
+            authorization_url = gmail_onboarding.authorization_url(login_hint=request.login_hint)
+        except (RuntimeError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return {"authorization_url": authorization_url}
+
+    @app.get("/api/setup/gmail/callback", response_class=HTMLResponse)
+    async def gmail_callback(request: Request, state: str = "", code: str = "", error: str = "") -> Response:
+        if error:
+            return templates.TemplateResponse(
+                request,
+                "error.html",
+                page_context(
+                    request,
+                    error_title="Gmail connection was not completed",
+                    error_detail=f"Google returned: {error}",
+                ),
+                status_code=409,
+            )
+        try:
+            await asyncio.to_thread(gmail_onboarding.complete_authorization, state=state, code=code)
+        except (RuntimeError, ValueError) as callback_error:
+            return templates.TemplateResponse(
+                request,
+                "error.html",
+                page_context(
+                    request,
+                    error_title="Could not connect Gmail",
+                    error_detail=str(callback_error),
+                ),
+                status_code=409,
+            )
+        return RedirectResponse("/settings?gmail=connected#panel-sources", status_code=303)
+
+    @app.post("/api/setup/gmail/test")
+    async def test_gmail_connection() -> dict[str, Any]:
+        try:
+            return await asyncio.to_thread(gmail_onboarding.test_connection)
+        except RuntimeError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
 
     @app.get("/api/schemas/candidate-profile")
     async def setup_schema() -> dict[str, Any]:

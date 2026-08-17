@@ -22,7 +22,7 @@ jobs:
         with:
           enable-cache: true
           python-version: "3.13"
-      - run: uv sync --extra dev --locked
+      - run: uv sync --extra dev --extra gmail --locked
       - run: uv run playwright install chromium
       - run: uv run ruff check .
       - run: uv run mypy src/rolebeacon

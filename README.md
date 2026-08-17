@@ -68,8 +68,11 @@ uv run playwright install chromium
 uv run rolebeacon serve
 ```
 
-Open `http://127.0.0.1:8787`. The first-run wizard collects your profile and preferences.
-No source request or scheduled sync occurs until you review and activate setup.
+Open `http://127.0.0.1:8787`. The first-run wizard offers a guided manual path or a strict prompt for
+producing `SetupPayloadV1` JSON with an LLM of your choice. It then walks through the candidate profile,
+eligibility-critical authorization and mobility facts, optional LinkedIn/Gmail alerts, focused source-pack
+selection, optional scoring/application settings, and a final activation review. No source request or
+scheduled sync occurs until you review and activate setup.
 
 Run a readiness check at any time:
 
@@ -201,12 +204,13 @@ can implement the existing provider boundary without changing scoring or profile
 
 ## Candidate profile
 
-Setup supports basic form entry, a complete `CandidateProfileV1` JSON document, or a complete
-`SetupPayloadV1` document containing the profile, mobility, preferences, selected sources, and
-model settings. The wizard uses searchable country pickers backed by the ISO 3166-1 catalog,
-then stores the corresponding country codes for matching.
-It can also generate a review-only preference draft with an explicitly configured LLM, or copy a
-structured planning prompt for any LLM the candidate chooses. Neither path activates collection.
+Setup supports guided form entry, a complete `CandidateProfileV1` JSON document, or a complete
+`SetupPayloadV1` document containing the profile, mobility, preferences, selected sources, and model
+settings. The first step can copy a schema-backed prompt for any LLM the candidate chooses; its JSON-only
+result is validated locally and loaded into the same review flow. Source selection remains a later explicit
+step, so the prompt leaves sources disabled and activation false. The wizard uses searchable country pickers
+backed by the ISO 3166-1 catalog, then stores the corresponding country codes for matching. It can also
+generate a review-only preference draft with an explicitly configured LLM. Neither path activates collection.
 The public schema and CV-conversion prompt are available at:
 
 ```text
@@ -308,6 +312,10 @@ Built-in source adapters include:
 
 Only sources selected in setup are enabled. LinkedIn authenticated pages are never scraped.
 See [docs/data-sources.md](docs/data-sources.md) before adding or enabling a source.
+
+For LinkedIn alerts, install the optional dependencies with `uv sync --extra gmail`, then use the
+Sources section of Setup or Settings to import a Google Desktop OAuth client, authorize read-only Gmail
+access, and verify the private `Job Alerts` label. Scheduled collection never launches an OAuth browser.
 
 The Sources page also accepts a public company careers URL. RoleBeacon detects the connector, calls only
 an allow-listed provider endpoint, previews sample jobs, and saves the source after confirmation. Google
@@ -413,6 +421,11 @@ Core endpoints are listed below; the running app exposes the complete interactiv
 - `POST /api/setup/plan`
 - `POST /api/setup/model/discover`
 - `POST /api/setup/model/test`
+- `GET /api/setup/gmail/status`
+- `POST /api/setup/gmail/credentials`
+- `POST /api/setup/gmail/authorize`
+- `GET /api/setup/gmail/callback`
+- `POST /api/setup/gmail/test`
 - `POST /api/setup/complete`
 - `POST /api/sync`
 - `GET /api/sync/status`
@@ -449,11 +462,11 @@ uv run python -m build
 
 ## Remaining roadmap
 
-The web setup flow, schema-driven headless import, and one-command ranked job export are complete. A separate interactive terminal
-questionnaire remains deferred until it can share the same accessible review semantics and receive
-terminal UX coverage; see [docs/product-backlog.md](docs/product-backlog.md). Other remaining work is:
+The web setup flow—including read-only Gmail/LinkedIn alert onboarding—schema-driven headless import,
+and one-command ranked job export are complete. A separate interactive terminal questionnaire remains
+deferred until it can share the same accessible review semantics and receive terminal UX coverage; see
+[docs/product-backlog.md](docs/product-backlog.md). Other remaining work is:
 
-- add Gmail OAuth and LinkedIn Job Alert onboarding to the web wizard (the read-only collector exists);
 - provide a managed, checksum-verified `llama.cpp` runtime as an Ollama-free optional path;
 - make ATS and company registries user-editable without weakening runtime validation;
 - add dedicated first-party connectors for unsupported company-specific sites such as Microsoft,

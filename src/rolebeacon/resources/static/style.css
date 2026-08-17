@@ -229,6 +229,45 @@ textarea { resize: vertical; }
 .checkbox-row { display: flex; flex-wrap: wrap; gap: 12px 20px; }
 .checkbox-row label { display: flex; align-items: center; gap: 7px; font-size: 13px; }
 .checkbox-row input { min-width: auto; }
+.source-onboarding { margin-top: 20px; padding: 18px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--paper); }
+.source-onboarding h3 { margin: 2px 0 8px; }
+.source-onboarding > label { display: flex; align-items: center; gap: 8px; margin: 14px 0; }
+.source-onboarding > label input { min-width: auto; }
+.onboarding-steps { display: grid; gap: 14px; margin: 16px 0 0; padding-left: 22px; }
+.onboarding-steps li { padding-left: 4px; }
+.onboarding-steps p { margin: 6px 0; }
+.onboarding-steps input[type="file"] { margin: 8px 8px 0 0; }
+.compact-grid { max-width: 620px; margin-top: 8px; }
+.wizard-progress { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--paper); box-shadow: var(--shadow-sm); }
+.wizard-progress button { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 7px; min-width: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--muted); padding: 8px; font: 700 12px var(--font-sans); text-align: left; cursor: pointer; }
+.wizard-progress button span { display: grid; width: 24px; height: 24px; place-items: center; border-radius: 50%; background: var(--line-soft); color: var(--muted); }
+.wizard-progress button[aria-current="step"] { background: var(--brand-soft); color: var(--brand-strong); }
+.wizard-progress button[aria-current="step"] span { background: var(--brand); color: white; }
+.wizard-progress button:disabled { cursor: default; opacity: .45; }
+.wizard-start > p { max-width: 850px; }
+.wizard-path-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 20px; }
+.wizard-path-grid article { display: grid; align-content: start; gap: 12px; padding: 20px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--bg); }
+.wizard-path-grid article p { margin: 0; }
+.wizard-path-grid textarea { width: 100%; }
+.wizard-guidance { margin: 14px 0 18px; padding: 12px 14px; border-left: 4px solid var(--info); border-radius: var(--radius-sm); background: var(--info-bg); color: var(--info-text); }
+.wizard-guidance-critical { border-left-color: var(--warning); background: var(--warning-bg); color: var(--warning-text); }
+.wizard-source-packs { margin-bottom: 22px; }
+.wizard-pack-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.form-stack .wizard-pack-card { display: grid; gap: 8px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--paper); color: var(--ink); cursor: pointer; }
+.wizard-pack-card:has(input:checked) { border-color: var(--brand); box-shadow: 0 0 0 2px var(--brand-soft); }
+.wizard-pack-card > span:first-child { display: flex; align-items: center; gap: 8px; }
+.wizard-pack-card input { width: auto; min-width: auto; }
+.wizard-pack-card small { color: var(--muted); }
+.wizard-review-list { display: grid; gap: 10px; margin-top: 18px; }
+.wizard-review-row { display: grid; grid-template-columns: minmax(140px, .35fr) 1fr; gap: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper); }
+.wizard-review-row.is-ready { border-left: 4px solid var(--success); }
+.wizard-review-row.is-warning { border-left: 4px solid var(--warning); background: var(--warning-bg); }
+.wizard-controls { position: sticky; bottom: 12px; z-index: 10; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 16px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-md); background: rgba(255, 255, 255, .96); box-shadow: var(--shadow-md); }
+.wizard-controls span { color: var(--muted); font-size: 13px; text-align: center; }
+/* The wizard hides steps with the hidden attribute, so every panel that sets its own display
+   value must opt back out - otherwise .setup-actions (display: flex) keeps the final
+   activate-and-save bar on screen during all seven steps. */
+.wizard-panel[hidden] { display: none; }
 label.checkbox { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 500; color: var(--ink); }
 label.checkbox input { min-width: auto; width: auto; margin: 0; }
 
@@ -250,6 +289,13 @@ label:has(> .help-tip):not(:has(> input[type=checkbox])) > :not(.help-tip) { gri
 
 @media (max-width: 900px) {
   .form-grid { grid-template-columns: 1fr; }
+  .wizard-progress { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .wizard-path-grid, .wizard-pack-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 540px) {
+  .wizard-progress { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .wizard-review-row { grid-template-columns: 1fr; gap: 4px; }
 }
 
 /* ============================================================
