@@ -6,6 +6,12 @@
       "runtimeExecutable": "uv",
       "runtimeArgs": ["run", "rolebeacon", "serve", "--port", "8765"],
       "port": 8765
+    },
+    {
+      "name": "rolebeacon-8787",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "rolebeacon", "serve", "--port", "8787"],
+      "port": 8787
     }
   ]
 }
