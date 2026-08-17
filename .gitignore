@@ -10,6 +10,8 @@ data/*
 *.sqlite3-wal
 browser-profile/
 applications/
+rolebeacon-jobs-*/
+.rolebeacon-jobs-*/
 gmail-credentials.json
 gmail-token.json
 secrets.json

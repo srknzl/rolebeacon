@@ -1,7 +1,6 @@
-# Future: a single headless CLI invocation
+# Headless job discovery command
 
-Not scheduled - a design note for later, written 2026-08-16 so the idea and the plumbing
-it builds on don't need rediscovering.
+Status: implemented as `rolebeacon jobs`.
 
 ## What's wanted
 
@@ -27,23 +26,31 @@ Most of this is already built, just not composed into one call:
   web UI renders - the `decision_ready` sort (eligible -> unknown -> ineligible, then score
   desc; see the redesign plan's Phase 4.4) is the right default order for a CLI listing too.
 
-## The actual gap
+## Implemented interface
 
-One new subcommand, e.g. `rolebeacon jobs [--recommended-only] [--start-ollama] [--limit N]`:
+```text
+rolebeacon jobs [--from-json PATH] [--no-sync] [--start-ollama] [--output-dir PATH]
+```
 
-1. If `--start-ollama` and `settings.llm_enabled`: call `LocalModelService.start_ollama()`,
-   poll `LlmClient.health()` until available or a timeout, same pattern `app.py`'s setup flow
-   already uses for the "Start Ollama" button.
-2. Run one `SyncService.run()` (reuse `sync`'s existing code path, don't fork it).
-3. Call `database.list_jobs(sort="decision_ready", ...)`, print recommended (eligible, above
-   threshold) and the full sorted list as JSON (machine-readable, matching `sync`/`status`'s
-   existing convention) or a plain table behind a `--format table` flag.
+The command refreshes by default through `SyncService.run()` and uses `--no-sync` for a strictly local
+export. `--start-ollama` checks the configured model first, starts only an installed Ollama when needed,
+and waits up to 30 seconds; it never installs a runtime or downloads a model. Startup is restricted to
+HTTP loopback endpoints and binds Ollama to the configured host and port. A configured LAN Ollama must be
+managed on its own host.
 
-No new schema, no new service class - a new `argparse` subparser in `cli.py` that calls
-existing `SyncService`/`LocalModelService`/`Database` methods in sequence. Small.
+`--from-json` accepts one complete `SetupPayloadV1` containing candidate, mobility, preferences, selected
+sources, model settings, and activation. It is validated and persisted through the same `SetupService` as
+the web wizard before export. A refreshing run requires explicit activation in that document; a local-only
+run does not.
 
-## Open question worth asking the user before building it
+Each run atomically creates a timestamped directory containing recommended and all-jobs exports in
+versioned JSON and Markdown. The complete export has no row cap and preserves every source association.
+The recommendation subset intentionally matches the web dashboard: raw job-fit score at least 65 and
+eligibility not `ineligible`. Output files record whether refresh was requested and performed, plus its
+final status, so a fatal refresh can still produce an auditable stale-data export before exiting 1.
 
-Table output vs. JSON-only: `sync`/`status` are JSON-only today (scriptable, not meant to be
-read directly). A `jobs` command is squarely meant to be read directly - worth confirming
-whether a human-readable table is in scope or JSON is enough for a first cut.
+Successful and local-only exports return 0. A refresh completed with independent source failures returns 0
+with a warning. Invalid flag combinations return 2 without creating an export.
+
+The command remains discovery-only. Feedback, artifact generation, and browser preparation stay in the web
+workflow and their existing dedicated interfaces.

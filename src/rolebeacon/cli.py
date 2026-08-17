@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import ipaddress
 import json
 import os
+import sys
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
+from urllib.parse import urlsplit
 
 import uvicorn
 
@@ -13,6 +17,7 @@ from .company import CompanyResearchService
 from .config import Settings
 from .database import Database
 from .evaluation import run_model_evaluation, run_rules_evaluation
+from .job_export import export_jobs
 from .llm import LlmClient
 from .migration import import_legacy
 from .setup import LocalModelService, SetupService
@@ -26,6 +31,11 @@ def main() -> None:
     serve.add_argument("--host")
     serve.add_argument("--port", type=int)
     subparsers.add_parser("sync", help="Run one incremental sync")
+    jobs = subparsers.add_parser("jobs", help="Refresh and export ranked job discovery results")
+    jobs.add_argument("--no-sync", action="store_true", help="Export the existing local database without refreshing")
+    jobs.add_argument("--start-ollama", action="store_true", help="Start an installed Ollama before refreshing")
+    jobs.add_argument("--from-json", type=Path, help="Import a complete SetupPayloadV1 before running")
+    jobs.add_argument("--output-dir", type=Path, default=Path.cwd(), help="Parent directory for the timestamped export")
     subparsers.add_parser("status", help="Show source state and database statistics")
     subparsers.add_parser("doctor", help="Check setup, storage, database, and model readiness")
     setup = subparsers.add_parser("setup", help="Validate and import SetupPayloadV1 JSON")
@@ -57,7 +67,29 @@ def main() -> None:
     research.add_argument("company")
     args = parser.parse_args()
 
+    if args.command == "jobs" and args.start_ollama and args.no_sync:
+        parser.error("--start-ollama cannot be combined with --no-sync")
     settings = Settings.load()
+    if args.command == "jobs" and args.from_json:
+        try:
+            payload = json.loads(args.from_json.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("Setup JSON must be an object")
+            setup_service = SetupService(settings)
+            validation = setup_service.validate_setup_payload(payload)
+            if not validation["valid"]:
+                raise ValueError(json.dumps(validation["errors"], ensure_ascii=False))
+            imported_mode = str(validation["payload"].get("llm", {}).get("mode") or "rules")
+            if args.start_ollama and imported_mode != "ollama":
+                raise ValueError("--start-ollama requires SetupPayloadV1 to select Ollama")
+            if not args.no_sync and payload.get("activate") is not True:
+                raise ValueError("SetupPayloadV1 must set activate to true when jobs refreshes sources")
+            settings = setup_service.complete(payload)
+        except (OSError, json.JSONDecodeError, TypeError, ValueError) as error:
+            parser.error(f"invalid --from-json SetupPayloadV1: {error}")
+    if args.command == "jobs" and args.start_ollama:
+        if settings.llm_mode != "ollama":
+            parser.error("--start-ollama requires the saved scoring mode to be Ollama")
     settings.ensure_directories()
     if args.command == "migrate":
         print(json.dumps(import_legacy(settings, args.legacy_root), indent=2))
@@ -98,6 +130,10 @@ def main() -> None:
         sync_service = SyncService(settings, database, LlmClient(settings))
         sync_result = asyncio.run(sync_service.run())
         print(json.dumps(sync_result.to_dict(), indent=2))
+    elif args.command == "jobs":
+        exit_code = _run_jobs_command(args, settings, database)
+        if exit_code:
+            raise SystemExit(exit_code)
     elif args.command == "status":
         print(json.dumps({"stats": database.dashboard_stats(), "sources": database.list_sources()}, indent=2))
     elif args.command == "research-company":
@@ -172,6 +208,106 @@ def main() -> None:
         print(rendered_rules_report)
         if not rules_report["passed"]:
             raise SystemExit(1)
+
+
+async def _ensure_ollama_ready(
+    settings: Settings,
+    *,
+    timeout_seconds: float = 30,
+    poll_interval_seconds: float = 1,
+) -> dict[str, Any]:
+    endpoint = urlsplit(settings.llm_base_url)
+    hostname = endpoint.hostname or ""
+    loopback = hostname == "localhost" or hostname.endswith(".localhost")
+    if not loopback:
+        try:
+            loopback = ipaddress.ip_address(hostname).is_loopback
+        except ValueError:
+            pass
+    if not loopback:
+        raise RuntimeError(
+            "--start-ollama can manage only a loopback endpoint such as "
+            "http://127.0.0.1:11434/v1; start a configured LAN Ollama on its own host"
+        )
+    if endpoint.scheme != "http":
+        raise RuntimeError("--start-ollama requires an HTTP loopback endpoint")
+
+    try:
+        port = endpoint.port or 80
+    except ValueError as error:
+        raise RuntimeError(f"--start-ollama received an invalid endpoint port: {error}") from error
+    bind_hostname = f"[{hostname}]" if ":" in hostname else hostname
+    ollama_host = f"{bind_hostname}:{port}"
+
+    llm = LlmClient(settings)
+    health = await llm.health()
+    if health["available"]:
+        return {"started": False, "health": health}
+
+    started = LocalModelService(settings).start_ollama(host=ollama_host)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_seconds
+    while True:
+        health = await llm.health()
+        if health["available"]:
+            return {"started": True, "process": started, "health": health}
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            detail = str(health.get("error") or "configured model did not become available")
+            raise RuntimeError(f"Ollama did not become ready within {timeout_seconds:g} seconds: {detail}")
+        await asyncio.sleep(min(poll_interval_seconds, remaining))
+
+
+def _run_jobs_command(args: argparse.Namespace, settings: Settings, database: Database) -> int:
+    sync_requested = not args.no_sync
+    sync_performed = False
+    status: dict[str, Any] | None = None
+    fatal_error = ""
+
+    if sync_requested and args.start_ollama:
+        try:
+            asyncio.run(_ensure_ollama_ready(settings))
+        except Exception as error:
+            fatal_error = f"{type(error).__name__}: {error}"
+            status = {"phase": "failed", "phase_message": fatal_error, "error": fatal_error}
+
+    if sync_requested and not fatal_error:
+        try:
+            sync_service = SyncService(settings, database, LlmClient(settings))
+            sync_performed = True
+            sync_result = asyncio.run(sync_service.run())
+            status = sync_result.to_dict()
+            fatal_error = str(status.get("error") or "")
+        except Exception as error:
+            fatal_error = f"{type(error).__name__}: {error}"
+            status = {"phase": "failed", "phase_message": fatal_error, "error": fatal_error}
+
+    sync = {
+        "requested": sync_requested,
+        "performed": sync_performed,
+        "status": status,
+    }
+    try:
+        result = export_jobs(database, args.output_dir, sync=sync)
+    except Exception as error:
+        print(f"Export failed: {type(error).__name__}: {error}", file=sys.stderr)
+        return 1
+
+    phase = "skipped" if not sync_requested else str((status or {}).get("phase") or "failed")
+    print(f"Sync: {phase}")
+    print(f"Recommended jobs: {result.recommended_jobs_count}")
+    print(f"All jobs: {result.all_jobs_count}")
+    print("Exports:")
+    for path in result.paths:
+        print(f"  {path}")
+
+    source_errors = int((status or {}).get("source_errors") or 0)
+    if source_errors:
+        print(f"Warning: refresh completed with {source_errors} source error(s).", file=sys.stderr)
+    if fatal_error:
+        print(f"Refresh failed; existing local jobs were exported: {fatal_error}", file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

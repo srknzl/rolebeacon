@@ -85,6 +85,50 @@ uv run rolebeacon setup --from-json /path/to/setup.json
 uv run rolebeacon setup --from-json /path/to/setup.json --activate
 ```
 
+### Headless job discovery
+
+Run one refresh and export the complete ranked job corpus plus the dashboard-compatible recommendation
+subset from the same local setup used by the web app:
+
+```bash
+uv run rolebeacon jobs
+```
+
+For a self-contained headless run, pass the same complete `SetupPayloadV1` used by headless setup. It
+contains the candidate, mobility and authorization facts, preferences, enabled source IDs, scoring mode,
+and activation choice. RoleBeacon validates and saves it through the shared setup service before running:
+
+```bash
+uv run rolebeacon jobs --from-json /path/to/setup-payload.json
+```
+
+Refreshing requires the document to contain `"activate": true`; `--from-json ... --no-sync` may import an
+inactive setup because it contacts no external source.
+
+The command creates a timestamped `rolebeacon-jobs-<UTC timestamp>/` directory in the current directory.
+It writes `recommended-jobs.json`, `recommended-jobs.md`, `all-jobs.json`, and `all-jobs.md`, then prints
+their absolute paths. JSON contains the complete job, eligibility, scoring, and source-provenance fields;
+Markdown is a scannable summary. The all-jobs export contains every active, unmerged job in decision-ready
+order without a row limit. The recommended export matches the dashboard rule: job-fit score 65 or higher
+and eligibility not `ineligible`, so an unresolved eligibility result stays visibly marked `unknown`.
+
+Use existing local data without contacting sources or a model, choose another parent directory, or explicitly
+start an already-installed Ollama before refreshing:
+
+```bash
+uv run rolebeacon jobs --no-sync
+uv run rolebeacon jobs --from-json /path/to/setup-payload.json --no-sync
+uv run rolebeacon jobs --output-dir /path/to/exports
+uv run rolebeacon jobs --start-ollama
+```
+
+`--start-ollama` is valid only when the saved scoring mode is Ollama and its endpoint is HTTP loopback, such as
+`http://127.0.0.1:11434/v1`; the command binds the process to that exact host and port. Manage a configured
+LAN Ollama on its own host. The command never installs Ollama or pulls a model. Fatal refresh or model-start
+failures still export the existing local database and return exit code 1;
+partial source failures export usable results with a warning and return 0. Invalid flag combinations return 2
+without writing an export.
+
 ## Scoring modes
 
 ### Rules only — recommended starting point
@@ -405,12 +449,10 @@ uv run python -m build
 
 ## Remaining roadmap
 
-The web setup flow and schema-driven headless import are complete. A separate interactive terminal
+The web setup flow, schema-driven headless import, and one-command ranked job export are complete. A separate interactive terminal
 questionnaire remains deferred until it can share the same accessible review semantics and receive
 terminal UX coverage; see [docs/product-backlog.md](docs/product-backlog.md). Other remaining work is:
 
-- compose sync plus ranked job output into a single headless command, as scoped in
-  [docs/cli-headless-mode.md](docs/cli-headless-mode.md);
 - add Gmail OAuth and LinkedIn Job Alert onboarding to the web wizard (the read-only collector exists);
 - provide a managed, checksum-verified `llama.cpp` runtime as an Ollama-free optional path;
 - make ATS and company registries user-editable without weakening runtime validation;

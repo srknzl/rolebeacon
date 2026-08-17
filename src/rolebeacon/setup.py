@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -227,7 +228,7 @@ class LocalModelService:
         except (httpx.HTTPError, KeyError, TypeError, ValueError) as error:
             return {"ok": False, "error": f"{type(error).__name__}: {error}"}
 
-    def start_ollama(self) -> dict[str, Any]:
+    def start_ollama(self, *, host: str = "") -> dict[str, Any]:
         executable = shutil.which("ollama")
         if not executable:
             raise RuntimeError("Ollama is not installed or is not on PATH")
@@ -235,12 +236,16 @@ class LocalModelService:
         log_path = self.settings.data_dir / "ollama.log"
         log = log_path.open("ab")
         try:
+            environment = None
+            if host:
+                environment = {**os.environ, "OLLAMA_HOST": host}
             process = subprocess.Popen(
                 [executable, "serve"],
                 stdin=subprocess.DEVNULL,
                 stdout=log,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
+                env=environment,
             )
         finally:
             log.close()
