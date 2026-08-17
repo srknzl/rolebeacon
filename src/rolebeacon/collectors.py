@@ -493,7 +493,10 @@ class HimalayasCollector(Collector):
                 )
                 company = str(raw_company).strip()
                 if company.casefold() in {"", "name"}:
-                    company = str(item.get("companySlug") or "").strip()
+                    # Himalayas occasionally returns the literal placeholder "name" for `company`
+                    # instead of the real value; companySlug is still the actual employer, just
+                    # hyphenated, so title-case it into a readable stand-in company name.
+                    company = str(item.get("companySlug") or "").strip().replace("-", " ").title()
                 job = CollectedJob(
                     source=self.config.id,
                     source_job_id=source_job_id,

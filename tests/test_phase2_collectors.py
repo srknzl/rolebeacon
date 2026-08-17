@@ -92,7 +92,7 @@ async def test_himalayas_placeholder_company_name_falls_back_to_company_slug() -
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         jobs = await HimalayasCollector(config, client).collect(datetime.now(UTC) - timedelta(days=1))
 
-    assert jobs[0].company == "actual-company"
+    assert jobs[0].company == "Actual Company"
 
 
 @pytest.mark.asyncio
