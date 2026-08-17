@@ -328,6 +328,62 @@ def test_a_short_country_code_does_not_match_a_substring_of_an_unrelated_place_n
     assert result.status != EligibilityStatus.ELIGIBLE
 
 
+def test_us_state_postal_abbreviation_does_not_collide_with_the_same_letters_country_code() -> None:
+    # "CA" is both California's postal abbreviation and Canada's ISO code (also DE/Delaware-Germany,
+    # IN/Indiana-India, GA/Georgia-Georgia, ...). An onsite US posting naming the state must not be
+    # mistaken for a match against a same-lettered country's relocation strategy.
+    mobility = MobilityProfileV1.model_validate(
+        {
+            **MOBILITY.model_dump(mode="json"),
+            "relocation_targets": [{"country_code": "CA", "country_name": "Canada", "cities": []}],
+        }
+    )
+    strategies = [item.model_dump(mode="json") for item in generate_strategies(CANDIDATE, mobility, PREFERENCES)]
+    result = evaluate_eligibility(
+        job(location="San Mateo, CA, United States", remote_scope="", description="Build backend systems."),
+        PREFERENCES.model_dump(mode="json"), mobility.model_dump(mode="json"), strategies,
+    )
+
+    assert result.route != "relocate-ca"
+    assert result.status != EligibilityStatus.ELIGIBLE
+
+
+def test_marketing_copy_mentioning_the_world_does_not_grant_worldwide_remote_eligibility() -> None:
+    # A company's own "we connect people anywhere in the world" mission statement describes its
+    # product, not this job's remote policy - it must not satisfy the worldwide-remote branch.
+    mobility = MobilityProfileV1.model_validate({**MOBILITY.model_dump(mode="json"), "remote_from_current_country": True})
+    strategies = [item.model_dump(mode="json") for item in generate_strategies(CANDIDATE, mobility, PREFERENCES)]
+    result = evaluate_eligibility(
+        job(
+            location="Tokyo, Japan",
+            remote_scope="",
+            description="Our vision is to reimagine the way people come together, from anywhere in the world.",
+        ),
+        PREFERENCES.model_dump(mode="json"), mobility.model_dump(mode="json"), strategies,
+    )
+
+    assert result.status != EligibilityStatus.ELIGIBLE
+    assert result.location_fit != "worldwide"
+
+
+def test_a_time_boxed_work_from_anywhere_perk_does_not_grant_worldwide_remote_eligibility() -> None:
+    # "Work from anywhere in the world for 30 days per year" next to a hybrid office requirement is
+    # a bounded travel perk, not the job's actual remote eligibility.
+    mobility = MobilityProfileV1.model_validate({**MOBILITY.model_dump(mode="json"), "remote_from_current_country": True})
+    strategies = [item.model_dump(mode="json") for item in generate_strategies(CANDIDATE, mobility, PREFERENCES)]
+    result = evaluate_eligibility(
+        job(
+            location="Zurich, Switzerland",
+            remote_scope="",
+            description="Work from anywhere in the world for 30 days per year. Three days a week in the office.",
+        ),
+        PREFERENCES.model_dump(mode="json"), mobility.model_dump(mode="json"), strategies,
+    )
+
+    assert result.status != EligibilityStatus.ELIGIBLE
+    assert result.location_fit != "worldwide"
+
+
 def test_priority_company_strategy_has_score_floor() -> None:
     target = job(company="Google", location="Unknown", remote_scope="", description="General software engineering role")
     eligibility = evaluate(target)

@@ -9,7 +9,7 @@ from typing import Any
 from .domain import EligibilityResult, EligibilityStatus, ScoreResult
 from .profile import CONTINENT_COUNTRY_CODES, DEFAULT_SCORE_WEIGHTS, country_names_by_code
 
-SCORING_PROMPT_VERSION = "job-fit-v13"
+SCORING_PROMPT_VERSION = "job-fit-v14"
 
 # Ineligibility is a hard gate: no combination of fit signals may push a total above this cap.
 # LLM scoring is only ever invoked for eligible jobs (see sync.py), so every ineligible job's
@@ -194,9 +194,13 @@ WORLDWIDE_PATTERNS = (
     r"work from any country",
     r"remote[- ]worldwide",
     r"worldwide remote",
-    r"anywhere in the world",
     r"hire(?:s|d|ing)?(?: people| talent| employees)? (?:from )?anywhere in the world",
 )
+# A bare "N days/weeks/months per year" right after a worldwide-remote claim means the claim is a
+# bounded work-from-abroad perk on an otherwise onsite/hybrid role (e.g. GetYourGuide's "Work from
+# anywhere in the world for 30 days per year" alongside a 3-day-a-week office requirement), not the
+# job's actual remote eligibility - it must not satisfy WORLDWIDE_PATTERNS.
+_TIME_BOXED_WORLDWIDE_QUALIFIER = re.compile(r"\d+\s*(?:days?|weeks?|months?)\s*(?:per|a|each)\s*year", re.IGNORECASE)
 SCOPED_REMOTE_PATTERNS = (
     r"(?:your|the) country of employment",
     r"anywhere in(?:side)?[- ]country",
@@ -226,6 +230,17 @@ REGION_LOCATION_ALIASES: dict[str, tuple[str, ...]] = {
 
 def _contains(text: str, patterns: tuple[str, ...]) -> bool:
     return any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns)
+
+
+def _contains_unbounded_worldwide_claim(text: str) -> bool:
+    """Like _contains(text, WORLDWIDE_PATTERNS), but a match immediately followed by a
+    days/weeks/months-per-year qualifier is a capped travel perk, not a worldwide-remote claim."""
+    for pattern in WORLDWIDE_PATTERNS:
+        for match in re.finditer(pattern, text, re.IGNORECASE):
+            trailing = text[match.end():match.end() + 40]
+            if not _TIME_BOXED_WORLDWIDE_QUALIFIER.search(trailing):
+                return True
+    return False
 
 
 def _company_in(company: str, values: list[str]) -> bool:
@@ -319,12 +334,25 @@ def _matching_active_clearance(policy: dict[str, Any], requirement: dict[str, st
     return False
 
 
+# A US state's postal abbreviation is, by pure coincidence, also a real ISO country code for dozens
+# of states (CA/Canada, IN/India, GA/Georgia, DE/Germany, PA/Panama, ...). A bare-code location match
+# below is genuinely ambiguous only in that case, and a US postal abbreviation only ever shows up
+# alongside an explicit "United States"/"USA"/"US" - so once the location names the US, a bare match
+# for any other code is that collision, not a real country hit.
+_US_LOCATION_MARKERS = (*COUNTRY_LOCATION_ALIASES["US"], "us")
+
+
+def _names_united_states(location: str) -> bool:
+    return any(re.search(rf"\b{re.escape(marker)}\b", location, re.IGNORECASE) for marker in _US_LOCATION_MARKERS)
+
+
 def _place_match(location: str, code: str, name: str, cities: list[str] | tuple[str, ...] = ()) -> bool:
     code = str(code).strip()
     # A short ISO code is only trustworthy as an exact-case token (e.g. "Berlin, DE"). Casefolding it
     # like the name/city terms below produces false positives, e.g. "de" inside "Île-de-France" matching
-    # country_code "DE" (Germany) for an unrelated French location.
-    if code and re.search(rf"\b{re.escape(code)}\b", location):
+    # country_code "DE" (Germany) for an unrelated French location. See _names_united_states for the
+    # other collision this guards against: a US state postal abbreviation matching an unrelated code.
+    if code and re.search(rf"\b{re.escape(code)}\b", location) and (code.upper() == "US" or not _names_united_states(location)):
         return True
     terms = [name, *COUNTRY_LOCATION_ALIASES.get(code.upper(), ()), *cities]
     text = location.casefold()
@@ -366,7 +394,9 @@ def evaluate_eligibility(
     sponsor = not no_sponsor and (_contains(text, SPONSOR_PATTERNS) or signals.get("visa_sponsorship") is True)
     relocation = _contains(text, RELOCATION_PATTERNS) or signals.get("relocation") is True
     scoped_remote = _contains(text, SCOPED_REMOTE_PATTERNS)
-    worldwide = (_contains(text, WORLDWIDE_PATTERNS) or "worldwide" in location.casefold()) and not scoped_remote
+    worldwide = (
+        _contains_unbounded_worldwide_claim(text) or "worldwide" in location.casefold()
+    ) and not scoped_remote
     remote = "remote" in location.casefold() or worldwide
     clearance = clearance_requirements(text)
     raw_clearance_policy = mobility.get("clearance_policy")
