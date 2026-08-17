@@ -309,6 +309,10 @@ Built-in source adapters include:
 Only sources selected in setup are enabled. LinkedIn authenticated pages are never scraped.
 See [docs/data-sources.md](docs/data-sources.md) before adding or enabling a source.
 
+For LinkedIn alerts, install the optional dependencies with `uv sync --extra gmail`, then use the
+Sources section of Setup or Settings to import a Google Desktop OAuth client, authorize read-only Gmail
+access, and verify the private `Job Alerts` label. Scheduled collection never launches an OAuth browser.
+
 The Sources page also accepts a public company careers URL. RoleBeacon detects the connector, calls only
 an allow-listed provider endpoint, previews sample jobs, and saves the source after confirmation. Google
 Careers uses server-rendered public job pages; Amazon Jobs uses its public site JSON response. These
@@ -413,6 +417,11 @@ Core endpoints are listed below; the running app exposes the complete interactiv
 - `POST /api/setup/plan`
 - `POST /api/setup/model/discover`
 - `POST /api/setup/model/test`
+- `GET /api/setup/gmail/status`
+- `POST /api/setup/gmail/credentials`
+- `POST /api/setup/gmail/authorize`
+- `GET /api/setup/gmail/callback`
+- `POST /api/setup/gmail/test`
 - `POST /api/setup/complete`
 - `POST /api/sync`
 - `GET /api/sync/status`
@@ -449,11 +458,11 @@ uv run python -m build
 
 ## Remaining roadmap
 
-The web setup flow, schema-driven headless import, and one-command ranked job export are complete. A separate interactive terminal
-questionnaire remains deferred until it can share the same accessible review semantics and receive
-terminal UX coverage; see [docs/product-backlog.md](docs/product-backlog.md). Other remaining work is:
+The web setup flow—including read-only Gmail/LinkedIn alert onboarding—schema-driven headless import,
+and one-command ranked job export are complete. A separate interactive terminal questionnaire remains
+deferred until it can share the same accessible review semantics and receive terminal UX coverage; see
+[docs/product-backlog.md](docs/product-backlog.md). Other remaining work is:
 
-- add Gmail OAuth and LinkedIn Job Alert onboarding to the web wizard (the read-only collector exists);
 - provide a managed, checksum-verified `llama.cpp` runtime as an Ollama-free optional path;
 - make ATS and company registries user-editable without weakening runtime validation;
 - add dedicated first-party connectors for unsupported company-specific sites such as Microsoft,

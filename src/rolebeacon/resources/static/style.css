@@ -229,6 +229,15 @@ textarea { resize: vertical; }
 .checkbox-row { display: flex; flex-wrap: wrap; gap: 12px 20px; }
 .checkbox-row label { display: flex; align-items: center; gap: 7px; font-size: 13px; }
 .checkbox-row input { min-width: auto; }
+.source-onboarding { margin-top: 20px; padding: 18px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--paper); }
+.source-onboarding h3 { margin: 2px 0 8px; }
+.source-onboarding > label { display: flex; align-items: center; gap: 8px; margin: 14px 0; }
+.source-onboarding > label input { min-width: auto; }
+.onboarding-steps { display: grid; gap: 14px; margin: 16px 0 0; padding-left: 22px; }
+.onboarding-steps li { padding-left: 4px; }
+.onboarding-steps p { margin: 6px 0; }
+.onboarding-steps input[type="file"] { margin: 8px 8px 0 0; }
+.compact-grid { max-width: 620px; margin-top: 8px; }
 label.checkbox { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 500; color: var(--ink); }
 label.checkbox input { min-width: auto; width: auto; margin: 0; }
 

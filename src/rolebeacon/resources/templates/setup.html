@@ -86,6 +86,45 @@
       <label title="{{ amazon_help }}"><input class="source-choice" type="checkbox" value="__amazon_jobs__" data-source-ids="{{ amazon_ids }}"
         {% if sources|selectattr('kind', 'equalto', 'amazon_jobs')|selectattr('enabled')|list %}checked{% endif %}> Amazon Jobs {{ tip(amazon_help) }}<span class="source-choice-note">Searches every country you're authorized to work in or willing to relocate to. Amazon's own search has no remote-eligible filter, so there's no Remote row here.</span></label>
     </div>
+    {% set linkedin_source = sources|selectattr('id', 'equalto', 'linkedin-alerts')|first %}
+    <section class="source-onboarding" aria-labelledby="gmail-onboarding-heading">
+      <div>
+        <p class="eyebrow">USER-OWNED ALERTS</p>
+        <h3 id="gmail-onboarding-heading">LinkedIn Job Alerts through Gmail</h3>
+        <p>RoleBeacon never signs in to or scrapes LinkedIn. It reads only messages in the private Gmail label <code>Job Alerts</code>, extracts the job links LinkedIn sent to you, and keeps the original alert as provenance.</p>
+      </div>
+      <label><input class="source-choice" id="linkedin-alerts-source" type="checkbox" value="linkedin-alerts" {% if linkedin_source and linkedin_source.enabled %}checked{% endif %}> Enable LinkedIn Job Alerts via Gmail</label>
+      <div id="gmail-connection-status" class="model-health model-health-rules" role="status" aria-live="polite"></div>
+      <ol class="onboarding-steps">
+        <li>
+          <strong>Install optional Gmail support.</strong>
+          <span id="gmail-dependency-help"><code>uv sync --extra dev --extra gmail --locked</code></span>
+        </li>
+        <li>
+          <strong>Import a Google Desktop OAuth client.</strong>
+          <p class="muted">Create a Desktop app client in your own Google Cloud project, then select its downloaded JSON. The client configuration is copied into the private RoleBeacon application-data directory and is never returned by the API.</p>
+          <input id="gmail-client-file" type="file" accept="application/json,.json" aria-label="Google Desktop OAuth client JSON">
+          <button id="gmail-import-client" class="button" type="button">Import client JSON</button>
+        </li>
+        <li>
+          <strong>Authorize read-only Gmail access.</strong>
+          <div class="form-grid compact-grid">
+            <label>Google account hint <input id="gmail-login-hint" type="email" autocomplete="email" placeholder="you@gmail.com" value="{{ gmail.account_email }}"></label>
+          </div>
+          <p><button id="gmail-connect" class="button button-primary" type="button">Connect or reconnect Gmail</button> <button id="gmail-test" class="button" type="button">Test account and label</button></p>
+        </li>
+        <li>
+          <strong>Create the private Gmail label and filter.</strong>
+          <p class="muted">Create a label named exactly <code>Job Alerts</code> and a filter for <code>from:(jobalerts-noreply@linkedin.com)</code>. Applying the label is enough; do not archive, delete, forward, or mark the messages read.</p>
+          <p><a href="https://mail.google.com/mail/u/0/#settings/filters" target="_blank" rel="noopener">Open Gmail filters ↗</a></p>
+        </li>
+        <li>
+          <strong>Create LinkedIn alerts.</strong>
+          <p class="muted">LinkedIn supports up to 20 alerts. Keep the searches focused and enable email delivery so the messages reach the label above.</p>
+          <p><a href="https://www.linkedin.com/jobs/jam" target="_blank" rel="noopener">Open LinkedIn job alerts ↗</a></p>
+        </li>
+      </ol>
+    </section>
   </section>
 
   <section class="panel settings-tab-panel" data-settings-panel="search" id="panel-scoring">
@@ -442,6 +481,42 @@
   document.getElementById("test-model").addEventListener("click", async () => { try { const data = modelConfig(); const value = await post("/api/setup/model/test", data); const text = value.ok ? `Connected to ${data.base_url}. ${value.model_found ? `Model ${data.model} is ready.` : `The endpoint did not list ${data.model}.`}` : value.error; showModelConnection(text, value.ok && value.model_found ? "success" : "warning"); message(text, value.ok && value.model_found); } catch (error) { showModelConnection(error.message, "warning"); message(error.message); } });
   document.getElementById("remove-llm-key").addEventListener("click", () => { removeLlmKey = true; document.getElementById("llm-api-key").value = ""; document.getElementById("llm-api-key").placeholder = "Saved key will be removed when you save"; message("The saved model API key will be removed when you save preferences.", true); });
   document.getElementById("save-company-search").addEventListener("click", async () => { try { const value = await post("/api/setup/company-search", {api_key: document.getElementById("company-search-api-key").value}); const status = document.getElementById("company-search-status"); status.className = `model-health ${value.configured ? "model-health-success" : "model-health-rules"}`; status.textContent = value.configured ? "Brave Search enrichment is configured." : "Brave Search disabled; no-key company research remains active."; document.getElementById("company-search-api-key").value = ""; message("Company research configuration saved.", true); } catch (error) { message(error.message); } });
+  const gmailStatus = document.getElementById("gmail-connection-status");
+  const renderGmailStatus = value => {
+    const text = !value.dependency_available ? "Gmail support is not installed yet. Run the command in step 1, restart RoleBeacon, then return here."
+      : !value.credentials_configured ? "Import a Google Desktop OAuth client JSON to continue."
+      : !value.authorized ? "OAuth client configured. Connect the Gmail account next."
+      : value.reauthorization_required ? "Gmail authorization expired or was revoked. Reconnect the account."
+      : !value.label_found ? `Gmail is authorized${value.account_email ? ` as ${value.account_email}` : ""}, but the exact ${value.label} label has not been verified.`
+      : `Ready: ${value.account_email || "Gmail"} is connected and the ${value.label} label exists.`;
+    gmailStatus.className = `model-health ${value.ready ? "model-health-success" : "model-health-warning"}`;
+    gmailStatus.textContent = text;
+    document.getElementById("gmail-dependency-help").hidden = value.dependency_available;
+    if (value.account_email) document.getElementById("gmail-login-hint").value = value.account_email;
+  };
+  renderGmailStatus({{ gmail|tojson }});
+  document.getElementById("gmail-import-client").addEventListener("click", async () => {
+    try {
+      const file = document.getElementById("gmail-client-file").files[0];
+      if (!file) throw new Error("Choose the downloaded Google Desktop OAuth client JSON first.");
+      const value = await post("/api/setup/gmail/credentials", {client_config: JSON.parse(await file.text())});
+      renderGmailStatus(value);
+      message("Google Desktop OAuth client imported into private local storage.", true);
+    } catch (error) { message(`Could not import the OAuth client: ${error.message}`); }
+  });
+  document.getElementById("gmail-connect").addEventListener("click", async () => {
+    try {
+      const value = await post("/api/setup/gmail/authorize", {login_hint: document.getElementById("gmail-login-hint").value.trim()});
+      window.location.assign(value.authorization_url);
+    } catch (error) { message(error.message); }
+  });
+  document.getElementById("gmail-test").addEventListener("click", async () => {
+    try {
+      const value = await post("/api/setup/gmail/test");
+      renderGmailStatus(value);
+      message(value.ready ? "Gmail and the Job Alerts label are ready." : "Gmail connected, but create the exact Job Alerts label before enabling collection.", value.ready);
+    } catch (error) { message(error.message); }
+  });
   document.querySelectorAll(".model-pick").forEach(button => button.addEventListener("click", () => {
     document.getElementById("llm-model").value = button.dataset.model;
     document.getElementById("llm-mode").value = "ollama";
