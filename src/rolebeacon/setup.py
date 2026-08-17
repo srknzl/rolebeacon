@@ -14,6 +14,7 @@ import httpx
 from pydantic import ValidationError
 
 from .config import Settings
+from .gmail import GmailOnboardingService
 from .llm import LlmClient, LlmUnavailable
 from .profile import (
     CV_CONVERSION_PROMPT,
@@ -169,10 +170,20 @@ class SetupService:
                 enabled_source_ids.remove(sentinel)
                 enabled_source_ids += [source.id for source in generated if source.kind == kind]
 
-        available_sources = {source.id for source in self.settings.load_sources()}
-        unknown_sources = sorted(set(enabled_source_ids) - available_sources)
+        source_kinds = {source.id: source.kind for source in self.settings.load_sources()}
+        unknown_sources = sorted(set(enabled_source_ids) - set(source_kinds))
         if unknown_sources:
             raise ValueError(f"Unknown source IDs: {', '.join(unknown_sources)}")
+        # The first-run wizard already refuses to enable Gmail alerts before the account and label
+        # are verified, but that check lives in browser JavaScript. `rolebeacon setup --from-json`
+        # and the Settings editor reach this method without it, so an unusable source could be
+        # enabled and activated with the failure surfacing only as a source error on the next sync.
+        if any(source_kinds.get(source_id) == "gmail_linkedin" for source_id in enabled_source_ids):
+            if not GmailOnboardingService(self.settings.data_dir).status()["ready"]:
+                raise ValueError(
+                    "Connect and test Gmail before enabling LinkedIn job alerts, or remove the "
+                    "LinkedIn alerts source from the enabled sources"
+                )
         strategies = generate_strategies(payload.candidate, payload.mobility, payload.preferences)
         updated = self.settings.save_setup(
             candidate=profile,

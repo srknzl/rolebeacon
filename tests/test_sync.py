@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -373,7 +374,15 @@ async def test_sync_injects_application_data_directory_into_credential_collector
         "preferences": {"schema_version": "1.0", "target_roles": ["Backend Engineer"]},
         "enabled_source_ids": ["linkedin-alerts"], "llm": {"mode": "rules"}, "activate": True,
     }
-    settings = SetupService(Settings.load(tmp_path)).complete(payload)
+    base = Settings.load(tmp_path)
+    # Enabling the Gmail source now requires a verified connection, so record one before setup.
+    base.data_dir.mkdir(parents=True, exist_ok=True)
+    (base.data_dir / "gmail-token.json").write_text("{}", encoding="utf-8")
+    (base.data_dir / "gmail-connection.json").write_text(
+        json.dumps({"account_email": "candidate@example.com", "label_found": True, "reauthorization_required": False}),
+        encoding="utf-8",
+    )
+    settings = SetupService(base).complete(payload)
     database = Database(settings.database_path)
     database.initialize()
     seen: list[SourceConfig] = []

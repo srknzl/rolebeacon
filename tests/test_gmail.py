@@ -208,6 +208,58 @@ def test_hidden_wizard_steps_cannot_leak_the_activate_and_save_bar(tmp_path) -> 
     assert ".wizard-panel[hidden] { display: none; }" in stylesheet.text
 
 
+def connected_gmail(settings) -> None:
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    (settings.data_dir / "gmail-token.json").write_text("{}", encoding="utf-8")
+    (settings.data_dir / "gmail-connection.json").write_text(
+        json.dumps({"account_email": "candidate@example.com", "label_found": True, "reauthorization_required": False}),
+        encoding="utf-8",
+    )
+
+
+def test_enabling_gmail_alerts_without_a_verified_connection_is_refused(tmp_path) -> None:
+    # The wizard's own guard is browser JavaScript, so `rolebeacon setup --from-json` and the
+    # Settings editor could otherwise activate a source that cannot collect anything.
+    from rolebeacon.setup import SetupService
+
+    settings = Settings.load(tmp_path)
+    payload = {
+        "candidate": {"schema_version": "1.0", "name": "Candidate", "location": {"country_code": "TR", "country_name": "Türkiye"}},
+        "mobility": {"schema_version": "1.0", "current_country_code": "TR", "work_authorizations": ["TR"]},
+        "preferences": {"schema_version": "1.0", "target_roles": ["Backend Engineer"]},
+        "enabled_source_ids": ["linkedin-alerts"],
+        "llm": {"mode": "rules"},
+        "activate": True,
+    }
+
+    with pytest.raises(ValueError, match="Connect and test Gmail"):
+        SetupService(settings).complete(payload)
+    assert Settings.load(tmp_path).activated is False
+
+    connected_gmail(settings)
+    saved = SetupService(Settings.load(tmp_path)).complete(payload)
+
+    assert saved.activated is True
+    assert [source.id for source in saved.load_sources() if source.enabled] == ["linkedin-alerts"]
+
+
+def test_setup_without_gmail_alerts_is_unaffected_by_the_verification_gate(tmp_path) -> None:
+    from rolebeacon.setup import SetupService
+
+    payload = {
+        "candidate": {"schema_version": "1.0", "name": "Candidate", "location": {"country_code": "TR", "country_name": "Türkiye"}},
+        "mobility": {"schema_version": "1.0", "current_country_code": "TR", "work_authorizations": ["TR"]},
+        "preferences": {"schema_version": "1.0", "target_roles": ["Backend Engineer"]},
+        "enabled_source_ids": [],
+        "llm": {"mode": "rules"},
+        "activate": True,
+    }
+
+    saved = SetupService(Settings.load(tmp_path)).complete(payload)
+
+    assert saved.activated is True
+
+
 def test_gmail_credentials_api_rejects_web_clients_without_writing(tmp_path) -> None:
     app = create_app(Settings.load(tmp_path))
 
