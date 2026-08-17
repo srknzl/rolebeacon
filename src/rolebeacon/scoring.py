@@ -81,9 +81,15 @@ def configured_score_weights(preferences: dict[str, Any] | None = None) -> dict[
     return values if all(value >= 0 for value in values.values()) and sum(values.values()) == 100 else dict(DEFAULT_SCORE_WEIGHTS)
 
 
-def scoring_behavior_version(preferences: dict[str, Any] | None = None) -> str:
-    """Stable suffix that requeues evaluations once when the point distribution changes."""
-    encoded = json.dumps(configured_score_weights(preferences), sort_keys=True, separators=(",", ":")).encode()
+def scoring_behavior_version(preferences: dict[str, Any] | None = None, candidate: dict[str, Any] | None = None) -> str:
+    """Stable suffix that requeues evaluations once when the point distribution changes, or when
+    the candidate's own skills/experience/languages change - rule_score reads both, so a stale
+    cached score must not survive an edit to either."""
+    encoded = json.dumps(
+        {"weights": configured_score_weights(preferences), "candidate": candidate or {}},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
     return hashlib.sha256(encoded).hexdigest()[:12]
 
 

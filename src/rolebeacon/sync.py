@@ -167,7 +167,8 @@ class SyncService:
                     if self.settings.llm_enabled
                     else f"{SCORING_PROMPT_VERSION}:rules"
                 )
-                scoring_version = f"{scoring_version}:weights-{scoring_behavior_version(search_profile)}"
+                candidate_profile = self.settings.load_candidate_profile()
+                scoring_version = f"{scoring_version}:weights-{scoring_behavior_version(search_profile, candidate_profile)}"
                 # The 1000-job cap exists to bound an LLM-mode sync's wall-clock time; rules scoring
                 # is local and fast enough to clear the whole backlog every run.
                 score_limit = 1000 if self.settings.llm_enabled else 100_000
@@ -176,7 +177,6 @@ class SyncService:
                 self.status.phase = "scoring"
                 self.status.phase_message = "Ranking eligible jobs"
                 self.status.progress_percent = 65
-                candidate_profile = self.settings.load_candidate_profile()
                 known_terms = candidate_terms(candidate_profile)
                 for job_id in pending:
                     job_record = self.database.get_job(job_id)

@@ -896,8 +896,12 @@ def test_job_detail_shows_the_ineligible_score_cap_explanation(tmp_path) -> None
 
     # Startup runs an immediate sync, which requeues and rescores any job whose stored
     # prompt_version doesn't match the current one - match it so this seeded score survives.
-    scoring_version = f"{SCORING_PROMPT_VERSION}:rules:weights-{scoring_behavior_version()}"
-    app = create_app(configured_settings(tmp_path))
+    settings = configured_settings(tmp_path)
+    scoring_version = (
+        f"{SCORING_PROMPT_VERSION}:rules:"
+        f"weights-{scoring_behavior_version(settings.load_search_profile(), settings.load_candidate_profile())}"
+    )
+    app = create_app(settings)
     job_id, _ = app.state.database.upsert_job(
         CollectedJob(
             source="manual", source_job_id="ineligible", title="Backend Engineer", company="Example",
@@ -931,8 +935,12 @@ def test_job_detail_shows_the_score_breakdown_by_dimension(tmp_path) -> None:
 
     # Startup runs an immediate sync, which requeues and rescores any job whose stored
     # prompt_version doesn't match the current one - match it so this seeded score survives.
-    scoring_version = f"{SCORING_PROMPT_VERSION}:rules:weights-{scoring_behavior_version()}"
-    app = create_app(configured_settings(tmp_path))
+    settings = configured_settings(tmp_path)
+    scoring_version = (
+        f"{SCORING_PROMPT_VERSION}:rules:"
+        f"weights-{scoring_behavior_version(settings.load_search_profile(), settings.load_candidate_profile())}"
+    )
+    app = create_app(settings)
     job_id, _ = app.state.database.upsert_job(
         CollectedJob(
             source="manual", source_job_id="scored", title="Backend Engineer", company="Example",
