@@ -19,7 +19,14 @@ from fastapi.templating import Jinja2Templates
 from .collectors import description_blocks, plain_text, repair_text
 from .company import CompanyResearchCoordinator, CompanyResearchService
 from .config import Settings
-from .database import JOB_SORTS, PIPELINE_COLUMNS, Database, JobFilters, company_key
+from .database import (
+    JOB_SORTS,
+    MODEL_SCORED_PROVIDER_FILTER,
+    PIPELINE_COLUMNS,
+    Database,
+    JobFilters,
+    company_key,
+)
 from .domain import CollectedJob, JobStatus, SourceConfig
 from .llm import LlmClient, LlmResponseRejected, LlmUnavailable
 from .profile import country_catalog, relocation_region_options
@@ -804,6 +811,10 @@ FILTER_CHIP_LABELS: dict[str, str] = {
     "hide_unmet_experience": "Hiding unmet experience requirements",
 }
 
+# The "Scored by" dropdown names engines, not endpoints, so its chip must too. A bookmarked
+# URL naming one stored provider still filters, and falls back to showing that raw value.
+_PROVIDER_CHIP_LABELS = {"rules": "Rules only", MODEL_SCORED_PROVIDER_FILTER: "Language model"}
+
 # These two kinds generate one source row per relocation-target country - dozens of otherwise
 # identical "Google Careers"/"Amazon Jobs" entries. Every other kind (Adzuna's per-country rows,
 # Arbeitnow's general/sponsored split, company-scoped boards) is genuinely distinct and stays
@@ -918,6 +929,8 @@ def _active_filter_chips(
             value = source_labels.get(value, value)
         elif key == "company_list":
             value = "Priority companies" if value == "priority" else "Watchlist" if value == "watchlist" else value
+        elif key == "provider":
+            value = _PROVIDER_CHIP_LABELS.get(value, value)
         chips.append(
             {
                 "key": key,

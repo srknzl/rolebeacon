@@ -16,6 +16,11 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .domain import CollectedJob, EligibilityResult, JobStatus, ScoreResult
 
+# JobFilters.provider value meaning "any language model", as opposed to one named provider.
+# The stored provider is "rules", "ollama", or "openai-compatible"; the UI offers engines, not
+# endpoints, so this stands in for the whole model family.
+MODEL_SCORED_PROVIDER_FILTER = "model"
+
 
 @dataclass(slots=True)
 class JobFilters:
@@ -930,7 +935,12 @@ class Database:
         if filters.min_stack_match > 0:
             clauses.append("COALESCE(json_extract(ms.dimensions_json, '$.stack'), 0) >= ?")
             params.append(filters.min_stack_match)
-        if filters.provider:
+        if filters.provider == MODEL_SCORED_PROVIDER_FILTER:
+            # "Language model" is a family, not one provider: llm.py stores "ollama" for the
+            # documented default mode and "openai-compatible" for every other endpoint. Matching
+            # any scored non-rules provider keeps the filter correct if a third one is added.
+            clauses.append("COALESCE(ms.provider, '') NOT IN ('', 'rules')")
+        elif filters.provider:
             clauses.append("COALESCE(ms.provider, '') = ?")
             params.append(filters.provider)
         if filters.hide_mismatched_titles:

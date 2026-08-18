@@ -462,6 +462,51 @@ def test_hide_unmet_experience_works_on_llm_scored_jobs_too(tmp_path) -> None:
     assert database.list_jobs(JobFilters(hide_unmet_experience=True)) == []
 
 
+def test_language_model_provider_filter_matches_every_model_provider(tmp_path) -> None:
+    # llm.py stores "ollama" for the documented default mode, so a dropdown option pinned to
+    # "openai-compatible" returned nothing at all on an Ollama install.
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    eligibility = EligibilityResult(
+        status=EligibilityStatus.ELIGIBLE, route="remote-from-tr", sponsorship="unknown",
+        relocation="unknown", location_fit="worldwide", reasons=[], risks=[],
+    )
+
+    def result(provider: str) -> ScoreResult:
+        return ScoreResult(
+            total=70,
+            dimensions={
+                "role_domain": 20, "stack": 15, "domain_experience": 15,
+                "seniority": 8, "location_authorization": 10, "salary_employment": 2,
+            },
+            confidence=0.7, verdict="review", evidence=[], gaps=[],
+            provider=provider, model="test", prompt_version="job-fit-v19:test",
+        )
+
+    ids = {}
+    for index, provider in enumerate(("rules", "ollama", "openai-compatible")):
+        value = sample_job(source=f"source-{index}")
+        value.company = f"Example {index}"
+        value.source_job_id = f"job-{index}"
+        value.url = f"https://example.com/jobs/{index}"
+        ids[provider], _ = database.upsert_job(value)
+        database.save_evaluation(ids[provider], eligibility, result(provider), "scored")
+    # A never-scored job has no provider at all and belongs to neither engine.
+    unscored = sample_job(source="source-9")
+    unscored.company = "Example 9"
+    unscored.source_job_id = "job-9"
+    unscored.url = "https://example.com/jobs/9"
+    database.upsert_job(unscored)
+
+    def matching(provider: str) -> set[int]:
+        return {job["id"] for job in database.list_jobs(JobFilters(provider=provider))}
+
+    assert matching("model") == {ids["ollama"], ids["openai-compatible"]}
+    assert matching("rules") == {ids["rules"]}
+    assert matching("ollama") == {ids["ollama"]}
+    assert len(database.list_jobs(JobFilters())) == 4
+
+
 def test_hide_mismatched_titles_excludes_low_role_domain_jobs_but_keeps_unscored_ones(tmp_path) -> None:
     database = Database(tmp_path / "jobs.sqlite3")
     database.initialize()
