@@ -22,6 +22,7 @@ from .scoring import (
     extract_experience_requirements,
     rule_score,
     scoring_behavior_version,
+    term_present,
 )
 
 # Different sources hit different providers, so syncing them concurrently is safe - these two
@@ -453,10 +454,7 @@ def engineering_job(job: CollectedJob, search_profile: dict[str, Any]) -> bool:
     ):
         return True
     terms = _profile_terms(search_profile)
-    return not terms or any(
-        re.search(rf"(?<![A-Za-z0-9]){re.escape(term)}(?![A-Za-z0-9])", searchable)
-        for term in terms
-    )
+    return not terms or any(term_present(term, searchable) for term in terms)
 
 
 _URL_QUERY_KINDS = {"google_careers": "q", "amazon_jobs": "base_query"}

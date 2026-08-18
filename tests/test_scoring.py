@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from rolebeacon.domain import EligibilityStatus
+from rolebeacon.domain import EligibilityStatus, ScoreResult
 from rolebeacon.profile import CandidateProfileV1, MobilityProfileV1, SearchPreferencesV1, generate_strategies
 from rolebeacon.scoring import (
     clearance_requirements,
@@ -11,6 +11,7 @@ from rolebeacon.scoring import (
     location_requirement,
     rule_score,
     scoring_behavior_version,
+    term_present,
 )
 
 CANDIDATE = CandidateProfileV1.model_validate(
@@ -532,6 +533,50 @@ def test_a_priority_company_does_not_lift_a_role_the_candidate_is_not_looking_fo
     result = score(job(company="Google", title="Manager, Procurement", location="Unknown", remote_scope=""))
 
     assert result.dimensions["role_domain"] == 2
+
+
+def _skill_score(description: str, skills: list[str], domains: list[str]) -> ScoreResult:
+    preferences = {**PREFERENCES.model_dump(mode="json"), "preferred_skills": skills, "preferred_domains": domains}
+    candidate = {**CANDIDATE.model_dump(mode="json"), "skills": {"Languages": skills}}
+    value = job(description=description)
+    eligibility = evaluate_eligibility(value, preferences, MOBILITY.model_dump(mode="json"), STRATEGIES)
+    return rule_score(value, eligibility, preferences, candidate, STRATEGIES)
+
+
+def test_short_skills_and_domains_do_not_match_inside_unrelated_words() -> None:
+    # "Go" used to match "good", "C" matched "communicator", "AI" matched "Email" - each one
+    # awarding points and a fabricated evidence row claiming the posting mentioned the skill.
+    result = _skill_score(
+        "We need someone who is a good communicator. Email us. Recruiting for a great gig.",
+        ["Go", "R", "C"],
+        ["AI"],
+    )
+
+    assert result.dimensions["stack"] == 0
+    assert result.dimensions["domain_experience"] == 0
+    assert not [item for item in result.evidence if item["requirement"] in {"Relevant skills", "Preferred domain"}]
+
+
+def test_skills_with_trailing_punctuation_still_match_when_genuinely_present() -> None:
+    result = _skill_score(
+        "Experience with Go and C, plus C++, C#, .NET and Node.js on our AI platform.",
+        ["Go", "C++", "C#", ".NET", "Node.js"],
+        ["AI"],
+    )
+    evidence = {item["requirement"]: item["profile_evidence"] for item in result.evidence}
+
+    assert result.dimensions["stack"] == 20
+    assert result.dimensions["domain_experience"] == 5
+    assert evidence["Relevant skills"] == "Go, C++, C#, .NET, Node.js"
+    assert evidence["Preferred domain"] == "AI"
+
+
+def test_term_present_folds_the_term_and_matches_only_whole_terms() -> None:
+    # The text arrives already casefolded; only the term still needs folding.
+    assert term_present("Go", "we write go and rust here")
+    assert not term_present("Go", "a good day to golang")
+    assert not term_present("C", "a communicator")
+    assert not term_present("", "anything")
 
 
 def test_extract_experience_requirements_parses_years_and_skill() -> None:

@@ -9,7 +9,7 @@ from typing import Any
 from .domain import EligibilityResult, EligibilityStatus, ScoreResult
 from .profile import CONTINENT_COUNTRY_CODES, DEFAULT_SCORE_WEIGHTS, country_names_by_code
 
-SCORING_PROMPT_VERSION = "job-fit-v17"
+SCORING_PROMPT_VERSION = "job-fit-v18"
 
 # Ineligibility is a hard gate: no combination of fit signals may push a total above this cap.
 # LLM scoring is only ever invoked for eligible jobs (see sync.py), so every ineligible job's
@@ -695,6 +695,22 @@ def _role_match(title: str, preferences: dict[str, Any]) -> tuple[int, bool]:
     return min(30, 17 + 5 * len([word for word in specifics if word in title])), True
 
 
+def term_present(term: str, text: str) -> bool:
+    """Match a term only as a whole term, so "Go" does not match "good" and "C" does not match "communicator".
+
+    Word boundaries are the wrong tool here: skills routinely end in a non-word character
+    (``C++``, ``C#``, ``.NET``), and a word boundary after ``+`` or ``#`` asserts the opposite of
+    what it asserts after a letter. Alphanumeric lookaround gives the same answer for every skill shape.
+
+    ``text`` is expected to be casefolded already, because callers fold a whole posting once
+    and then test many terms against it.
+    """
+    folded = term.casefold().strip()
+    if not folded:
+        return False
+    return bool(re.search(rf"(?<![A-Za-z0-9]){re.escape(folded)}(?![A-Za-z0-9])", text))
+
+
 def rule_score(
     job: dict[str, Any],
     eligibility: EligibilityResult,
@@ -712,11 +728,11 @@ def rule_score(
     preferred_skills = [str(value) for value in preferences.get("preferred_skills", [])]
     if not preferred_skills:
         preferred_skills = sorted(known_terms)
-    skill_hits = [skill for skill in preferred_skills if skill.casefold() in text and skill.casefold() in known_terms]
+    skill_hits = [skill for skill in preferred_skills if skill.casefold() in known_terms and term_present(skill, text)]
     skill_score = min(20, len(skill_hits) * 5)
 
     domains = [str(value) for value in preferences.get("preferred_domains", [])]
-    domain_hits = [domain for domain in domains if domain.casefold() in text]
+    domain_hits = [domain for domain in domains if term_present(domain, text)]
     domain_score = min(10, len(domain_hits) * 5)
 
     seniority_score = 10
