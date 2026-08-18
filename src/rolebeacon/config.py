@@ -386,15 +386,22 @@ class Settings:
         elif action == "remove":
             secrets.pop("llm_api_key", None)
         _write_private_json(self.secrets_path, secrets)
+        # Merge, so sibling top-level keys this payload knows nothing about survive - notably
+        # open_browser, which the job page's Prepare application control writes on its own.
+        # "configuration" is still replaced wholesale below: it is the commit point for the
+        # profile documents, and a merge there would leak a previous generation's values.
+        stored = _read_json(self.setup_state_path, {})
+        if not isinstance(stored, dict):
+            stored = {}
         _write_private_json(
             self.setup_state_path,
             {
+                **stored,
                 "schema_version": "1.0",
                 "generation": uuid.uuid4().hex,
                 "completed": True,
                 "activated": activate,
                 "llm": public_llm,
-                "resume_renderer": "builtin",
                 # This atomically replaced manifest is the commit point for related profile
                 # files. Readers use this generation, so a crash during compatibility-file
                 # writes cannot expose a mixed candidate/mobility/preferences generation.

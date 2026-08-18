@@ -68,6 +68,47 @@ def test_save_search_profile_updates_the_manifest_source_of_truth(tmp_path) -> N
     assert settings.load_search_profile()["target_roles"] == ["Platform Engineer"]
 
 
+def _save_setup(settings: Settings, *, roles: list[str], activate: bool = True) -> Settings:
+    return settings.save_setup(
+        candidate={"schema_version": "1.0", "name": "Candidate"},
+        mobility={"schema_version": "1.0", "current_country_code": "TR"},
+        preferences={"schema_version": "1.0", "target_roles": roles},
+        strategies=[],
+        enabled_source_ids=[],
+        llm={"mode": "rules"},
+        activate=activate,
+    )
+
+
+def test_save_setup_preserves_sibling_keys_it_does_not_own(tmp_path) -> None:
+    # save_setup used to rebuild setup.json from a literal, so the Prepare application toggle
+    # was silently reset every time an unrelated Settings save ran.
+    settings = Settings.load(tmp_path)
+    settings.ensure_directories()
+    _save_setup(settings, roles=["Backend Engineer"])
+    settings.save_open_browser(True)
+
+    _save_setup(settings, roles=["Platform Engineer"])
+    stored = json.loads(settings.setup_state_path.read_text(encoding="utf-8"))
+
+    assert stored["open_browser"] is True
+    assert Settings.load(tmp_path).open_browser is True
+
+
+def test_save_setup_replaces_the_configuration_document_wholesale(tmp_path) -> None:
+    settings = Settings.load(tmp_path)
+    settings.ensure_directories()
+    _save_setup(settings, roles=["Backend Engineer"])
+    first = json.loads(settings.setup_state_path.read_text(encoding="utf-8"))
+
+    _save_setup(settings, roles=["Platform Engineer"], activate=False)
+    second = json.loads(settings.setup_state_path.read_text(encoding="utf-8"))
+
+    assert second["configuration"]["preferences"]["target_roles"] == ["Platform Engineer"]
+    assert second["activated"] is False
+    assert second["generation"] != first["generation"]
+
+
 def test_private_json_write_is_portable_when_fchmod_is_unavailable(tmp_path, monkeypatch) -> None:
     settings = Settings.load(tmp_path)
     monkeypatch.delattr("rolebeacon.config.os.fchmod", raising=False)
