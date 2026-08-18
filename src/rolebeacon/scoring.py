@@ -324,7 +324,14 @@ def _contains_unbounded_worldwide_claim(text: str) -> bool:
     return False
 
 
-def _company_in(company: str, values: list[str]) -> bool:
+def company_matches(company: str, values: list[str]) -> bool:
+    """Whether a collected company name is one of the configured names.
+
+    Employers are collected under whatever legal name their ATS reports ("Acme Inc"), while a
+    user types the name they know ("Acme"), so every company comparison normalizes before it
+    compares. Shared with company.py so priority/watchlist membership means the same thing in
+    eligibility, filtering, and company fit.
+    """
     legal_suffixes = {
         "ab", "ag", "as", "bv", "co", "company", "corp", "corporation", "gmbh", "inc",
         "incorporated", "limited", "llc", "ltd", "nv", "oy", "plc", "sa", "ş",
@@ -498,7 +505,7 @@ def evaluate_eligibility(
     raw_clearance_policy = mobility.get("clearance_policy")
     clearance_policy: dict[str, Any] = raw_clearance_policy if isinstance(raw_clearance_policy, dict) else {}
     excluded = [phrase for phrase in preferences.get("exclude_phrases", []) if phrase.casefold() in text.casefold()]
-    blocked_company = _company_in(company, preferences.get("company_blocklist", []))
+    blocked_company = company_matches(company, preferences.get("company_blocklist", []))
     policy_exclusions = [
         phrase for phrase in clearance_policy.get("explicitly_excluded_requirements", [])
         if str(phrase).strip() and str(phrase).casefold() in text.casefold()
@@ -531,7 +538,7 @@ def evaluate_eligibility(
             strategy
             for strategy in strategies
             if strategy.get("kind") in ("priority_company", "company_watchlist")
-            and _company_in(company, strategy.get("companies", []))
+            and company_matches(company, strategy.get("companies", []))
         ),
         None,
     )

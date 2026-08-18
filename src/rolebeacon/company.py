@@ -15,6 +15,7 @@ from .collectors import USER_AGENT, default_http_client, plain_text
 from .config import Settings
 from .database import Database, company_key
 from .llm import LlmClient, LlmUnavailable
+from .scoring import company_matches
 
 COMPANY_SCHEMA = {
     "type": "object",
@@ -390,16 +391,21 @@ class CompanyResearchService:
                 try:
                     response = await client.get(url, headers=headers)
                     if response.status_code == 304:
-                        evidence.append(
-                            {
-                                "source_url": url,
-                                "source_type": source.get("type", str(previous["source_type"])),
-                                "title": str(previous["title"]),
-                                "excerpt": str(previous["excerpt"]),
-                                "etag": str(previous.get("etag") or ""),
-                                "last_modified": str(previous.get("last_modified") or ""),
-                            }
-                        )
+                        # Servers do answer 304 to an unconditional request. There is then no
+                        # cached body to reuse, and reading one out of an empty `previous` used
+                        # to raise straight through research(), failing a run that had already
+                        # gathered good evidence elsewhere. Skip the source instead.
+                        if previous.get("excerpt"):
+                            evidence.append(
+                                {
+                                    "source_url": url,
+                                    "source_type": str(source.get("type") or previous.get("source_type", "")),
+                                    "title": str(previous.get("title", "")),
+                                    "excerpt": str(previous["excerpt"]),
+                                    "etag": str(previous.get("etag") or ""),
+                                    "last_modified": str(previous.get("last_modified") or ""),
+                                }
+                            )
                         continue
                     response.raise_for_status()
                     requested_host = self._registrable_host(urlsplit(url).hostname or "")
@@ -581,7 +587,9 @@ class CompanyResearchService:
         sponsor = self._company_level(sponsor_found)
         relocation = self._company_level(relocation_found)
         salary_known = any(job.get("salary_min") or job.get("salary_max") for job in jobs)
-        target = name in search_profile.get("priority_companies", []) or name in search_profile.get("company_watchlist", [])
+        target = company_matches(name, search_profile.get("priority_companies", [])) or company_matches(
+            name, search_profile.get("company_watchlist", [])
+        )
         mobility_score = {
             "worldwide": 20,
             "regional": 8,
@@ -846,6 +854,9 @@ class CompanyResearchCoordinator:
         self.service = service
         self.status = CompanyResearchStatus()
         self._lock = asyncio.Lock()
+        # The event loop only holds a weak reference to a running task, so without this the
+        # research could be garbage-collected mid-run and status.running would never clear.
+        self._task: asyncio.Task[None] | None = None
 
     def start(self, name: str) -> dict[str, Any]:
         if self.status.running:
@@ -857,8 +868,13 @@ class CompanyResearchCoordinator:
             message="Preparing company research",
             progress_percent=3,
         )
-        asyncio.create_task(self._run(name))
+        self._task = asyncio.create_task(self._run(name))
+        self._task.add_done_callback(self._clear_task)
         return {"accepted": True, "status": self.status.to_dict()}
+
+    def _clear_task(self, task: asyncio.Task[None]) -> None:
+        if self._task is task:
+            self._task = None
 
     async def _run(self, name: str) -> None:
         async with self._lock:

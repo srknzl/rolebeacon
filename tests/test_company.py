@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import asyncio
+import gc
 from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
 import pytest
 
-from rolebeacon.company import CompanyResearchService
+from rolebeacon.company import CompanyResearchCoordinator, CompanyResearchService
 from rolebeacon.config import Settings
 from rolebeacon.database import Database
 from rolebeacon.domain import CollectedJob, EligibilityResult, EligibilityStatus, ScoreResult
@@ -184,6 +186,99 @@ async def test_a_refresh_revalidates_a_stored_page_instead_of_downloading_it_aga
         "excerpt": "We hire engineers remotely.", "etag": 'W/"abc"',
         "last_modified": "Wed, 21 Oct 2026 07:28:00 GMT",
     }]
+
+
+async def test_an_unsolicited_304_skips_its_source_instead_of_failing_the_run(tmp_path, monkeypatch) -> None:
+    # A 304 answered to an unconditional request has no cached body to reuse. Reading one out of
+    # the empty cache entry used to raise straight through research(), losing every other source.
+    settings = Settings.load(tmp_path)
+    service = CompanyResearchService(settings, Database(tmp_path / "jobs.sqlite3"), LlmClient(settings))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/robots.txt":
+            return httpx.Response(404)
+        if request.url.path == "/careers":
+            return httpx.Response(304)
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            text="<title>About</title><p>" + "We build distributed systems and hire engineers. " * 4 + "</p>",
+        )
+
+    monkeypatch.setattr(
+        "rolebeacon.company.default_http_client",
+        lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    evidence = await service._fetch_official_sources(
+        [
+            {"url": "https://example.com/careers", "type": "careers"},
+            {"url": "https://example.com/about", "type": "about"},
+        ],
+        {},
+    )
+
+    assert [item["source_url"] for item in evidence] == ["https://example.com/about"]
+
+
+async def test_company_research_start_retains_its_task_until_the_run_completes(tmp_path) -> None:
+    # asyncio holds only a weak reference to a running task, so a discarded handle could be
+    # collected mid-run, leaving status.running stuck True forever.
+    settings = Settings.load(tmp_path)
+    service = CompanyResearchService(settings, Database(tmp_path / "jobs.sqlite3"), LlmClient(settings))
+    coordinator = CompanyResearchCoordinator(service)
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def research(name: str, progress=None) -> int:
+        started.set()
+        await release.wait()
+        return 7
+
+    service.research = research  # type: ignore[method-assign]
+
+    assert coordinator.start("Example")["accepted"] is True
+    await started.wait()
+    task = coordinator._task
+    assert task is not None and not task.done()
+    gc.collect()  # the only strong reference must be the coordinator's own
+
+    release.set()
+    await task
+
+    assert coordinator.status.running is False
+    assert coordinator.status.company_id == 7
+    assert coordinator._task is None
+
+
+def test_priority_company_matching_normalizes_the_legal_name(tmp_path) -> None:
+    # A job collected as "Acme Inc" against a priority-list entry of "Acme" already matches in
+    # eligibility; company fit compared raw strings and silently missed it.
+    settings = Settings.load(tmp_path)
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    service = CompanyResearchService(settings, database, LlmClient(settings))
+    evidence = [
+        {
+            "source_url": "https://example.com/careers",
+            "source_type": "careers",
+            "title": "Careers",
+            "excerpt": "Our backend platform team builds distributed systems.",
+        }
+    ]
+
+    def quality(priority: list[str]) -> int:
+        _, score = service._deterministic_research(
+            "Acme Inc",
+            evidence,
+            [],
+            {"preferred_domains": [], "priority_companies": priority, "company_watchlist": []},
+        )
+        return int(score["dimensions"]["company_quality"])
+
+    assert quality(["Acme"]) == 8
+    assert quality(["Acme Inc"]) == 8
+    assert quality(["Globex"]) == 5
 
 
 def test_a_page_that_answers_200_with_not_found_is_not_a_source() -> None:
