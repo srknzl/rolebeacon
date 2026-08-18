@@ -80,8 +80,20 @@ Run a readiness check at any time:
 uv run rolebeacon doctor
 ```
 
-Headless setup uses the same `SetupPayloadV1` schema and validation service as the web wizard.
-Importing does not activate collection unless `--activate` is explicitly supplied:
+### Setup without a browser
+
+`rolebeacon setup` runs the same six steps in the terminal, using the same schemas, source catalog,
+completeness review, and activation service as the web wizard. Nothing is written until the final
+confirmation, so `q` at any prompt leaves the installation untouched, and `b` returns to the previous
+step. Unlike the web checkbox, the terminal activation prompt defaults to *no*: collection starts only
+when you type `y`.
+
+```bash
+uv run rolebeacon setup
+```
+
+Headless import uses the same schema and validation service. It does not activate collection unless
+`--activate` is explicitly supplied, and `--no-interactive` refuses to open the wizard at all:
 
 ```bash
 uv run rolebeacon setup --from-json /path/to/setup.json

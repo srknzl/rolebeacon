@@ -15,7 +15,10 @@ an LLM must never be required for collection, deterministic scoring, or setup.
 - `src/rolebeacon/sync.py` owns startup catch-up, overlap windows, source isolation, and scoring.
 - `src/rolebeacon/scoring.py` owns deterministic eligibility and generated-strategy ranking.
 - `src/rolebeacon/profile.py` owns versioned public candidate, mobility, and preference schemas.
-- `src/rolebeacon/setup.py` owns first-run setup and optional local-model assistance.
+- `src/rolebeacon/setup.py` owns first-run setup, the shared completeness review, and optional
+  local-model assistance.
+- `src/rolebeacon/wizard.py` owns the interactive terminal setup flow; `src/rolebeacon/terminal.py`
+  owns its standard-library prompts.
 - `src/rolebeacon/company.py` owns provenance-backed employer research and company fit.
 - `src/rolebeacon/services.py` owns résumé, cover-letter, and application artifacts.
 - `src/rolebeacon/browser.py` may prepare fields but must never submit an application.

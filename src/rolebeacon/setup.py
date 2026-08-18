@@ -17,11 +17,13 @@ from .config import Settings
 from .llm import LlmClient, LlmUnavailable
 from .profile import (
     CV_CONVERSION_PROMPT,
+    RELOCATION_REGION_CODES,
     SETUP_PLANNING_PROMPT,
     CandidateProfileV1,
     LlmSetup,
     SetupPayloadV1,
     candidate_schema,
+    country_names_by_code,
     generate_strategies,
     relocation_countries,
 )
@@ -29,6 +31,40 @@ from .services import validate_candidate_profile
 from .source_discovery import relocation_source_candidates
 
 MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
+READY = "ready"
+MISSING = "missing"
+AMBIGUOUS = "ambiguous"
+CLEARANCE_LABELS = {
+    "unknown": "Unknown — clearance-restricted roles stay unknown and are never inferred",
+    "cannot_meet": "Cannot meet clearance requirements",
+    "eligible_to_attempt": "May be eligible to undergo vetting",
+    "has_active_clearance": "Holds an active clearance",
+}
+
+
+def _section(value: dict[str, Any], key: str) -> dict[str, Any]:
+    section = value.get(key)
+    return section if isinstance(section, dict) else {}
+
+
+def _section_list(value: dict[str, Any], key: str) -> list[dict[str, Any]]:
+    entries = value.get(key)
+    return [entry for entry in entries if isinstance(entry, dict)] if isinstance(entries, list) else []
+
+
+def _entries(value: dict[str, Any], key: str) -> list[str]:
+    entries = value.get(key)
+    if not isinstance(entries, list):
+        return []
+    return [str(entry).strip() for entry in entries if str(entry).strip()]
+
+
+def _place(code: str) -> str:
+    """Name a country or supported relocation region, falling back to the raw code."""
+    if code in RELOCATION_REGION_CODES:
+        return RELOCATION_REGION_CODES[code]
+    name = country_names_by_code().get(code)
+    return f"{name} ({code})" if name else code
 
 
 class SetupService:
@@ -90,6 +126,113 @@ class SetupService:
             "valid": not issues,
             "errors": issues,
             "payload": payload.model_dump(mode="json", exclude={"llm": {"api_key"}}),
+        }
+
+    def review(self, value: dict[str, Any]) -> dict[str, Any]:
+        """Summarize a setup draft and name its missing or ambiguous critical facts.
+
+        Both wizards render exactly these rows, so setup completeness has a single definition.
+        A draft is still being edited while this runs, so nothing here validates the schema or
+        raises: an absent value is reported as missing rather than rejected.
+        """
+        candidate = _section(value, "candidate")
+        mobility = _section(value, "mobility")
+        preferences = _section(value, "preferences")
+        llm = _section(value, "llm")
+        items: list[dict[str, str]] = []
+
+        def add(title: str, detail: str, status: str = READY) -> None:
+            items.append({"title": title, "detail": detail, "status": status})
+
+        name = str(candidate.get("name", "")).strip()
+        country_code = str(_section(candidate, "location").get("country_code", "")).strip().upper()
+        if name and country_code:
+            add("Candidate", f"{name} — currently in {_place(country_code)}")
+        elif name:
+            add("Candidate", f"{name} — no current country", MISSING)
+        else:
+            add("Candidate", "No name", MISSING)
+
+        roles = _entries(preferences, "target_roles")
+        add("Target roles", ", ".join(roles) or "No target role", READY if roles else MISSING)
+
+        authorizations = [value.upper() for value in _entries(mobility, "work_authorizations")]
+        add(
+            "Work authorization",
+            ", ".join(_place(code) for code in authorizations) or "No country you can work in today",
+            READY if authorizations else MISSING,
+        )
+
+        targets = [
+            str(target.get("country_code", "")).strip().upper()
+            for target in _section_list(mobility, "relocation_targets")
+        ]
+        willing = bool(mobility.get("willing_to_relocate", True))
+        if not targets:
+            add("Relocation", "No relocation target — searching your own country and remote roles only")
+        elif willing:
+            add("Relocation", ", ".join(_place(code) for code in targets))
+        else:
+            add(
+                "Relocation",
+                f"{len(targets)} target(s) listed while 'willing to relocate' is off, so none of them is searched",
+                AMBIGUOUS,
+            )
+
+        add(
+            "Sponsorship",
+            "Required outside your authorized countries"
+            if mobility.get("sponsorship_required_outside_authorized_countries", True)
+            else "Not required outside your authorized countries",
+        )
+
+        clearance = str(_section(mobility, "clearance_policy").get("status", "") or "unknown")
+        add(
+            "Security clearance",
+            CLEARANCE_LABELS.get(clearance, clearance),
+            AMBIGUOUS if clearance == "unknown" else READY,
+        )
+
+        salary = _section(preferences, "salary")
+        minimum = salary.get("minimum")
+        currency = str(salary.get("currency", "")).strip().upper()
+        hard_filter = bool(salary.get("hard_filter"))
+        if minimum in (None, ""):
+            add(
+                "Salary",
+                "Hard filter enabled without a minimum, so it rejects nothing" if hard_filter else "No minimum",
+                AMBIGUOUS if hard_filter else READY,
+            )
+        elif not currency:
+            add("Salary", f"Minimum {minimum} with no currency, so no posting is comparable", AMBIGUOUS)
+        else:
+            add(
+                "Salary",
+                f"{'Rejects below' if hard_filter else 'Prefers at least'} {minimum} {currency}"
+                "; missing or different-currency pay stays unknown",
+            )
+
+        sources = _entries(value, "enabled_source_ids")
+        add(
+            "Sources",
+            f"{len(sources)} selected" if sources else "No source selected",
+            READY if sources else MISSING,
+        )
+
+        mode = str(llm.get("mode", "") or "rules")
+        model = str(llm.get("model", "")).strip()
+        if mode == "rules":
+            add("Scoring", "Rules only — no model is contacted")
+        elif model:
+            add("Scoring", f"{mode}: {model}")
+        else:
+            add("Scoring", f"{mode} selected without a model identifier", MISSING)
+
+        return {
+            "items": items,
+            "missing": [f"{item['title']}: {item['detail']}" for item in items if item["status"] == MISSING],
+            "ambiguous": [f"{item['title']}: {item['detail']}" for item in items if item["status"] == AMBIGUOUS],
+            "ready": not any(item["status"] == MISSING for item in items),
         }
 
     async def plan_with_llm(self, value: dict[str, Any]) -> dict[str, Any]:

@@ -22,6 +22,7 @@ from .llm import LlmClient
 from .migration import import_legacy
 from .setup import LocalModelService, SetupService
 from .sync import SyncService
+from .wizard import SetupWizard
 
 
 def main() -> None:
@@ -38,9 +39,14 @@ def main() -> None:
     jobs.add_argument("--output-dir", type=Path, default=Path.cwd(), help="Parent directory for the timestamped export")
     subparsers.add_parser("status", help="Show source state and database statistics")
     subparsers.add_parser("doctor", help="Check setup, storage, database, and model readiness")
-    setup = subparsers.add_parser("setup", help="Validate and import SetupPayloadV1 JSON")
-    setup.add_argument("--from-json", type=Path, required=True)
+    setup = subparsers.add_parser("setup", help="Run the interactive wizard, or import SetupPayloadV1 JSON")
+    setup.add_argument("--from-json", type=Path, help="Import a SetupPayloadV1 document instead of asking questions")
     setup.add_argument("--activate", action="store_true", help="Explicitly activate collection after import")
+    setup.add_argument(
+        "--no-interactive",
+        action="store_true",
+        help="Refuse to start the interactive wizard; requires --from-json",
+    )
     migrate = subparsers.add_parser("migrate", help="Copy data from a legacy Job Radar installation")
     migrate.add_argument("--from", dest="legacy_root", type=Path, required=True)
     model = subparsers.add_parser("model", help="Manage an optional local model runtime")
@@ -95,12 +101,24 @@ def main() -> None:
         print(json.dumps(import_legacy(settings, args.legacy_root), indent=2))
         return
     if args.command == "setup":
+        if args.from_json is None:
+            if args.no_interactive:
+                parser.error("--no-interactive requires --from-json PATH")
+            if not sys.stdin.isatty():
+                parser.error("setup needs a terminal; pipe a document with --from-json PATH instead")
+            summary = SetupWizard(settings).run()
+            if summary is None:
+                raise SystemExit(1)
+            print(json.dumps(summary, indent=2))
+            return
         payload = json.loads(args.from_json.read_text(encoding="utf-8"))
         if not isinstance(payload, dict):
             raise SystemExit("Setup JSON must be an object")
         payload["activate"] = bool(args.activate)
         service = SetupService(settings)
-        service.validate_setup_payload(payload)
+        validation = service.validate_setup_payload(payload)
+        if not validation["valid"]:
+            raise SystemExit(json.dumps({"errors": validation["errors"]}, indent=2, ensure_ascii=False))
         saved = service.complete(payload)
         print(
             json.dumps(

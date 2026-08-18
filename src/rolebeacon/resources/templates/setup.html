@@ -575,29 +575,27 @@
   const wizardSteps = ["start", "profile", "eligibility", "sources", "advanced", "review"];
   let wizardStepIndex = 0;
   let wizardFurthestStep = 0;
-  const renderWizardReview = () => {
+  const reviewRow = (title, detail, status) => {
+    const row = document.createElement("div");
+    row.className = `wizard-review-row ${status === "ready" ? "is-ready" : "is-warning"}`;
+    const heading = document.createElement("strong");
+    heading.textContent = title;
+    const value = document.createElement("span");
+    value.textContent = detail;
+    row.append(heading, value);
+    return row;
+  };
+  // The server owns the definition of setup completeness so this wizard and the CLI wizard
+  // cannot drift apart; this step only renders what /api/setup/review reports.
+  const renderWizardReview = async () => {
     const list = document.getElementById("wizard-review-list");
     if (!list) return;
-    const packCount = document.querySelectorAll(".source-pack-choice:checked").length;
-    const directSourceCount = document.querySelectorAll(".source-choice:checked").length;
-    const items = [
-      ["Candidate", document.getElementById("name").value.trim() || "Missing name", Boolean(document.getElementById("name").value.trim())],
-      ["Target roles", lines("target-roles").join(", ") || "No target roles", lines("target-roles").length > 0],
-      ["Work authorization", lines("authorizations").join(", ") || "No authorized country", lines("authorizations").length > 0],
-      ["Relocation", lines("relocation-targets").join(", ") || "No relocation targets — local/remote search only", true],
-      ["Sources", `${packCount} pack${packCount === 1 ? "" : "s"} and ${directSourceCount} direct source${directSourceCount === 1 ? "" : "s"}`, packCount + directSourceCount > 0],
-      ["Scoring", document.getElementById("llm-mode").value === "rules" ? "Rules only" : `${document.getElementById("llm-mode").value}: ${document.getElementById("llm-model").value}`, true],
-    ];
-    list.replaceChildren(...items.map(([title, value, ok]) => {
-      const row = document.createElement("div");
-      row.className = `wizard-review-row ${ok ? "is-ready" : "is-warning"}`;
-      const heading = document.createElement("strong");
-      heading.textContent = title;
-      const detail = document.createElement("span");
-      detail.textContent = value;
-      row.append(heading, detail);
-      return row;
-    }));
+    try {
+      const value = await post("/api/setup/review", payload());
+      list.replaceChildren(...value.items.map(item => reviewRow(item.title, item.detail, item.status)));
+    } catch (error) {
+      list.replaceChildren(reviewRow("Review unavailable", error.message, "missing"));
+    }
   };
   const validateWizardStep = step => {
     try {

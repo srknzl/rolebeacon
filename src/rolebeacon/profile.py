@@ -174,6 +174,27 @@ class CandidateProfileV1(StrictModel):
     education: list[EducationEntry] = Field(default_factory=list)
     languages: list[LanguageEntry] = Field(default_factory=list)
 
+    @field_validator("skills")
+    @classmethod
+    def normalize_skills(cls, values: dict[str, list[str]]) -> dict[str, list[str]]:
+        """Drop unnamed buckets and repeated skills so every editor stores the same profile.
+
+        The same skill can arrive twice under different casing from a hand-edited form, a
+        re-imported candidate, or the CLI wizard; the first casing entered wins.
+        """
+        buckets: dict[str, list[str]] = {}
+        for bucket, skills in values.items():
+            name = bucket.strip()
+            if not name:
+                continue
+            seen: dict[str, str] = {}
+            for skill in skills:
+                value = skill.strip()
+                if value:
+                    seen.setdefault(value.casefold(), value)
+            buckets[name] = list(seen.values())
+        return buckets
+
 
 class CountryPreference(StrictModel):
     country_code: str = Field(min_length=2, max_length=16)

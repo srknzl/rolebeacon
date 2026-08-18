@@ -76,13 +76,29 @@ class SourceCatalog:
             "coverage_gaps": catalog.get("coverage_gaps", []),
         }
 
-    def install(self, pack_id: str, *, enabled: bool = False) -> PackInstallResult:
+    def pack_candidates(self, pack_id: str, *, enabled: bool = False) -> list[SourceConfig]:
+        """Build a pack's sources without saving them, so a caller can preview what it would add."""
         catalog = self.load()
         pack = next((item for item in catalog["packs"] if item["id"] == pack_id), None)
         if not pack:
             raise SourceCatalogError(f"Unknown source pack: {pack_id}")
         entries = {entry["id"]: entry for entry in catalog["sources"]}
-        candidates = [self._source(entries[entry_id], catalog, enabled=enabled, pack_id=pack_id) for entry_id in pack["source_ids"]]
+        return [
+            self._source(entries[entry_id], catalog, enabled=enabled, pack_id=pack_id)
+            for entry_id in pack["source_ids"]
+        ]
+
+    def pack_source_ids(self, pack_id: str) -> list[str]:
+        """Name the source IDs a pack resolves to, reusing the IDs of sources already configured."""
+        configured = self.settings.load_sources()
+        resolved = []
+        for candidate in self.pack_candidates(pack_id):
+            current = next((source for source in configured if same_source(source, candidate)), None)
+            resolved.append(current.id if current else candidate.id)
+        return resolved
+
+    def install(self, pack_id: str, *, enabled: bool = False) -> PackInstallResult:
+        candidates = self.pack_candidates(pack_id, enabled=enabled)
         saved, added = self.settings.save_sources(candidates)
         return PackInstallResult(
             pack_id=pack_id,

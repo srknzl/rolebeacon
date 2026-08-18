@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 
+import pytest
 from fastapi.testclient import TestClient
 
 from rolebeacon.cli import main
@@ -45,6 +46,36 @@ def test_cli_setup_import_uses_shared_schema_and_requires_explicit_activation(
     assert result["setup_complete"] is True
     assert result["activated"] is False
     assert json.loads((destination / "setup.json").read_text(encoding="utf-8"))["activated"] is False
+
+
+def test_cli_setup_import_reports_schema_errors_instead_of_raising(tmp_path, monkeypatch) -> None:
+    payload_path = tmp_path / "setup.json"
+    payload_path.write_text(json.dumps({**_payload(), "preferences": {"schema_version": "1.0"}}), encoding="utf-8")
+    monkeypatch.setenv("ROLEBEACON_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ROLEBEACON_ROOT", str(tmp_path))
+    monkeypatch.setattr(sys, "argv", ["rolebeacon", "setup", "--from-json", str(payload_path)])
+
+    with pytest.raises(SystemExit) as error:
+        main()
+
+    assert "target_roles" in str(error.value)
+    assert not Settings.load().setup_complete
+
+
+def test_cli_setup_refuses_to_start_the_wizard_without_a_terminal(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ROLEBEACON_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ROLEBEACON_ROOT", str(tmp_path))
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False, raising=False)
+    monkeypatch.setattr(sys, "argv", ["rolebeacon", "setup"])
+
+    with pytest.raises(SystemExit):
+        main()
+
+    monkeypatch.setattr(sys, "argv", ["rolebeacon", "setup", "--no-interactive"])
+    with pytest.raises(SystemExit):
+        main()
+
+    assert not Settings.load().setup_complete
 
 
 def test_cli_port_override_updates_the_app_origin_allowlist(tmp_path, monkeypatch) -> None:
