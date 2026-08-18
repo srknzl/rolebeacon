@@ -356,18 +356,18 @@ def generate_strategies(
     known_countries.update({item.country_code: item for item in mobility.relocation_targets})
     for country_code in mobility.work_authorizations:
         target = known_countries.get(country_code)
-        if target:
-            strategies.append(
-                SearchStrategyV1(
-                    id=strategy_id("local", country_code),
-                    label=f"Authorized work in {target.country_name}",
-                    kind="authorized_local",
-                    threshold=75,
-                    country_code=country_code,
-                    country_name=target.country_name,
-                    cities=target.cities,
-                )
+        country_name = target.country_name if target else country_names_by_code()[country_code]
+        strategies.append(
+            SearchStrategyV1(
+                id=strategy_id("local", country_code),
+                label=f"Authorized work in {country_name}",
+                kind="authorized_local",
+                threshold=75,
+                country_code=country_code,
+                country_name=country_name,
+                cities=target.cities if target else [],
             )
+        )
 
     if mobility.willing_to_relocate:
         for target in mobility.relocation_targets:

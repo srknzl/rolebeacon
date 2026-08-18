@@ -258,6 +258,38 @@ def test_country_aliases_match_turkey_and_uk_without_short_code_substrings() -> 
     assert uk.status == EligibilityStatus.ELIGIBLE
 
 
+def test_second_work_authorization_without_a_relocation_target_still_gets_a_strategy() -> None:
+    # A dual citizen who is already authorized in DE has no reason to list it as a
+    # relocation target, and used to end up with no DE strategy at all.
+    authorized = MobilityProfileV1.model_validate({
+        **MOBILITY.model_dump(mode="json"), "work_authorizations": ["TR", "DE"], "relocation_targets": [],
+    })
+    strategies = [item.model_dump(mode="json") for item in generate_strategies(CANDIDATE, authorized, PREFERENCES)]
+    local_de = next(item for item in strategies if item["country_code"] == "DE")
+    result = evaluate_eligibility(
+        job(location="Berlin, Germany", remote_scope="", description="Build Java and Go backend systems."),
+        PREFERENCES.model_dump(mode="json"), authorized.model_dump(mode="json"), strategies,
+    )
+
+    assert local_de["kind"] == "authorized_local"
+    assert local_de["country_name"] == "Germany"
+    assert local_de["cities"] == []
+    assert result.status == EligibilityStatus.ELIGIBLE
+    assert result.location_fit == "authorized:DE"
+
+
+def test_authorized_country_listed_as_a_relocation_target_keeps_its_cities() -> None:
+    authorized = MobilityProfileV1.model_validate({
+        **MOBILITY.model_dump(mode="json"), "work_authorizations": ["TR", "DE"],
+    })
+    strategies = [item.model_dump(mode="json") for item in generate_strategies(CANDIDATE, authorized, PREFERENCES)]
+    local = [item for item in strategies if item["kind"] == "authorized_local"]
+
+    assert [item["country_code"] for item in local] == ["DE", "TR"]
+    assert local[0]["cities"] == ["Berlin"]
+    assert local[1]["cities"] == ["Istanbul"]
+
+
 def test_clearance_negation_preference_unknown_and_explicit_conflict() -> None:
     no_clearance = evaluate(job(description="No security clearance is required. Build Java services."))
     preferred = evaluate(job(description="Security clearance is preferred but not required."))
