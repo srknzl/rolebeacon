@@ -5,6 +5,7 @@ import pytest
 from rolebeacon.domain import EligibilityStatus, ScoreResult
 from rolebeacon.profile import CandidateProfileV1, MobilityProfileV1, SearchPreferencesV1, generate_strategies
 from rolebeacon.scoring import (
+    _title_seniority,
     clearance_requirements,
     evaluate_eligibility,
     extract_experience_requirements,
@@ -533,6 +534,37 @@ def test_a_priority_company_does_not_lift_a_role_the_candidate_is_not_looking_fo
     result = score(job(company="Google", title="Manager, Procurement", location="Unknown", remote_scope=""))
 
     assert result.dimensions["role_domain"] == 2
+
+
+@pytest.mark.parametrize(
+    ("title", "expected"),
+    [
+        # "intern" is first in SENIORITY_LEVELS, so an unguarded substring match shadowed the
+        # real level for every internal-tooling and international title.
+        ("senior software engineer, internal tools", "senior"),
+        ("staff engineer international", "staff"),
+        ("principal engineer, internal developer platform", "principal"),
+        # Real intern postings still match, in each of their usual spellings.
+        ("backend internship", "intern"),
+        ("software engineer intern", "intern"),
+        ("summer interns, platform", "intern"),
+        # The pre-existing "mid" guard is unchanged.
+        ("midwest platform engineer", "unspecified"),
+        ("middleware engineer", "unspecified"),
+        ("mid to senior engineer", "mid"),
+    ],
+)
+def test_title_seniority_matches_whole_words_only(title: str, expected: str) -> None:
+    assert _title_seniority(title) == expected
+
+
+def test_an_internal_tools_title_scores_full_marks_on_a_preferred_seniority() -> None:
+    preferences = {**PREFERENCES.model_dump(mode="json"), "preferred_seniority": ["senior", "staff"]}
+    value = job(title="Senior Software Engineer, Internal Tools")
+    eligibility = evaluate_eligibility(value, preferences, MOBILITY.model_dump(mode="json"), STRATEGIES)
+    result = rule_score(value, eligibility, preferences, CANDIDATE.model_dump(mode="json"), STRATEGIES)
+
+    assert result.dimensions["seniority"] == 15
 
 
 def _skill_score(description: str, skills: list[str], domains: list[str]) -> ScoreResult:

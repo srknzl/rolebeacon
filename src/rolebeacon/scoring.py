@@ -9,7 +9,7 @@ from typing import Any
 from .domain import EligibilityResult, EligibilityStatus, ScoreResult
 from .profile import CONTINENT_COUNTRY_CODES, DEFAULT_SCORE_WEIGHTS, country_names_by_code
 
-SCORING_PROMPT_VERSION = "job-fit-v18"
+SCORING_PROMPT_VERSION = "job-fit-v19"
 
 # Ineligibility is a hard gate: no combination of fit signals may push a total above this cap.
 # LLM scoring is only ever invoked for eligible jobs (see sync.py), so every ineligible job's
@@ -36,8 +36,9 @@ DIMENSION_MAXIMUMS: dict[str, int] = dict(DEFAULT_SCORE_WEIGHTS)
 # Recognized job-title seniority buckets, in priority order (first match wins when a title
 # names more than one, e.g. "Mid to Senior Engineer"). This is also the seniority picker's
 # vocabulary (see seniority_level_options) - a preference can only ever match a level this
-# extraction actually produces, so "mid" needs its own word-boundary check: an unguarded
-# substring match would fire on "Midwest", "Middleware", or "amid".
+# extraction actually produces. Every level needs a word-boundary check: an unguarded substring
+# match fires on "Midwest", "Middleware" and "amid" for "mid", and - worse, because "intern" is
+# first in the order and so shadows the real level - on "internal" and "international".
 SENIORITY_LEVELS: tuple[str, ...] = ("intern", "junior", "mid", "senior", "staff", "principal", "lead", "manager")
 _SENIORITY_LEVEL_LABELS = {
     "intern": "Intern",
@@ -49,7 +50,12 @@ _SENIORITY_LEVEL_LABELS = {
     "lead": "Lead",
     "manager": "Manager",
 }
-_MID_SENIORITY_PATTERN = re.compile(r"\bmid\b")
+# "internship" and "interns" are real intern postings; "internal" and "international" are not.
+_SENIORITY_WORDS = {"intern": "intern(?:s|ship|ships)?"}
+_SENIORITY_PATTERNS: dict[str, re.Pattern[str]] = {
+    level: re.compile(rf"\b{_SENIORITY_WORDS.get(level, level)}\b")
+    for level in SENIORITY_LEVELS
+}
 
 
 def seniority_level_options() -> list[dict[str, str]]:
@@ -57,11 +63,8 @@ def seniority_level_options() -> list[dict[str, str]]:
 
 
 def _title_seniority(title: str) -> str:
-    for level in SENIORITY_LEVELS:
-        if level == "mid":
-            if _MID_SENIORITY_PATTERN.search(title):
-                return level
-        elif level in title:
+    for level, pattern in _SENIORITY_PATTERNS.items():
+        if pattern.search(title):
             return level
     return "unspecified"
 
