@@ -27,7 +27,7 @@ jobs:
       - run: uv export --frozen --all-extras --no-dev --no-emit-project --output-file requirements-audit.txt
       - run: uv run pip-audit --requirement requirements-audit.txt
       - run: uv run cyclonedx-py requirements requirements-audit.txt --output-format JSON --output-file sbom.cdx.json
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: rolebeacon-sbom
           path: sbom.cdx.json
