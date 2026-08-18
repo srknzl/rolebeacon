@@ -33,10 +33,18 @@ an LLM must never be required for collection, deterministic scoring, or setup.
 - Do not scrape authenticated LinkedIn pages. RoleBeacon currently has no LinkedIn ingestion path.
 - Keep profiles, generated artifacts, browser sessions, OAuth tokens, secrets, and SQLite files
   in the ignored operating-system application-data directory.
-- Do not contact external sources before setup is explicitly activated.
+- Do not contact external sources before setup is explicitly activated. Source preview, manual
+  refresh, and scheduled refresh all require it.
+- Setup round-trips every saved value. A secret stays unchanged unless the user explicitly replaces
+  or removes it, and a stored secret is never returned to a client or echoed in a terminal.
 - Collectors fail independently and preserve provenance during deduplication.
 - Eligibility is a hard gate. Reputation and fit cannot override authorization, sponsorship,
   clearance, or explicit geographic restrictions.
+- A clearance requirement rejects a job only when an explicit posting requirement meets an explicit
+  candidate-side conflict or user-owned exclusion. Clearance wording alone never gates eligibility,
+  and clearance is never inferred from nationality, location, or résumé text.
+- An empty or dramatically smaller source snapshot preserves active jobs until an identical
+  source-ID fingerprint confirms the contraction. Recorded truncation never closes a job.
 - The `location_authorization` dimension is always computed deterministically from the
   eligibility result and is never scored by a model.
 - Country-scoped remote wording is regional, not worldwide. Unknown facts remain unknown.

@@ -465,10 +465,9 @@ uv run python -m build
 
 ## Remaining roadmap
 
-The web setup flow, schema-driven headless import, and one-command ranked job export are complete.
-A separate interactive terminal questionnaire remains
-deferred until it can share the same accessible review semantics and receive terminal UX coverage; see
-[docs/product-backlog.md](docs/product-backlog.md). Other remaining work is:
+The web setup flow, the interactive terminal wizard, schema-driven headless import, and one-command
+ranked job export are complete. Planned and proposed work is tracked in
+[GitHub issues](https://github.com/srknzl/rolebeacon/issues). Larger remaining themes are:
 
 - provide a managed, checksum-verified `llama.cpp` runtime as an Ollama-free optional path;
 - make ATS and company registries user-editable without weakening runtime validation;
