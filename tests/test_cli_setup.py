@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import sys
 
@@ -75,6 +76,28 @@ def test_cli_setup_refuses_to_start_the_wizard_without_a_terminal(tmp_path, monk
     with pytest.raises(SystemExit):
         main()
 
+    assert not Settings.load().setup_complete
+
+
+def test_cli_setup_drives_the_wizard_through_real_terminal_input(tmp_path, monkeypatch, capsys) -> None:
+    """Cover the entry point the scripted wizard tests bypass: a default Terminal on real stdin."""
+
+    class Console(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    monkeypatch.setenv("ROLEBEACON_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ROLEBEACON_ROOT", str(tmp_path))
+    monkeypatch.setattr(sys, "stdin", Console("q\n"))
+    monkeypatch.setattr(sys, "argv", ["rolebeacon", "setup"])
+
+    with pytest.raises(SystemExit) as error:
+        main()
+
+    assert error.value.code == 1
+    output = capsys.readouterr().out
+    assert "Step 1 of 6 — Start" in output
+    assert "Setup cancelled. Nothing was saved." in output
     assert not Settings.load().setup_complete
 
 
