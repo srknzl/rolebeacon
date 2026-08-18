@@ -6,6 +6,7 @@ from rolebeacon.domain import EligibilityStatus, ScoreResult
 from rolebeacon.profile import CandidateProfileV1, MobilityProfileV1, SearchPreferencesV1, generate_strategies
 from rolebeacon.scoring import (
     _title_seniority,
+    candidate_terms,
     clearance_requirements,
     evaluate_eligibility,
     extract_experience_requirements,
@@ -715,6 +716,67 @@ def test_extract_experience_requirements_marks_a_skill_in_known_terms_as_met() -
 
     assert {"skill": "Python", "years": 5, "unmet": False} in found
     assert {"skill": "Rust", "years": 5, "unmet": True} in found
+
+
+def test_a_multi_word_requirement_is_met_by_evidence_outside_the_skills_dict() -> None:
+    # candidate_terms() keeps a skills-dict entry whole but tokenizes every evidence section, so
+    # "distributed systems" used to be unmet for a candidate whose experience is full of it.
+    known = candidate_terms(
+        {
+            "summary": "Ten years building distributed systems in production.",
+            "experience": [{"highlights": ["Designed distributed systems at scale."]}],
+            "skills": {"Languages": ["Java", "Go"]},
+        }
+    )
+
+    found = extract_experience_requirements("Requires 5+ years of distributed systems experience.", known)
+
+    assert found == [{"skill": "distributed systems", "years": 5, "unmet": False}]
+
+
+def test_a_requirement_is_met_across_a_singular_plural_wording_difference() -> None:
+    known = candidate_terms({"skills": {"Core": ["Distributed system"]}})
+
+    found = extract_experience_requirements("Requires 5+ years of distributed systems experience.", known)
+
+    assert found == [{"skill": "distributed systems", "years": 5, "unmet": False}]
+
+
+def test_a_requirement_the_profile_never_shows_stays_unmet() -> None:
+    known = candidate_terms(
+        {"summary": "Ten years building distributed systems.", "skills": {"Languages": ["Java", "Go"]}}
+    )
+
+    assert extract_experience_requirements("Requires 5+ years of Rust.", known) == [
+        {"skill": "Rust", "years": 5, "unmet": True}
+    ]
+    # Every word of a phrase must be shown, not just one of them.
+    assert extract_experience_requirements("Requires 5+ years of embedded systems.", known) == [
+        {"skill": "embedded systems", "years": 5, "unmet": True}
+    ]
+
+
+def test_single_word_requirements_are_unchanged() -> None:
+    known = candidate_terms({"skills": {"Languages": ["Java", "Go"]}})
+
+    assert extract_experience_requirements("Requires 5+ years of Java.", known) == [
+        {"skill": "Java", "years": 5, "unmet": False}
+    ]
+    assert extract_experience_requirements("Requires 5+ years of Kafka.", known) == [
+        {"skill": "Kafka", "years": 5, "unmet": True}
+    ]
+
+
+def test_the_widened_met_test_does_not_widen_what_counts_as_a_skill_name() -> None:
+    # _is_plausible_skill still consults known_terms itself, not the tokenized vocabulary: a
+    # skills-dict phrase must not make each of its words a plausible skill name on its own.
+    known = candidate_terms({"skills": {"Core": ["Data structures"]}})
+
+    assert "data" not in known
+    assert extract_experience_requirements("5+ years of data.", known) == []
+    assert extract_experience_requirements("5+ years of data structures.", known) == [
+        {"skill": "data structures", "years": 5, "unmet": False}
+    ]
 
 
 def test_rule_score_flags_an_experience_requirement_the_candidate_profile_does_not_show() -> None:

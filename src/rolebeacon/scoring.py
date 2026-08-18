@@ -9,7 +9,7 @@ from typing import Any
 from .domain import EligibilityResult, EligibilityStatus, ScoreResult
 from .profile import CONTINENT_COUNTRY_CODES, DEFAULT_SCORE_WEIGHTS, country_names_by_code
 
-SCORING_PROMPT_VERSION = "job-fit-v19"
+SCORING_PROMPT_VERSION = "job-fit-v20"
 
 # Ineligibility is a hard gate: no combination of fit signals may push a total above this cap.
 # LLM scoring is only ever invoked for eligible jobs (see sync.py), so every ineligible job's
@@ -171,6 +171,44 @@ def _is_plausible_skill(skill: str, known_terms: set[str]) -> bool:
     return skill.casefold() in known_terms
 
 
+_TERM_TOKEN_PATTERN = re.compile(r"[a-z0-9+#.]+")
+
+
+def _singular(token: str) -> str:
+    """Fold a trailing plural so "systems" and "system" are the same term.
+
+    Both sides of every comparison go through this, so an over-eager fold ("kubernetes" ->
+    "kubernete") still compares equal to itself. "css", "status" and "axis" keep their ending.
+    """
+    if len(token) > 3 and token.endswith("s") and not token.endswith(("ss", "us", "is")):
+        return token[:-1]
+    return token
+
+
+def _vocabulary_tokens(known_terms: set[str]) -> set[str]:
+    """The candidate's vocabulary reduced to comparable single tokens.
+
+    candidate_terms() is asymmetric on purpose - a skills-dict entry is kept whole while every
+    evidence section is tokenized - so a multi-word requirement could only ever be met by a
+    verbatim skills-dict entry. Reducing both sides to tokens removes that asymmetry.
+    """
+    return {_singular(token) for term in known_terms for token in _TERM_TOKEN_PATTERN.findall(term)}
+
+
+def _requirement_met(skill: str, known_terms: set[str], vocabulary: set[str]) -> bool:
+    """A requirement is met by the exact phrase, or by the candidate showing all of its words.
+
+    Requiring every token keeps "distributed systems" from being met by "systems" alone, while
+    letting an experience bullet ("Designed distributed systems at scale") answer a phrase the
+    candidate never listed verbatim under skills.
+    """
+    folded = skill.casefold()
+    if folded in known_terms:
+        return True
+    tokens = [_singular(token) for token in _TERM_TOKEN_PATTERN.findall(folded)]
+    return bool(tokens) and all(token in vocabulary for token in tokens)
+
+
 def extract_experience_requirements(description: str, known_terms: set[str] | None = None) -> list[dict[str, Any]]:
     """Deterministic, LLM-free 'N years of X' extraction so rules-only mode has the same
     experience-requirement signal as LLM mode. Keeps the longest years figure seen per skill.
@@ -187,8 +225,9 @@ def extract_experience_requirements(description: str, known_terms: set[str] | No
         key = skill.casefold()
         if key not in found or years > found[key][1]:
             found[key] = (skill, years)
+    vocabulary = _vocabulary_tokens(known_terms)
     return [
-        {"skill": skill, "years": years, "unmet": skill.casefold() not in known_terms}
+        {"skill": skill, "years": years, "unmet": not _requirement_met(skill, known_terms, vocabulary)}
         for skill, years in found.values()
     ]
 
