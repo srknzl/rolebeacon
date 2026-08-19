@@ -1618,7 +1618,11 @@ class LinkedInCollector(Collector):
 LINKEDIN_BROWSER_SEARCH_URL = "https://www.linkedin.com/jobs/search/"
 LINKEDIN_LOGIN_TIMEOUT_SECONDS = 300.0
 LINKEDIN_BROWSER_TIMEOUT_MS = 45000
-LINKEDIN_SIGNED_OUT_PATHS = ("/login", "/authwall", "/checkpoint", "/signup", "/uas/login")
+LINKEDIN_HOME_URL = "https://www.linkedin.com/"
+LINKEDIN_LOGIN_URL = "https://www.linkedin.com/login"
+# LinkedIn's session cookie. Only its presence is ever tested; RoleBeacon neither reads its value
+# nor types a credential - the user signs in themselves in the window, and Chrome keeps the session.
+LINKEDIN_SESSION_COOKIE = "li_at"
 # One evaluation per posting, trying the structured contract before the styled DOM. Which one
 # answered is logged once per run, so a LinkedIn redesign shows up as a change in the log rather
 # than as postings that quietly arrive empty.
@@ -1763,7 +1767,9 @@ class LinkedInBrowserCollector(Collector):
 
     async def _open(self, page: Any, url: str, progress: _LinkedInProgress) -> None:
         await page.goto(url, wait_until="domcontentloaded", timeout=LINKEDIN_BROWSER_TIMEOUT_MS)
-        await _linkedin_wait_for_login(page, progress)
+        if await _linkedin_wait_for_login(page, progress):
+            # Signing in navigates away from what was asked for, so ask for it again.
+            await page.goto(url, wait_until="domcontentloaded", timeout=LINKEDIN_BROWSER_TIMEOUT_MS)
 
     def _build(
         self, job_id: str, posting: dict[str, Any], since: datetime, progress: _LinkedInProgress
@@ -1809,17 +1815,31 @@ async def _linkedin_browser(progress: _LinkedInProgress) -> AsyncIterator[Any]:
             await context.close()
 
 
-async def _linkedin_wait_for_login(page: Any, progress: _LinkedInProgress) -> None:
-    """Hand the window over when LinkedIn asks for a sign-in, and wait for the user to finish."""
-    if not any(path in page.url for path in LINKEDIN_SIGNED_OUT_PATHS):
-        return
+async def _linkedin_signed_in(page: Any) -> bool:
+    """Whether the session cookie exists. Its name is checked; its value is never read or stored."""
+    cookies = await page.context.cookies(LINKEDIN_HOME_URL)
+    return any(cookie.get("name") == LINKEDIN_SESSION_COOKIE for cookie in cookies)
+
+
+async def _linkedin_wait_for_login(page: Any, progress: _LinkedInProgress) -> bool:
+    """Hand the window over until the user signs in themselves. Returns whether it had to wait.
+
+    The signed-out state is read from the session cookie rather than from the URL, because
+    LinkedIn serves its guest job pages at the very same addresses a member sees. A first run
+    walked seventeen postings as a guest through the browser without ever asking for a sign-in,
+    which looks like a window refreshing itself over and over and collects nothing extra.
+    """
+    if await _linkedin_signed_in(page):
+        return False
     progress.announce("waiting for you to sign in to LinkedIn in the Chrome window")
+    await page.goto(LINKEDIN_LOGIN_URL, wait_until="domcontentloaded", timeout=LINKEDIN_BROWSER_TIMEOUT_MS)
     deadline = time.monotonic() + LINKEDIN_LOGIN_TIMEOUT_SECONDS
-    while any(path in page.url for path in LINKEDIN_SIGNED_OUT_PATHS):
+    while not await _linkedin_signed_in(page):
         if time.monotonic() > deadline:
             raise TimeoutError("Timed out waiting for a LinkedIn sign-in in the browser window")
         await _linkedin_pause(2.0)
     progress.announce("signed in, continuing")
+    return True
 
 
 COLLECTORS: dict[str, type[Collector]] = {

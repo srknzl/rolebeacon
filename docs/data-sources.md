@@ -108,6 +108,14 @@ same searches through the same cursor, break, and progress machinery. RoleBeacon
 credentials and never stores them; the session lives in that profile directory and can be dropped
 on its own without touching the profile used for application autofill.
 
+Being signed in is read from the presence of the session cookie, never from the URL. LinkedIn serves
+a guest the same `/jobs/search/` and `/jobs/view/` addresses a member sees, so a first run walked
+seventeen postings signed out without ever asking for a sign-in - which collects nothing the public
+collector could not already reach and looks, from the desk, like a window refreshing itself. The
+cookie is checked by name only; its value is never read. When it is missing the walk opens the
+sign-in page, waits up to five minutes for the person to finish, and then asks again for the search
+the sign-in interrupted.
+
 The limits do not move: job search results and job postings only, never a profile, connection list,
 message, or the feed, and never an application submission. Because it opens a window and can wait
 on a person, `linkedin_browser` is an interactive kind — a scheduled sync always skips it as

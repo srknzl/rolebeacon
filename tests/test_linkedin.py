@@ -472,13 +472,25 @@ def test_widening_stops_at_a_ceiling(monkeypatch) -> None:
     assert slowest == pytest.approx(collectors.LINKEDIN_PACE_CEILING_SECONDS)
 
 
+class _FakeContext:
+    """The one context call the collector makes: does a session cookie exist for linkedin.com?"""
+
+    def __init__(self, signed_in: bool):
+        self.signed_in = signed_in
+
+    async def cookies(self, _url: str) -> list[dict[str, str]]:
+        return [{"name": "li_at", "value": "irrelevant"}] if self.signed_in else [{"name": "bcookie"}]
+
+
 class _FakePage:
     """Enough of a Playwright page to walk a search without a browser: goto records, evaluate answers."""
 
-    def __init__(self, pages: list[list[str]], posting: dict[str, str], url: str = "https://www.linkedin.com/jobs/"):
+    def __init__(self, pages: list[list[str]], posting: dict[str, str], url: str = "https://www.linkedin.com/jobs/",
+                 signed_in: bool = True):
         self.pages = pages
         self.posting = posting
         self.url = url
+        self.context = _FakeContext(signed_in)
         self.visited: list[str] = []
 
     async def goto(self, url: str, **_kwargs) -> None:
@@ -544,10 +556,10 @@ async def test_the_signed_in_walk_waits_for_a_sign_in(monkeypatch, caplog) -> No
 
     posting = {"via": "json-ld", "title": "Backend Engineer", "company": "Wolt",
                "location": "Berlin", "description": "<p>Work.</p>", "posted": POSTED_ON}
-    page = _FakePage([["4439500109"], []], posting, url="https://www.linkedin.com/login")
+    page = _FakePage([["4439500109"], []], posting, signed_in=False)
 
     async def sign_in_after_a_moment(_seconds: float) -> None:
-        page.url = "https://www.linkedin.com/jobs/search/"
+        page.context.signed_in = True
 
     monkeypatch.setattr(collectors, "_linkedin_pause", sign_in_after_a_moment)
     with caplog.at_level(logging.INFO, logger="rolebeacon.collectors"):
@@ -555,7 +567,29 @@ async def test_the_signed_in_walk_waits_for_a_sign_in(monkeypatch, caplog) -> No
 
     assert "waiting for you to sign in" in caplog.text
     assert "signed in, continuing" in caplog.text
+    # The sign-in page was offered, and the search it interrupted was asked for again afterwards.
+    assert page.visited[1] == collectors.LINKEDIN_LOGIN_URL
+    assert page.visited[2] == page.visited[0]
     assert len(batch.jobs) == 1
+
+
+async def test_a_guest_page_is_not_mistaken_for_a_signed_in_one(monkeypatch, caplog) -> None:
+    """LinkedIn serves guests the same URLs a member sees, so the URL cannot answer this."""
+    from rolebeacon import collectors
+
+    page = _FakePage([["4439500109"], []], {"via": "json-ld", "title": "Backend Engineer", "company": "Wolt",
+                                            "location": "Berlin", "description": "<p>Work.</p>", "posted": POSTED_ON},
+                     url="https://www.linkedin.com/jobs/search/", signed_in=False)
+
+    monkeypatch.setattr(collectors, "LINKEDIN_LOGIN_TIMEOUT_SECONDS", 0.0)
+    with caplog.at_level(logging.INFO, logger="rolebeacon.collectors"):
+        batch = await _browser_collect(page, _browser_source(), monkeypatch=monkeypatch)
+
+    assert "waiting for you to sign in" in caplog.text
+    assert batch.jobs == []
+    # No posting was opened: a guest walk through the browser collects nothing the public
+    # collector could not already reach, and looks like a window refreshing itself.
+    assert not any("jobs/view" in url for url in page.visited)
 
 
 async def test_closing_the_window_checkpoints_the_walk(monkeypatch) -> None:
