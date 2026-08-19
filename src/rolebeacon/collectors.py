@@ -17,7 +17,7 @@ from hashlib import blake2s
 from html import unescape
 from html.parser import HTMLParser
 from typing import Any
-from urllib.parse import quote, urlencode, urljoin, urlsplit
+from urllib.parse import quote, urljoin, urlsplit
 from xml.etree import ElementTree
 
 import httpx
@@ -1465,6 +1465,9 @@ class LinkedInCollector(Collector):
     batch cursor, so the next run continues instead of re-reading what it already has.
     """
 
+    stopped_message = "stopped by LinkedIn"
+    attribution = "Jobs collected from LinkedIn's public job search (https://www.linkedin.com/jobs)."
+
     async def collect(self, since: datetime, cursor: str = "") -> CollectionBatch:
         if not str(self.config.options.get("keywords", "")).strip():
             raise ValueError("LinkedIn source requires search keywords")
@@ -1492,7 +1495,7 @@ class LinkedInCollector(Collector):
                 response = await self._get(LINKEDIN_SEARCH_URL, progress, params=linkedin_search_params(self.config, since, start))
                 requests += 1
                 if response is None:
-                    checkpoint = "stopped by LinkedIn"
+                    checkpoint = self.stopped_message
                     break
                 if response.status_code == httpx.codes.BAD_REQUEST:
                     progress.announce(f"reached LinkedIn's {LINKEDIN_RESULT_CEILING:,}-result ceiling for this search")
@@ -1529,7 +1532,7 @@ class LinkedInCollector(Collector):
                         job, fetched = await self._read_posting(card, progress, since, len(jobs))
                         requests += fetched
                         if job is None and not fetched:
-                            checkpoint = "stopped by LinkedIn"
+                            checkpoint = self.stopped_message
                             break
                         if job is not None:
                             jobs.append(job)
@@ -1554,7 +1557,7 @@ class LinkedInCollector(Collector):
             cursor=f"{fingerprint}:{start}" if checkpoint else "",
             complete_snapshot=False,
             requests_made=requests,
-            attribution="Jobs collected from LinkedIn's public job search (https://www.linkedin.com/jobs).",
+            attribution=self.attribution,
             truncated=bool(checkpoint),
         )
 
@@ -1615,7 +1618,6 @@ class LinkedInCollector(Collector):
 # account" property to get a usable rate, and nothing else: it opens job search results and job
 # postings only, never a profile, connection list, feed, or message, and it never signs in on the
 # user's behalf. The window opens, the user signs in, the walk starts.
-LINKEDIN_BROWSER_SEARCH_URL = "https://www.linkedin.com/jobs/search/"
 LINKEDIN_LOGIN_TIMEOUT_SECONDS = 300.0
 LINKEDIN_BROWSER_TIMEOUT_MS = 45000
 LINKEDIN_HOME_URL = "https://www.linkedin.com/"
@@ -1623,184 +1625,92 @@ LINKEDIN_LOGIN_URL = "https://www.linkedin.com/login"
 # LinkedIn's session cookie. Only its presence is ever tested; RoleBeacon neither reads its value
 # nor types a credential - the user signs in themselves in the window, and Chrome keeps the session.
 LINKEDIN_SESSION_COOKIE = "li_at"
-# Where a posting's description lives, in either page. The signed-out page is server-rendered, but
-# the signed-in one is a hydrated application: a first signed-in run read 35 postings a fraction of
-# a second after domcontentloaded and got an empty shell every time - no description, no title, no
-# employer. So the walk waits for this to appear before it reads anything.
+# Where a posting's description lives. LinkedIn is midway through a rewrite: the signed-out page
+# and the signed-in search pane are the old server-rendered markup, while a signed-in
+# /jobs/view/<id> page is a hydrated application whose class names are content hashes. The one
+# stable hook it offers is the section id, which carries the job's own ID. Hydration is also why
+# the walk waits for this to appear: a first signed-in run read 35 postings a fraction of a second
+# after domcontentloaded and got an empty shell every time.
 LINKEDIN_POSTING_BODY = (
-    "#job-details, .jobs-description__content, .jobs-box__html-content, .show-more-less-html__markup"
+    '#job-details, [id^="JobDetails_AboutTheJob_"], .jobs-description__content, '
+    ".jobs-box__html-content, .show-more-less-html__markup"
 )
 LINKEDIN_POSTING_WAIT_MS = 15000
 LINKEDIN_BROWSER_CLOSE_SECONDS = 10.0
-# One evaluation per posting, trying the structured contract before the styled DOM. Which one
-# answered is logged once per run, so a LinkedIn redesign shows up as a change in the log rather
-# than as postings that quietly arrive empty.
-LINKEDIN_POSTING_SCRIPT = """() => {
-  const out = {via: '', title: '', company: '', location: '', description: '', posted: ''};
-  const text = (value) => (value == null ? '' : (typeof value === 'object' ? (value.name || '') : String(value)));
-  for (const node of document.querySelectorAll('script[type="application/ld+json"]')) {
-    let parsed;
-    try { parsed = JSON.parse(node.textContent); } catch (error) { continue; }
-    for (const item of (Array.isArray(parsed) ? parsed : [parsed])) {
-      if (!item || item['@type'] !== 'JobPosting') continue;
-      const place = [].concat(item.jobLocation || [])[0] || {};
-      const address = place.address || {};
-      out.via = 'json-ld';
-      out.title = text(item.title);
-      out.company = text((item.hiringOrganization || {}).name);
-      out.description = item.description || '';
-      out.posted = text(item.datePosted);
-      out.location = [address.addressLocality, address.addressRegion, text(address.addressCountry)]
-        .filter(Boolean).join(', ');
-      return out;
-    }
-  }
-  const pick = (selectors) => {
-    const node = document.querySelector(selectors);
-    return node ? node.innerText.trim().split('\\n')[0].trim() : '';
-  };
-  const body = document.querySelector('__BODY__');
-  out.via = body ? 'the page markup' : '';
-  out.description = body ? body.innerHTML : '';
-  out.title = pick('.job-details-jobs-unified-top-card__job-title, .topcard__title, h1');
-  out.company = pick('.job-details-jobs-unified-top-card__company-name, .topcard__org-name-link');
-  out.location = pick(
-    '.job-details-jobs-unified-top-card__primary-description-container, .topcard__flavor--bullet');
-  out.posted = pick('time[datetime]');
-  return out;
+# Enough text to tell a rendered posting from the section heading that arrives ahead of it. A real
+# description runs to thousands of characters; the empty shell is one heading of about twenty.
+LINKEDIN_DESCRIPTION_MINIMUM_CHARS = 120
+LINKEDIN_FILLED_SCRIPT = """() => {
+  const node = document.querySelector('__BODY__');
+  return Boolean(node) && (node.innerText || '').trim().length > __MINIMUM__;
+}""".replace("__BODY__", LINKEDIN_POSTING_BODY).replace("__MINIMUM__", str(LINKEDIN_DESCRIPTION_MINIMUM_CHARS))
+# Which container answered is logged once per run, with the job ID trimmed off an id so the line
+# stays the same from posting to posting. A LinkedIn redesign then shows up as a change in the log
+# rather than as postings that quietly arrive empty.
+LINKEDIN_DESCRIPTION_SCRIPT = """() => {
+  const node = document.querySelector('__BODY__');
+  if (!node) return {via: '', html: ''};
+  const id = (node.id || '').replace(/_?\\d+$/, '');
+  return {via: id || (node.className || '').split(' ')[0] || node.tagName.toLowerCase(), html: node.innerHTML};
 }""".replace("__BODY__", LINKEDIN_POSTING_BODY)
-# Result-card class names change constantly; a link to a posting does not.
-LINKEDIN_SEARCH_SCRIPT = """() => Array.from(document.querySelectorAll('a[href*="/jobs/view/"]'))
-  .map((link) => (link.getAttribute('href') || '').match(/\\/jobs\\/view\\/(?:[^\\/?#]*-)?(\\d+)/))
-  .filter(Boolean).map((match) => match[1])"""
 
 
-class LinkedInBrowserCollector(Collector):
-    """Walk LinkedIn job search in a headed Chrome carrying the user's own session.
+class LinkedInBrowserCollector(LinkedInCollector):
+    """The same walk, reading each description from the user's own signed-in browser session.
+
+    Only the description comes from the browser. Titles, employers, locations, and posting dates
+    keep coming from the public search cards, which are English and carry ISO dates. LinkedIn
+    renders its own chrome in the account's display language - a session set to Turkish reports a
+    London job as "Birleşik Krallık", and an eligibility gate cannot read that. The account's
+    language is the user's setting to make, not something a collector should work around.
 
     Interactive by construction: it opens a window and may wait on a human to sign in, so sync.py
     only ever runs it for a manual refresh, never for the background scheduler.
     """
 
+    stopped_message = "stopped by the browser"
+    attribution = "Jobs collected from LinkedIn job search in the user's own signed-in session."
+
+    def __init__(self, config: SourceConfig, client: httpx.AsyncClient):
+        super().__init__(config, client)
+        self._page: Any = None
+        self._reported = False
+
     async def collect(self, since: datetime, cursor: str = "") -> CollectionBatch:
-        progress = _LinkedInProgress(self.config.name or self.config.id)
-        fingerprint = linkedin_query_fingerprint(self.config)
-        start = linkedin_parse_cursor(cursor, fingerprint)
-        jobs: list[CollectedJob] = []
-        requests = 0
-        seen = 0
-        empty_pages = 0
-        next_break = random.randint(*LINKEDIN_BREAK_AFTER_RANGE)
-        checkpoint = ""
-        reported_path = ""
+        async with _linkedin_browser(_LinkedInProgress(self.config.name or self.config.id)) as page:
+            self._page = page
+            return await super().collect(since, cursor)
 
-        if start:
-            progress.announce(
-                f"continuing from posting {start:,}; collecting everything posted in the last "
-                f"{_linkedin_duration((datetime.now(UTC) - since).total_seconds())}")
-        else:
-            progress.announce(
-                f"starting from scratch; keywords \"{self.config.options.get('keywords', '')}\", "
-                f"location \"{self.config.options.get('location', '') or 'anywhere'}\"")
-
-        async with _linkedin_browser(progress) as page:
-            try:
-                while start < LINKEDIN_RESULT_CEILING:
-                    await _linkedin_gate()
-                    await self._open(page, self._search_url(since, start), progress)
-                    requests += 1
-                    found = list(dict.fromkeys(await page.evaluate(LINKEDIN_SEARCH_SCRIPT)))
-                    if not found:
-                        # Same trap as the public walk: a results page can come back empty because
-                        # LinkedIn wants a slower client, not because the search ran out.
-                        if empty_pages < LINKEDIN_EMPTY_PAGE_ATTEMPTS:
-                            empty_pages += 1
-                            linkedin_widen_pace()
-                            log.warning(
-                                "%s: no results on the page at posting %s; waiting %s and asking again (%d of %d)",
-                                progress.label, f"{start:,}",
-                                _linkedin_duration(LINKEDIN_RATE_LIMIT_BACKOFF_SECONDS),
-                                empty_pages, LINKEDIN_EMPTY_PAGE_ATTEMPTS,
-                            )
-                            await _linkedin_pause(LINKEDIN_RATE_LIMIT_BACKOFF_SECONDS)
-                            continue
-                        progress.announce(f"finished — {len(jobs):,} postings, no more results")
-                        break
-                    empty_pages = 0
-                    for job_id in found:
-                        # Advanced at the end of the iteration, so an interrupted walk resumes at
-                        # the posting it never finished rather than one past it.
-                        await _linkedin_gate()
-                        await self._open(page, linkedin_posting_url(job_id), progress)
-                        requests += 1
-                        await _linkedin_wait_for_posting(page)
-                        posting = dict(await page.evaluate(LINKEDIN_POSTING_SCRIPT))
-                        if not reported_path:
-                            reported_path = str(posting.get("via") or "nothing")
-                            progress.announce(f"reading postings from {reported_path}")
-                        job = self._build(job_id, posting, since, progress)
-                        if job is not None:
-                            jobs.append(job)
-                        progress.beat(
-                            f"{len(jobs):,} collected in {_linkedin_duration(progress.elapsed)}; "
-                            f"now reading \"{posting.get('title') or 'untitled'}\" at "
-                            f"{posting.get('company') or 'unknown employer'}")
-                        seen += 1
-                        if seen >= next_break:
-                            seen = 0
-                            next_break = random.randint(*LINKEDIN_BREAK_AFTER_RANGE)
-                            await _linkedin_take_break(progress, len(jobs))
-                        start += 1
-                else:
-                    progress.announce(
-                        f"reached LinkedIn's {LINKEDIN_RESULT_CEILING:,}-result ceiling for this search")
-            except asyncio.CancelledError:
-                checkpoint = "stopped"
-            except Exception as error:  # the window was closed, or a page never loaded
-                progress.announce(f"stopped after {type(error).__name__}: {error}")
-                checkpoint = "stopped by the browser"
-
-        if checkpoint:
-            progress.announce(f"{checkpoint} after {len(jobs):,} postings; will resume from posting {start:,}")
-        return CollectionBatch(
-            jobs=jobs,
-            cursor=f"{fingerprint}:{start}" if checkpoint else "",
-            complete_snapshot=False,
-            requests_made=requests,
-            attribution="Jobs collected from LinkedIn job search in the user's own signed-in session.",
-            truncated=bool(checkpoint),
+    async def _read_posting(
+        self, card: dict[str, str], progress: _LinkedInProgress, since: datetime, collected: int
+    ) -> tuple[CollectedJob | None, int]:
+        progress.announce(
+            f"{collected:,} collected in {_linkedin_duration(progress.elapsed)}; now reading "
+            f"\"{card.get('title', 'untitled')}\" at {card.get('company', 'unknown employer')}"
         )
-
-    def _search_url(self, since: datetime, start: int) -> str:
-        return f"{LINKEDIN_BROWSER_SEARCH_URL}?{urlencode(linkedin_search_params(self.config, since, start))}"
-
-    async def _open(self, page: Any, url: str, progress: _LinkedInProgress) -> None:
-        await page.goto(url, wait_until="domcontentloaded", timeout=LINKEDIN_BROWSER_TIMEOUT_MS)
-        if await _linkedin_wait_for_login(page, progress):
-            # Signing in navigates away from what was asked for, so ask for it again.
-            await page.goto(url, wait_until="domcontentloaded", timeout=LINKEDIN_BROWSER_TIMEOUT_MS)
-
-    def _build(
-        self, job_id: str, posting: dict[str, Any], since: datetime, progress: _LinkedInProgress
-    ) -> CollectedJob | None:
-        description = plain_text(str(posting.get("description", "")))
+        try:
+            await _linkedin_gate()
+            await _linkedin_wait_for_login(self._page, progress)
+            await self._page.goto(linkedin_posting_url(card["id"]), wait_until="domcontentloaded",
+                                  timeout=LINKEDIN_BROWSER_TIMEOUT_MS)
+            await _linkedin_wait_for_posting(self._page)
+            found = dict(await self._page.evaluate(LINKEDIN_DESCRIPTION_SCRIPT))
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:  # the window was closed, or a page never loaded
+            progress.announce(f"stopped after {type(error).__name__}: {error}")
+            return None, 0
+        if not self._reported:
+            self._reported = True
+            progress.announce(f"reading postings from {found.get('via') or 'nothing'}")
+        description = plain_text(str(found.get("html", "")))
         if not description:
             # Loud rather than silent: an empty description means LinkedIn moved the markup, and
             # every later posting in the run would arrive just as empty.
-            log.warning("%s: posting %s returned no description; skipping", progress.label, job_id)
-            return None
-        card = {
-            "id": job_id,
-            "title": str(posting.get("title", "")),
-            "company": str(posting.get("company", "")),
-            "location": str(posting.get("location", "")),
-            "datetime": str(posting.get("posted", "")),
-        }
-        if not card["company"].strip():
-            log.warning("%s: posting %s has no employer name; skipping", progress.label, job_id)
-            return None
+            log.warning("%s: posting %s returned no description; skipping", progress.label, card["id"])
+            return None, 1
         job = linkedin_build_job(self.config, card, description)
-        return job if job is not None and is_recent(job, since) else None
+        return (job if job is not None and is_recent(job, since) else None), 1
 
 
 @asynccontextmanager
@@ -1839,11 +1749,14 @@ async def _linkedin_close(context: Any, playwright: Any) -> None:
 async def _linkedin_wait_for_posting(page: Any) -> None:
     """Let the description render before reading it, and read whatever is there if it never does.
 
-    A timeout is not treated as an error: the caller already skips a posting it could not read,
-    with a warning, and a window that has actually gone away fails at the very next call anyway.
+    Waiting for the container is not enough: LinkedIn renders the section and its heading first
+    and fills in the posting a moment later, so a walk that read on the element's arrival got a
+    heading and nothing else. A timeout is not treated as an error - the caller already skips a
+    posting it could not read, with a warning, and a window that has gone away fails at the very
+    next call anyway.
     """
     try:
-        await page.wait_for_selector(LINKEDIN_POSTING_BODY, timeout=LINKEDIN_POSTING_WAIT_MS)
+        await page.wait_for_function(LINKEDIN_FILLED_SCRIPT, timeout=LINKEDIN_POSTING_WAIT_MS)
     except Exception:  # noqa: BLE001 - a missing description is the caller's decision, not an error here
         return
 

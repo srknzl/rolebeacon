@@ -483,13 +483,10 @@ class _FakeContext:
 
 
 class _FakePage:
-    """Enough of a Playwright page to walk a search without a browser: goto records, evaluate answers."""
+    """Enough of a Playwright page to read descriptions without a browser."""
 
-    def __init__(self, pages: list[list[str]], posting: dict[str, str], url: str = "https://www.linkedin.com/jobs/",
-                 signed_in: bool = True):
-        self.pages = pages
-        self.posting = posting
-        self.url = url
+    def __init__(self, description: str = "<p>Build the platform.</p>", signed_in: bool = True):
+        self.description = description
         self.context = _FakeContext(signed_in)
         self.visited: list[str] = []
         self.waited: list[str] = []
@@ -497,13 +494,11 @@ class _FakePage:
     async def goto(self, url: str, **_kwargs) -> None:
         self.visited.append(url)
 
-    async def wait_for_selector(self, selector: str, **_kwargs) -> None:
-        self.waited.append(selector)
+    async def wait_for_function(self, script: str, **_kwargs) -> None:
+        self.waited.append(script)
 
-    async def evaluate(self, script: str):
-        if "jobs/view" in script and "querySelectorAll" in script and "ld+json" not in script:
-            return self.pages.pop(0) if self.pages else []
-        return self.posting
+    async def evaluate(self, _script: str) -> dict[str, str]:
+        return {"via": "JobDetails_AboutTheJob" if self.description else "", "html": self.description}
 
 
 def _browser_source(**options) -> SourceConfig:
@@ -512,7 +507,15 @@ def _browser_source(**options) -> SourceConfig:
                                    "name": "LinkedIn (signed in) — Europe", **values})
 
 
-async def _browser_collect(page, config: SourceConfig, cursor: str = "", monkeypatch=None):
+def _cards_then_nothing(request: httpx.Request) -> httpx.Response:
+    """The guest search still supplies the cards; only the description comes from the browser."""
+    if "seeMoreJobPostings" not in request.url.path:
+        return httpx.Response(404)
+    return httpx.Response(200, text=SEARCH_FRAGMENT if request.url.params.get("start") == "0" else "")
+
+
+async def _browser_collect(page, config: SourceConfig, cursor: str = "", monkeypatch=None,
+                           handler=_cards_then_nothing):
     from contextlib import asynccontextmanager
 
     from rolebeacon import collectors
@@ -522,24 +525,26 @@ async def _browser_collect(page, config: SourceConfig, cursor: str = "", monkeyp
         yield page
 
     monkeypatch.setattr(collectors, "_linkedin_browser", fake_browser)
-    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _r: httpx.Response(404))) as client:
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         collector = collectors.LinkedInBrowserCollector(config, client)
         return await collector.collect(datetime.now(UTC) - timedelta(days=30), cursor)
 
 
-async def test_the_signed_in_walk_collects_postings_from_the_page(monkeypatch) -> None:
-    posting = {"via": "json-ld", "title": "Senior Backend Engineer", "company": "Wolt",
-               "location": "Berlin, Germany", "description": "<p>Build the platform.</p>",
-               "posted": POSTED_YESTERDAY}
-    page = _FakePage([["4439500109", "4439500110"], []], posting)
+async def test_the_signed_in_walk_reads_descriptions_from_the_page_and_the_rest_from_the_cards(monkeypatch) -> None:
+    """LinkedIn renders its own chrome in the account's language; the public cards stay English."""
+    page = _FakePage()
 
     batch = await _browser_collect(page, _browser_source(), monkeypatch=monkeypatch)
 
-    assert [job.source_job_id for job in batch.jobs] == ["4439500109", "4439500110"]
-    assert batch.jobs[0].company == "Wolt"
+    # The second card has no employer, so it is skipped before the browser is ever asked for it.
+    assert [job.source_job_id for job in batch.jobs] == ["4439500109"]
     assert batch.jobs[0].description == "Build the platform."
+    assert (batch.jobs[0].company, batch.jobs[0].location) == (
+        "Majestara Development Limited", "Time, Rogaland, Norway")
+    assert batch.jobs[0].published_at == datetime.fromisoformat(POSTED_ON).replace(tzinfo=UTC)
     # The same canonical URL the public collector produces, so the two paths deduplicate.
     assert batch.jobs[0].url == linkedin_posting_url("4439500109")
+    assert page.visited == [linkedin_posting_url("4439500109")]
     assert batch.complete_snapshot is False
     assert batch.cursor == ""
 
@@ -570,62 +575,57 @@ async def test_the_signed_in_walk_waits_for_the_description_to_render(monkeypatc
     """The signed-in page hydrates: read it too early and every posting arrives as an empty shell."""
     from rolebeacon import collectors
 
-    posting = {"via": "the page markup", "title": "Backend Engineer", "company": "Wolt",
-               "location": "Berlin", "description": "<p>Work.</p>", "posted": POSTED_ON}
-    page = _FakePage([["4439500109"], []], posting)
+    page = _FakePage()
 
     await _browser_collect(page, _browser_source(), monkeypatch=monkeypatch)
 
-    assert page.waited == [collectors.LINKEDIN_POSTING_BODY]
+    # Waits for text, not just the container: LinkedIn renders the heading a moment before the
+    # posting, and reading on the element's arrival collects an empty shell.
+    assert page.waited == [collectors.LINKEDIN_FILLED_SCRIPT]
 
 
 async def test_a_description_that_never_renders_is_skipped_rather_than_failing(monkeypatch, caplog) -> None:
     """A wait that times out is not an error - the posting is skipped and the walk carries on."""
 
     class SlowPage(_FakePage):
-        async def wait_for_selector(self, selector: str, **kwargs) -> None:
-            raise TimeoutError(f"Timeout waiting for {selector}")
+        async def wait_for_function(self, script: str, **kwargs) -> None:
+            raise TimeoutError("Timeout waiting for the description to render")
 
-    page = SlowPage([["4439500109", "4439500110"], []], {"via": "", "description": ""})
+    page = SlowPage(description="")
 
     with caplog.at_level(logging.WARNING, logger="rolebeacon.collectors"):
         batch = await _browser_collect(page, _browser_source(), monkeypatch=monkeypatch)
 
     assert batch.jobs == []
     assert batch.truncated is False  # walked to the end rather than checkpointing on the timeout
-    assert caplog.text.count("returned no description") == 2
-
-
-async def test_the_signed_in_walk_skips_a_posting_it_could_not_read(monkeypatch, caplog) -> None:
-    """An empty description means LinkedIn moved its markup - that has to be loud, not silent."""
-    page = _FakePage([["4439500109"], []], {"via": "", "title": "", "company": "", "description": "", "posted": ""})
-
-    with caplog.at_level(logging.WARNING, logger="rolebeacon.collectors"):
-        batch = await _browser_collect(page, _browser_source(), monkeypatch=monkeypatch)
-
-    assert batch.jobs == []
     assert "returned no description" in caplog.text
 
 
 async def test_the_signed_in_walk_waits_for_a_sign_in(monkeypatch, caplog) -> None:
     from rolebeacon import collectors
 
-    posting = {"via": "json-ld", "title": "Backend Engineer", "company": "Wolt",
-               "location": "Berlin", "description": "<p>Work.</p>", "posted": POSTED_ON}
-    page = _FakePage([["4439500109"], []], posting, signed_in=False)
+    class SignsInWhileAsked(_FakeContext):
+        """Signed out when the walk first looks, signed in by the time it looks again."""
 
-    async def sign_in_after_a_moment(_seconds: float) -> None:
-        page.context.signed_in = True
+        def __init__(self):
+            super().__init__(signed_in=False)
+            self.asked = 0
 
-    monkeypatch.setattr(collectors, "_linkedin_pause", sign_in_after_a_moment)
+        async def cookies(self, url: str) -> list[dict[str, str]]:
+            self.asked += 1
+            self.signed_in = self.asked > 1
+            return await super().cookies(url)
+
+    page = _FakePage(signed_in=False)
+    page.context = SignsInWhileAsked()
+
     with caplog.at_level(logging.INFO, logger="rolebeacon.collectors"):
         batch = await _browser_collect(page, _browser_source(), monkeypatch=monkeypatch)
 
     assert "waiting for you to sign in" in caplog.text
     assert "signed in, continuing" in caplog.text
-    # The sign-in page was offered, and the search it interrupted was asked for again afterwards.
-    assert page.visited[1] == collectors.LINKEDIN_LOGIN_URL
-    assert page.visited[2] == page.visited[0]
+    # The sign-in page was offered before any posting was opened.
+    assert page.visited == [collectors.LINKEDIN_LOGIN_URL, linkedin_posting_url("4439500109")]
     assert len(batch.jobs) == 1
 
 
@@ -633,9 +633,7 @@ async def test_a_guest_page_is_not_mistaken_for_a_signed_in_one(monkeypatch, cap
     """LinkedIn serves guests the same URLs a member sees, so the URL cannot answer this."""
     from rolebeacon import collectors
 
-    page = _FakePage([["4439500109"], []], {"via": "json-ld", "title": "Backend Engineer", "company": "Wolt",
-                                            "location": "Berlin", "description": "<p>Work.</p>", "posted": POSTED_ON},
-                     url="https://www.linkedin.com/jobs/search/", signed_in=False)
+    page = _FakePage(signed_in=False)
 
     monkeypatch.setattr(collectors, "LINKEDIN_LOGIN_TIMEOUT_SECONDS", 0.0)
     with caplog.at_level(logging.INFO, logger="rolebeacon.collectors"):
@@ -653,16 +651,13 @@ async def test_closing_the_window_checkpoints_the_walk(monkeypatch) -> None:
 
     class ClosedPage(_FakePage):
         async def goto(self, url: str, **kwargs) -> None:
-            if len(self.visited) >= 2:  # the search page loaded, then the window went away
-                raise RuntimeError("Target page, context or browser has been closed")
-            await super().goto(url, **kwargs)
+            raise RuntimeError("Target page, context or browser has been closed")
 
-    page = ClosedPage([["4439500109", "4439500110"]], {"via": "", "description": ""})
-
-    batch = await _browser_collect(page, config, monkeypatch=monkeypatch)
+    batch = await _browser_collect(ClosedPage(), config, monkeypatch=monkeypatch)
 
     assert batch.truncated is True
-    assert linkedin_parse_cursor(batch.cursor, linkedin_query_fingerprint(config)) == 1
+    # The posting it never finished, not the one after it.
+    assert linkedin_parse_cursor(batch.cursor, linkedin_query_fingerprint(config)) == 0
 
 
 async def test_one_empty_page_does_not_end_a_walk() -> None:
