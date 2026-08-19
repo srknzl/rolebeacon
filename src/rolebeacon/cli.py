@@ -22,8 +22,49 @@ from .job_export import export_jobs
 from .llm import LlmClient
 from .migration import import_legacy
 from .setup import LocalModelService, SetupService
-from .sync import SyncService
+from .sync import INTERACTIVE_KINDS, SyncService
 from .wizard import SetupWizard
+
+INTERACTIVE_SOURCE_WARNING = """
+  Automated access to signed-in LinkedIn pages is against LinkedIn's User Agreement, and the
+  account at risk is the one you apply with. A warning, a temporary restriction, or a permanent
+  ban are all possible outcomes. The pacing keeps this walk human-paced; it does not hide it.
+
+  Only job searches and job postings are read - never a profile, connection list, message, or
+  the feed - and an application is never submitted for you.
+
+  What happens next:
+    1. A Chrome window opens on a profile of its own. RoleBeacon never sees, types, or stores a
+       password; deleting that profile directory ends the session.
+    2. If the session has expired the walk stops on LinkedIn's sign-in page and waits up to five
+       minutes for you to sign in, verification step included. It continues by itself.
+    3. Leave the window open and untouched. Progress is printed here, naming each posting read.
+    4. Press Ctrl-C, or close the window, to stop. Everything collected so far is saved and
+       scored, and the next run resumes from that point.
+
+  Turn these sources off on the Sources page if you do not accept this.
+"""
+
+
+def _report_interactive_sources(settings: Settings) -> None:
+    """State what a signed-in walk risks before one opens, the way the Sources page does.
+
+    Printed rather than prompted: --interactive is itself the deliberate act, and a sync that
+    blocks on a question cannot be run from a script.
+    """
+    enabled = [
+        source for source in settings.load_sources()
+        if source.enabled and source.kind in INTERACTIVE_KINDS
+    ]
+    if not enabled:
+        # --interactive with nothing to run is silent otherwise, and the CLI has no way to enable
+        # a source, so say where that is done.
+        print("No signed-in sources are enabled; --interactive has no effect. Enable them on the "
+              "Sources page of `rolebeacon serve`.", file=sys.stderr)
+        return
+    print(f"Signed-in collection is enabled for: {', '.join(source.name or source.id for source in enabled)}",
+          file=sys.stderr)
+    print(INTERACTIVE_SOURCE_WARNING, file=sys.stderr)
 
 
 def main() -> None:
@@ -36,7 +77,11 @@ def main() -> None:
     sync_command.add_argument(
         "--interactive",
         action="store_true",
-        help="Also run sources that open a browser window and may wait for you to sign in",
+        help=(
+            "Also run sources that open a browser window and may wait for you to sign in. "
+            "Signed-in LinkedIn collection breaches LinkedIn's User Agreement; the run prints "
+            "what that risks before the window opens"
+        ),
     )
     sync_command.add_argument(
         "--force",
@@ -165,6 +210,8 @@ def main() -> None:
         uvicorn.run(create_app(settings), host=settings.host, port=settings.port)
     elif args.command == "sync":
         sync_service = SyncService(settings, database, LlmClient(settings))
+        if args.interactive:
+            _report_interactive_sources(settings)
         sync_result = asyncio.run(sync_service.run(force=args.force, manual=args.interactive))
         print(json.dumps(sync_result.to_dict(), indent=2))
     elif args.command == "jobs":

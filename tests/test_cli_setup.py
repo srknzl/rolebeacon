@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from rolebeacon.cli import main
 from rolebeacon.config import Settings
 from rolebeacon.setup import LocalModelService, SetupService
+from rolebeacon.sync import SyncService, SyncStatus
 
 
 def _payload() -> dict:
@@ -143,3 +144,38 @@ def test_start_ollama_sets_requested_bind_host(tmp_path, monkeypatch) -> None:
     assert environment["OLLAMA_HOST"] == "127.0.0.1:9999"
     assert environment["ROLEBEACON_TEST_ENV"] == "preserved"
     assert result["pid"] == 123
+
+
+def _setup_without_syncing(tmp_path, monkeypatch) -> Settings:
+    """A completed profile whose sync does nothing, so the CLI wiring can run without a network."""
+    monkeypatch.setenv("ROLEBEACON_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ROLEBEACON_ROOT", str(tmp_path))
+
+    async def no_sync(self, force: bool = False, manual: bool = False) -> SyncStatus:
+        return SyncStatus()
+
+    monkeypatch.setattr(SyncService, "run", no_sync)
+    return SetupService(Settings.load()).complete({**_payload(), "activate": True})
+
+
+def test_interactive_sync_states_the_risk_before_it_opens_a_window(tmp_path, monkeypatch, capsys) -> None:
+    settings = _setup_without_syncing(tmp_path, monkeypatch)
+    signed_in = next(source for source in settings.load_sources() if source.kind == "linkedin_browser")
+    settings.set_source_enabled(signed_in.id, True)
+    monkeypatch.setattr(sys, "argv", ["rolebeacon", "sync", "--interactive"])
+
+    main()
+
+    warning = capsys.readouterr().err
+    assert "against LinkedIn's User Agreement" in warning
+    assert signed_in.name in warning
+    assert "Ctrl-C" in warning
+
+
+def test_interactive_sync_says_so_when_no_signed_in_source_is_enabled(tmp_path, monkeypatch, capsys) -> None:
+    _setup_without_syncing(tmp_path, monkeypatch)
+    monkeypatch.setattr(sys, "argv", ["rolebeacon", "sync", "--interactive"])
+
+    main()
+
+    assert "--interactive has no effect" in capsys.readouterr().err

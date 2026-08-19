@@ -160,7 +160,9 @@ message, or the feed, and never an application submission. Because it opens a wi
 on a person, `linkedin_browser` is an interactive kind - a scheduled sync always skips it as
 `interactive_source`, and it runs only for a manual refresh or `rolebeacon sync --interactive`.
 The web Refresh button still honours each source's minimum interval, so `--force` is what retries a
-signed-in walk immediately. Stopping is closing the window or Ctrl-C; either checkpoints the cursor,
+signed-in walk immediately. `--interactive` states what a signed-in walk risks, and how to stop one,
+on stderr before the window opens; with no such source enabled it says the flag has no effect, since
+enabling one is done on the Sources page. Stopping is closing the window or Ctrl-C; either checkpoints the cursor,
 and the browser is shut down on a deadline so a driver that outlives its window cannot hold the run
 open.
 
