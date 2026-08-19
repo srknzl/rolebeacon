@@ -14,6 +14,7 @@ from rolebeacon.config import Settings
 from rolebeacon.database import Database
 from rolebeacon.domain import CollectedJob, EligibilityResult, EligibilityStatus, ScoreResult, SourceConfig
 from rolebeacon.llm import SCORING_RUBRIC, LlmClient
+from rolebeacon.scoring import seniority_level_options
 from rolebeacon.setup import SetupService
 
 
@@ -1339,3 +1340,15 @@ def test_company_research_progress_endpoint_completes_without_a_raw_error_page(t
     assert state["phase"] == "complete"
     assert state["company_id"] is not None
     assert not state["error"]
+
+
+def test_seniority_facet_offers_every_level_the_scorer_reads(tmp_path) -> None:
+    app = create_app(configured_settings(tmp_path))
+
+    with TestClient(app) as client:
+        page = client.get("/jobs")
+
+    # The facet used to be a hand-written list that had drifted: "mid" and "intern" are levels the
+    # scorer recognises in a title but the filter offered no way to ask for.
+    for level in seniority_level_options():
+        assert f'name="seniority" value="{level["code"]}"' in page.text

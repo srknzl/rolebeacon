@@ -929,3 +929,47 @@ def test_duplicate_merge_refuses_to_delete_two_sets_of_user_artifacts(tmp_path) 
     else:
         raise AssertionError("merge should require artifact review")
     assert len(database.list_applications()) == 2
+
+
+def test_seniority_filter_matches_whole_words_only(tmp_path) -> None:
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    leadership = sample_job()
+    leadership.title = "Backend Engineer, Team Leadership"
+    leadership.source_job_id = "job-2"
+    leadership.url = "https://example.com/jobs/2"
+    database.upsert_job(leadership)
+    actual_lead = sample_job()
+    actual_lead.title = "Lead Backend Engineer"
+    actual_lead.source_job_id = "job-3"
+    actual_lead.url = "https://example.com/jobs/3"
+    database.upsert_job(actual_lead)
+
+    titles = [job["title"] for job in database.list_jobs(JobFilters(seniority="lead"))]
+
+    assert titles == ["Lead Backend Engineer"]
+    assert database.count_jobs(JobFilters(seniority="lead")) == 1
+
+
+def test_minimum_score_filters_on_the_opportunity_score(tmp_path) -> None:
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    job_id, _ = database.upsert_job(sample_job())
+    database.save_evaluation(job_id, EligibilityResult(
+        status=EligibilityStatus.ELIGIBLE, route="citizen", sponsorship="unknown", relocation="unknown",
+        location_fit="eligible", reasons=[], risks=[],
+    ), ScoreResult(
+        total=60, dimensions={"role_domain": 20, "stack": 10, "domain_experience": 10, "seniority": 10, "location_authorization": 10, "salary_employment": 0},
+        confidence=1, verdict="consider", evidence=[], gaps=[], provider="rules", model="test",
+    ), "scored")
+    database.save_company_research(
+        name="Example", domain="example.com", profile={}, evidence=[],
+        score={"total": 100, "dimensions": {"all": 100}}, provider="rules", model="test",
+    )
+
+    # Job fit is 60, company fit lifts the shown opportunity score to 68. A threshold between the
+    # two has to follow the number the page displays, or the job vanishes from a filter it passes.
+    assert database.get_job(job_id)["opportunity_score"] == 68
+    assert len(database.list_jobs(JobFilters(min_score=65))) == 1
+    assert database.count_jobs(JobFilters(min_score=65)) == 1
+    assert database.list_jobs(JobFilters(min_score=70)) == []

@@ -38,7 +38,7 @@
   <div class="explorer-facets">
     {{ facet("eligibility", "Eligibility", [("eligible", "Eligible"), ("unknown", "Unknown"), ("ineligible", "Ineligible")], "Whether you can actually take the job. Checked before fit, and a high score can never override it.") }}
     {{ facet("work_model", "Work model", [("remote_worldwide", "Remote worldwide"), ("remote", "Any remote"), ("onsite", "On-site or hybrid")], "Derived from the posting's own location wording. Country-scoped remote counts as regional, never worldwide.") }}
-    {{ facet("seniority", "Seniority", [("junior", "Junior"), ("senior", "Senior"), ("staff", "Staff"), ("principal", "Principal"), ("lead", "Lead"), ("manager", "Manager")], "Read from wording in the job title. Postings that state no level are excluded when you pick one.") }}
+    {{ facet("seniority", "Seniority", facet_options.seniority, "Read from wording in the job title, matched as a whole word so Lead does not catch \"Team Leadership\". Postings that state no level are excluded when you pick one.") }}
     {{ facet("job_status", "Status", [("new", "New"), ("bookmarked", "Bookmarked"), ("applied", "Applied"), ("offer", "Offer"), ("rejected", "Rejected"), ("not_interested", "Not interested")], "Your own pipeline decision for the job. It is stored locally and never changes the original posting.") }}
     {{ facet("source", "Source", facet_options.source, "The collection source the job arrived from. Google Careers, Amazon Jobs, and LinkedIn are each one option covering every country and access path.") }}
     {% if facet_options.tech %}

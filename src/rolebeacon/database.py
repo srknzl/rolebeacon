@@ -15,6 +15,21 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .domain import CollectedJob, EligibilityResult, JobStatus, ScoreResult
+from .scoring import seniority_title_pattern
+
+# The score the Jobs page displays and sorts by: job fit weighted 80% with company fit 20%, and
+# plain job fit until the job is eligible and its employer has actually been researched. Written
+# once because the list, the single-job query, and the minimum-score filter have to mean the same
+# number - they did not, so a job could be hidden by a threshold it cleared on the shown score.
+OPPORTUNITY_SCORE_SQL = """CASE WHEN ms.total IS NULL THEN NULL
+                    WHEN cs.total IS NULL OR e.status <> 'eligible' THEN ms.total
+                    ELSE CAST(ROUND(ms.total * 0.8 + cs.total * 0.2) AS INTEGER) END"""
+
+# The company joins the score needs, so the list and its total count can evaluate it alike.
+COMPANY_SCORE_JOINS = """LEFT JOIN companies c ON c.normalized_name = j.company_key
+            LEFT JOIN company_scores cs ON cs.id = (
+                SELECT id FROM company_scores WHERE company_id = c.id ORDER BY created_at DESC, id DESC LIMIT 1
+            )"""
 
 # JobFilters.provider value meaning "any language model", as opposed to one named provider.
 # The stored provider is "rules", "ollama", or "openai-compatible"; the UI offers engines, not
@@ -408,6 +423,11 @@ def _fts_literal_query(value: str) -> str:
     return " AND ".join(f'"{term.replace(chr(34), chr(34) * 2)}"' for term in terms)
 
 
+def _regexp(pattern: str, value: str | None) -> bool:
+    """SQLite's REGEXP operator: `X REGEXP Y` calls this as `regexp(Y, X)`."""
+    return value is not None and re.search(pattern, value) is not None
+
+
 def _seniority(value: str) -> str:
     text = value.casefold()
     for level in ("intern", "junior", "staff", "principal", "senior", "lead", "manager"):
@@ -425,6 +445,9 @@ class Database:
         connection = sqlite3.connect(self.path, timeout=30)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
+        # SQLite parses X REGEXP Y but ships no implementation, so supply one. It lets the job
+        # filters reuse the scorer's own patterns instead of restating them as LIKE substrings.
+        connection.create_function("regexp", 2, _regexp, deterministic=True)
         try:
             yield connection
             connection.commit()
@@ -823,7 +846,7 @@ class Database:
     def get_job(self, job_id: int) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
-                """
+                f"""
                 SELECT j.*, e.status AS eligibility_status, e.route, e.sponsorship, e.relocation,
                        e.location_fit, e.reasons_json, e.risks_json,
                        ms.total AS score, ms.dimensions_json, ms.confidence, ms.verdict,
@@ -831,17 +854,13 @@ class Database:
                        c.id AS company_id, c.remote_policy AS company_remote_policy,
                        c.sponsorship AS company_sponsorship, c.relocation AS company_relocation,
                        cs.total AS company_score,
-                       CASE WHEN ms.total IS NULL THEN NULL WHEN cs.total IS NULL OR e.status <> 'eligible' THEN ms.total
-                            ELSE CAST(ROUND(ms.total * 0.8 + cs.total * 0.2) AS INTEGER) END AS opportunity_score
+                       {OPPORTUNITY_SCORE_SQL} AS opportunity_score
                 FROM jobs j
                 LEFT JOIN eligibility e ON e.job_id = j.id
                 LEFT JOIN match_scores ms ON ms.id = (
                     SELECT id FROM match_scores WHERE job_id = j.id ORDER BY created_at DESC, id DESC LIMIT 1
                 )
-                LEFT JOIN companies c ON c.normalized_name = j.company_key
-                LEFT JOIN company_scores cs ON cs.id = (
-                    SELECT id FROM company_scores WHERE company_id = c.id ORDER BY created_at DESC, id DESC LIMIT 1
-                )
+                {COMPANY_SCORE_JOINS}
                 WHERE j.id = ?
                 """,
                 (job_id,),
@@ -876,7 +895,7 @@ class Database:
     @staticmethod
     def _job_filters(filters: JobFilters) -> tuple[list[str], list[Any], str]:
         """Build the shared WHERE clauses so the list and its total count can never disagree."""
-        clauses = ["j.active = 1", "j.merged_into_job_id IS NULL", "COALESCE(ms.total, 0) >= ?"]
+        clauses = ["j.active = 1", "j.merged_into_job_id IS NULL", f"COALESCE({OPPORTUNITY_SCORE_SQL}, 0) >= ?"]
         params: list[Any] = [filters.min_score]
         for column, chosen in (
             ("e.route", _chosen(filters.route)),
@@ -908,10 +927,10 @@ class Database:
         wanted = [work_models[value] for value in _chosen(filters.work_model) if value in work_models]
         if wanted:
             clauses.append(f"({' OR '.join(wanted)})")
-        seniorities = _chosen(filters.seniority)
+        seniorities = [value for value in _chosen(filters.seniority) if seniority_title_pattern(value)]
         if seniorities:
-            clauses.append(f"({' OR '.join('j.normalized_title LIKE ?' for _ in seniorities)})")
-            params.extend(f"%{value}%" for value in seniorities)
+            clauses.append(f"({' OR '.join('j.normalized_title REGEXP ?' for _ in seniorities)})")
+            params.extend(seniority_title_pattern(value) for value in seniorities)
         if filters.title:
             clauses.append("j.normalized_title LIKE ?")
             params.append(f"%{filters.title.casefold()}%")
@@ -981,6 +1000,7 @@ class Database:
             LEFT JOIN match_scores ms ON ms.id = (
                 SELECT id FROM match_scores WHERE job_id = j.id ORDER BY created_at DESC, id DESC LIMIT 1
             )
+            {COMPANY_SCORE_JOINS}
             WHERE {' AND '.join(clauses)}
         """
         with self.connect() as connection:
@@ -1007,18 +1027,14 @@ class Database:
                    c.id AS company_id, c.remote_policy AS company_remote_policy,
                    c.sponsorship AS company_sponsorship, c.relocation AS company_relocation,
                    cs.total AS company_score,
-                   CASE WHEN ms.total IS NULL THEN NULL WHEN cs.total IS NULL OR e.status <> 'eligible' THEN ms.total
-                        ELSE CAST(ROUND(ms.total * 0.8 + cs.total * 0.2) AS INTEGER) END AS opportunity_score
+                   {OPPORTUNITY_SCORE_SQL} AS opportunity_score
             FROM jobs j
             {join_fts}
             LEFT JOIN eligibility e ON e.job_id = j.id
             LEFT JOIN match_scores ms ON ms.id = (
                 SELECT id FROM match_scores WHERE job_id = j.id ORDER BY created_at DESC, id DESC LIMIT 1
             )
-            LEFT JOIN companies c ON c.normalized_name = j.company_key
-            LEFT JOIN company_scores cs ON cs.id = (
-                SELECT id FROM company_scores WHERE company_id = c.id ORDER BY created_at DESC, id DESC LIMIT 1
-            )
+            {COMPANY_SCORE_JOINS}
             WHERE {' AND '.join(clauses)}
             ORDER BY {JOB_SORTS.get(sort) or JOB_SORTS["decision_ready"]},
                      COALESCE(opportunity_score, ms.total, 0) DESC,

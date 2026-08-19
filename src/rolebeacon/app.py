@@ -209,6 +209,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "route": [(str(item.get("id", "")), str(item.get("label", "")))
                               for item in app_settings.load_strategies()],
                     "tech": [(skill, skill) for skill in preferences.get("preferred_skills", [])],
+                    "seniority": [(level["code"], level["label"]) for level in seniority_level_options()],
                 },
                 query_error=query_error,
             ),

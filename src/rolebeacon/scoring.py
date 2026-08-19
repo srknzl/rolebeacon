@@ -62,6 +62,16 @@ def seniority_level_options() -> list[dict[str, str]]:
     return [{"code": level, "label": _SENIORITY_LEVEL_LABELS[level]} for level in SENIORITY_LEVELS]
 
 
+def seniority_title_pattern(level: str) -> str:
+    """The expression that decides whether a title carries a level, for callers outside Python.
+
+    The job-list filter runs this in SQLite so that filtering by "lead" and scoring a title as
+    "lead" ask the same question - a plain substring match there returned "Team Leadership".
+    """
+    pattern = _SENIORITY_PATTERNS.get(level)
+    return pattern.pattern if pattern else ""
+
+
 def _title_seniority(title: str) -> str:
     for level, pattern in _SENIORITY_PATTERNS.items():
         if pattern.search(title):
