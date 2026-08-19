@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 from .config import Settings
 from .database import Database
 from .llm import LlmClient
-from .resume import BuiltinResumeRenderer, ExternalCommandResumeRenderer, tailor_profile_for_job
+from .resume import BuiltinResumeRenderer, tailor_profile_for_job
 
 # greeting/closing are deliberately absent: a model asked to fill them invents a hiring-manager
 # name we never supplied. Python writes both from a small language-keyed template instead.
@@ -105,12 +105,7 @@ class ArtifactService:
         directory = self.application_dir(job_id)
         jd_path = directory / "job-description.txt"
         jd_path.write_text(str(job.get("description", "")), encoding="utf-8")
-        renderer = (
-            ExternalCommandResumeRenderer(self.settings.external_resume_command, self.settings.candidate_profile_path)
-            if self.settings.resume_renderer == "external"
-            else BuiltinResumeRenderer()
-        )
-        output_path = await renderer.render(profile=profile, job=job, output_dir=directory)
+        output_path = await BuiltinResumeRenderer().render(profile=profile, job=job, output_dir=directory)
         self.database.save_application(job_id, status="preparing", resume_path=str(output_path))
         return output_path
 

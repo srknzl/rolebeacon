@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import html
 import json
 import re
@@ -148,38 +147,3 @@ class BuiltinResumeRenderer:
                 f"Original error: {error}"
             ) from error
         return pdf_path
-
-
-class ExternalCommandResumeRenderer:
-    def __init__(self, command: tuple[str, ...], profile_path: Path):
-        if not command:
-            raise ValueError("External resume command is empty")
-        self.command = command
-        self.profile_path = profile_path
-
-    async def render(
-        self,
-        *,
-        profile: dict[str, Any],
-        job: dict[str, Any],
-        output_dir: Path,
-    ) -> Path:
-        output_dir.mkdir(parents=True, exist_ok=True)
-        jd_path = output_dir / "job-description.txt"
-        output_path = output_dir / "resume.pdf"
-        jd_path.write_text(str(job.get("description", "")), encoding="utf-8")
-        values = {"jd": str(jd_path), "output": str(output_path), "profile": str(self.profile_path)}
-        argv = [part.format_map(values) for part in self.command]
-        process = await asyncio.create_subprocess_exec(
-            *argv,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await process.communicate()
-        if process.returncode != 0:
-            message = stderr.decode(errors="replace").strip() or stdout.decode(errors="replace").strip()
-            raise RuntimeError(message or "External resume generator failed")
-        if not output_path.exists():
-            raise RuntimeError("External resume generator did not create the configured output file")
-        return output_path

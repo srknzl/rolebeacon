@@ -155,7 +155,6 @@ class CompanyResearchStatus:
     message: str = "Ready"
     progress_percent: int = 0
     llm_used: bool = False
-    used_rules_fallback: bool = False
     error: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -884,8 +883,6 @@ class CompanyResearchCoordinator:
                 self.status.progress_percent = progress_percent
                 if phase == "llm_analysis":
                     self.status.llm_used = True
-                if phase == "rules_fallback":
-                    self.status.used_rules_fallback = True
 
             try:
                 company_id = await self.service.research(name, progress=report)

@@ -100,8 +100,6 @@ class Settings:
     llm_timeout_seconds: float
     company_search_provider: str
     company_search_api_key: str
-    resume_renderer: str
-    external_resume_command: tuple[str, ...]
 
     @classmethod
     def load(cls, root: Path | None = None) -> Settings:
@@ -156,8 +154,6 @@ class Settings:
             llm_timeout_seconds=float(os.getenv("ROLEBEACON_LLM_TIMEOUT_SECONDS", "120")),
             company_search_provider="brave" if company_search_api_key else "none",
             company_search_api_key=company_search_api_key,
-            resume_renderer=str(setup.get("resume_renderer", "builtin")),
-            external_resume_command=tuple(setup.get("external_resume_command", [])),
         )
 
     def refreshed(self) -> Settings:
@@ -329,10 +325,10 @@ class Settings:
         catalog = _read_json(self.resource_dir / "config" / "source-packs.json", {})
         for source in catalog.get("sources", []):
             key = str(source["company"]).casefold()
-            entry = by_name.setdefault(key, {"name": source["company"], "domain": "", "sources": []})
-            boards = entry.setdefault("job_boards", [])
-            if source["url"] not in boards:
-                boards.append(source["url"])
+            # The row is what puts a source-pack company in the registry at all. Its board URL is
+            # deliberately not stored as an official source: research scores fetched company pages,
+            # and an ATS listing page is not one.
+            by_name.setdefault(key, {"name": source["company"], "domain": "", "sources": []})
         return sorted(by_name.values(), key=lambda item: str(item["name"]).casefold())
 
     def save_open_browser(self, value: bool) -> Settings:

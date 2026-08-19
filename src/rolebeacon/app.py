@@ -1015,7 +1015,7 @@ def _active_filter_chips(
                 "key": key,
                 "label": label,
                 "href": _chip_href(params, key),
-                "value": "yes" if key in {"has_salary", "hide_unmet_experience", "show_mismatched_titles"} else value,
+                "value": "yes" if key in {"has_salary", "hide_unmet_experience"} else value,
             }
         )
     return chips
