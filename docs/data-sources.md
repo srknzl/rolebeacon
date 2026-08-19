@@ -102,29 +102,54 @@ country-specific tracking link, so the same posting deduplicates across sources.
 ### The signed-in walk
 
 Guest throttling makes a long walk slow, so each generated location also gets a `linkedin_browser`
-row, disabled until chosen. It opens a visible Chrome on a dedicated profile directory inside the
-application-data directory, waits for the user to sign in themselves if LinkedIn asks, and walks the
-same searches through the same cursor, break, and progress machinery. RoleBeacon never types
-credentials and never stores them; the session lives in that profile directory and can be dropped
-on its own without touching the profile used for application autofill.
+row, disabled until chosen. The Sources page presents the two as one choice - public search or the
+user's own session - and switches every row of a method together, because "which way should
+LinkedIn be read" is the real decision and a per-location row is only how that answer is stored.
+The signed-in card carries the warning it deserves: automated access to signed-in pages is against
+LinkedIn's User Agreement, and the account at risk is the user's own, the same one they apply with.
+
+The browser is used for one thing: the posting description. Titles, employers, locations, and
+posting dates keep coming from the guest search cards even in a signed-in run. LinkedIn renders its
+own chrome in the account's display language, so a session set to Turkish reports a London job as
+"Birleşik Krallık" and a relative date as "4 gün önce"; Playwright's `locale` does not override it,
+and an eligibility gate cannot read it. The account's language is the user's setting to make, not
+something a collector should work around. Taking metadata from the English guest cards and only the
+body from the window sidesteps the problem entirely, and the body is the part the guest endpoints
+throttle hardest, so it is also where the session earns its keep.
+
+It opens a visible Chrome on a dedicated profile directory inside the application-data directory and
+waits for the user to sign in themselves if LinkedIn asks. RoleBeacon never types credentials and
+never stores them; the session lives in that profile directory and can be dropped on its own without
+touching the profile used for application autofill.
 
 Being signed in is read from the presence of the session cookie, never from the URL. LinkedIn serves
 a guest the same `/jobs/search/` and `/jobs/view/` addresses a member sees, so a first run walked
 seventeen postings signed out without ever asking for a sign-in - which collects nothing the public
 collector could not already reach and looks, from the desk, like a window refreshing itself. The
 cookie is checked by name only; its value is never read. When it is missing the walk opens the
-sign-in page, waits up to five minutes for the person to finish, and then asks again for the search
+sign-in page, waits up to five minutes for the person to finish, and then asks again for the posting
 the sign-in interrupted.
+
+LinkedIn serves two different job pages, which is worth knowing before guessing at a selector. The
+signed-out pages and the signed-in *search* page are the older server-rendered markup, with
+`#job-details` and `job-card-container__link` class names. A signed-in `/jobs/view/<id>` page is the
+newer rewrite: content-hashed class names, no JSON-LD at all, and semantic ids such as
+`JobDetails_AboutTheJob_<jobId>`. The collector queries a small union of both shapes and logs once
+per run which one answered, so a redesign shows up in the log rather than as blank descriptions.
+
+Waiting for that container to exist is not enough - LinkedIn renders the section and its heading
+first and fills the posting in a moment later, so a walk that read on the element's arrival got a
+heading and nothing else. The wait is on rendered text length instead, and a posting that still
+yields no description is skipped with a warning rather than saved empty.
 
 The limits do not move: job search results and job postings only, never a profile, connection list,
 message, or the feed, and never an application submission. Because it opens a window and can wait
-on a person, `linkedin_browser` is an interactive kind — a scheduled sync always skips it as
+on a person, `linkedin_browser` is an interactive kind - a scheduled sync always skips it as
 `interactive_source`, and it runs only for a manual refresh or `rolebeacon sync --interactive`.
-
-Postings are read from a `JobPosting` JSON-LD block when the page carries one and from the
-description markup otherwise; which path answered is logged once per run, and a posting that yields
-no description is skipped with a warning rather than saved empty, so a LinkedIn redesign is visible
-in the log instead of silently producing blank jobs.
+The web Refresh button still honours each source's minimum interval, so `--force` is what retries a
+signed-in walk immediately. Stopping is closing the window or Ctrl-C; either checkpoints the cursor,
+and the browser is shut down on a deadline so a driver that outlives its window cannot hold the run
+open.
 
 Official references:
 

@@ -1059,6 +1059,19 @@ td small { display: block; color: var(--muted); }
 .source-company-chip.is-installed { background: var(--warning-bg); color: var(--warning-text); }
 .source-company-chip.is-enabled { background: var(--success-bg); color: var(--success-text); }
 .source-pack-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: auto; }
+.linkedin-panel { margin-top: 22px; }
+.linkedin-methods { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 16px; }
+.linkedin-method-card { display: grid; align-content: start; gap: 10px; padding: 18px; background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius-lg); }
+.linkedin-method-heading { display: flex; align-items: center; gap: 8px; }
+.linkedin-method-heading h3 { font-size: 15px; }
+.linkedin-method-card p { margin: 0; font-size: 13px; }
+/* The signed-in warning is the one thing on this page nobody may skim past, so it is a block of
+   its own rather than the 11px footnote .safety-note is everywhere else. */
+.linkedin-method-card .safety-note { padding: 11px 13px; border-left: 4px solid var(--warning); border-radius: var(--radius-sm); background: var(--warning-bg); color: var(--warning-text); font-size: 13px; margin: 0; }
+.linkedin-tutorial { margin: 10px 0 0; padding-left: 20px; display: grid; gap: 7px; color: var(--muted); font-size: 13px; }
+.linkedin-tutorial code { font-size: 12px; }
+.linkedin-rows { color: var(--muted); font-size: 12px; margin-top: auto; }
+.linkedin-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .source-gap-list { margin-top: 18px; }
 .source-gap-list ul { color: var(--muted); font-size: 13px; }
 
@@ -1067,6 +1080,7 @@ td small { display: block; color: var(--muted); }
 }
 @media (max-width: 650px) {
   .source-pack-grid { grid-template-columns: 1fr; }
+  .linkedin-methods { grid-template-columns: 1fr; }
   .source-pack-card > p { min-height: 0; }
   .source-pack-actions { grid-template-columns: 1fr; }
 }

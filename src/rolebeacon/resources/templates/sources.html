@@ -105,6 +105,57 @@
   </details>
 </section>
 
+{% if linkedin_methods %}
+{# One card per collection method. Enabling a method flips every row it generated, because the
+   choice is "public search or my own session", not "Europe but not Türkiye". #}
+{% macro method_rows(method, kind, verb) %}
+<p class="linkedin-rows">{{ method.enabled }} of {{ method.total }} searches enabled: {{ method.names|join(' · ') }}</p>
+<div class="linkedin-actions">
+  <button class="button button-primary linkedin-method" type="button" data-method="{{ kind }}" data-enable="true" data-ids="{{ method.ids|join(',') }}" {% if method.enabled == method.total %}disabled{% endif %}>{{ verb }}</button>
+  <button class="button linkedin-method" type="button" data-method="{{ kind }}" data-enable="false" data-ids="{{ method.ids|join(',') }}" {% if not method.enabled %}disabled{% endif %}>Turn off</button>
+</div>
+{% endmacro %}
+
+<section class="panel linkedin-panel">
+  <div class="panel-heading">
+    <div><p class="eyebrow">LINKEDIN</p><h2>Two ways to collect</h2></div>
+    <span>Job searches and job postings only — never profiles, connections, messages, or the feed.</span>
+  </div>
+  <p class="muted">LinkedIn publishes no job API, so RoleBeacon reads it two ways. Both walk the same search for your own target roles and locations, and a posting collected either way deduplicates onto the same job. Pick one — running both only reads everything twice.</p>
+  <div class="linkedin-methods">
+    {% set public = linkedin_methods.get("linkedin") %}
+    {% if public %}
+    <article class="linkedin-method-card">
+      <div class="linkedin-method-heading"><h3>Public search</h3><span class="status status-interested">no account</span></div>
+      <p>Reads LinkedIn's credential-free guest endpoints over plain HTTP. Nothing is signed in, no window opens, and no session is stored. This is the default, and it runs on the ordinary four-hour schedule alongside every other source.</p>
+      <p class="muted">LinkedIn throttles guest reads hard and without publishing a budget, so a walk paces itself, widens whenever it is pushed back, and takes hours over a large location. It is resumable: a run that is stopped or throttled out continues from where it stopped.</p>
+      {{ method_rows(public, "linkedin", "Turn on") }}
+    </article>
+    {% endif %}
+
+    {% set signed_in = linkedin_methods.get("linkedin_browser") %}
+    {% if signed_in %}
+    <article class="linkedin-method-card">
+      <div class="linkedin-method-heading"><h3>Signed-in browser</h3><span class="status status-running">your account</span></div>
+      <p>Opens a visible Chrome window on a profile of its own that you sign in to yourself. RoleBeacon never sees, types, or stores a password — only Chrome keeps the session, in its own directory, and deleting that directory ends it. The job list still comes from the public search; the window is used only to read posting descriptions, which is the part the guest endpoints throttle hardest.</p>
+      <p class="safety-note">Automated access to signed-in LinkedIn pages is against LinkedIn's User Agreement, and the account at risk is yours — the same one you apply with. A warning, a temporary restriction, or a permanent ban are all possible outcomes. The pacing here is meant to keep a walk human-paced, not to hide it. Turn this on only if you accept that.</p>
+      <details class="source-help">
+        <summary>How a signed-in run works</summary>
+        <ol class="linkedin-tutorial">
+          <li>Turn the method on below. The searches are the same ones the public method uses.</li>
+          <li>Start a refresh yourself: the <strong>Refresh now</strong> button above, or <code>uv run rolebeacon sync --interactive --force</code>. The background scheduler never opens a window, and the button honours each source's four-hour interval, so <code>--force</code> is the way to retry immediately.</li>
+          <li>A Chrome window opens. If the session has expired it stops on LinkedIn's login page and waits up to five minutes for you to sign in, verification step included. It continues by itself as soon as the session exists.</li>
+          <li>Leave the window open and untouched while it reads one posting at a time. Progress appears in the refresh panel and in the terminal, naming the posting being read.</li>
+          <li>To stop, close the Chrome window, or press Ctrl-C if you started it from a terminal. Everything collected so far is saved and scored, and the next run resumes from that point.</li>
+        </ol>
+      </details>
+      {{ method_rows(signed_in, "linkedin_browser", "Turn on") }}
+    </article>
+    {% endif %}
+  </div>
+</section>
+{% endif %}
+
 {% if coverage %}
 <section class="section-heading"><div><p class="eyebrow">WATCHLIST COVERAGE</p><h2>Priority companies</h2></div></section>
 <div class="source-coverage-grid">
@@ -269,6 +320,27 @@
     const action = enabled ? "added and enabled" : "added";
     showSourceMessage(`${value.source_ids.length} sources ${action}. ${value.added} new, ${value.updated} already present.`, true);
     setTimeout(() => window.location.reload(), 700);
+  }));
+
+  // A method switch is every row that method generated, one request each. Sequential because the
+  // sources file is rewritten per save, and a handful of rows is not worth a batch endpoint.
+  document.querySelectorAll(".linkedin-method").forEach(button => button.addEventListener("click", async () => {
+    const enabled = button.dataset.enable === "true";
+    const ids = button.dataset.ids.split(",").filter(Boolean);
+    document.querySelectorAll(".linkedin-method").forEach(item => { item.disabled = true; });
+    for (const id of ids) {
+      const response = await fetch(`/api/sources/${encodeURIComponent(id)}/enabled`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({enabled}),
+      });
+      if (!response.ok) {
+        showSourceMessage(await sourceError(response));
+        return;
+      }
+    }
+    showSourceMessage(`${ids.length} LinkedIn searches ${enabled ? "enabled" : "disabled"}.`, true);
+    setTimeout(() => window.location.reload(), 650);
   }));
 
   const sourceCatalogSearch = document.getElementById("source-catalog-search");

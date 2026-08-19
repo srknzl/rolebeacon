@@ -282,7 +282,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return templates.TemplateResponse(
             request,
             "sources.html",
-            page_context(request, sources=rows, coverage=coverage, source_catalog=source_catalog.view()),
+            page_context(
+                request, sources=rows, coverage=coverage, source_catalog=source_catalog.view(),
+                linkedin_methods=_linkedin_methods(list(configured.values())),
+            ),
         )
 
     @app.get("/duplicates", response_class=HTMLResponse)
@@ -823,6 +826,31 @@ _GROUPED_SOURCE_KINDS = {
     "linkedin": ("linkedin", "LinkedIn"),
     "linkedin_browser": ("linkedin", "LinkedIn"),
 }
+
+
+# The two ways RoleBeacon reads LinkedIn, each spread over one generated row per location. The
+# Sources page switches a whole method on or off, because "public search or my own session" is the
+# real decision and "LinkedIn - Europe (signed in)" is just one row of whichever answer was given.
+LINKEDIN_METHOD_KINDS = ("linkedin", "linkedin_browser")
+
+
+def _linkedin_methods(sources: list[SourceConfig]) -> dict[str, dict[str, Any]]:
+    """The generated rows behind each LinkedIn collection method, keyed by kind.
+
+    Empty for a profile that never generated them, which is what hides the panel: the rows come
+    from setup, so there is nothing to explain before one has been saved.
+    """
+    methods = {}
+    for kind in LINKEDIN_METHOD_KINDS:
+        rows = [source for source in sources if source.kind == kind]
+        if rows:
+            methods[kind] = {
+                "ids": [source.id for source in rows],
+                "names": [source.name for source in rows],
+                "enabled": sum(1 for source in rows if source.enabled),
+                "total": len(rows),
+            }
+    return methods
 
 
 def _source_filter_options(sources: list[SourceConfig]) -> list[dict[str, str]]:

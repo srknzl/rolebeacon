@@ -680,6 +680,31 @@ def test_the_linkedin_filter_covers_both_the_guest_and_the_signed_in_rows() -> N
     assert set(filters.source_ids) == {"linkedin-europe", "linkedin-browser-europe"}
 
 
+def test_each_linkedin_method_is_switched_as_a_whole_rather_than_row_by_row() -> None:
+    """The Sources panel offers "public search" or "my own session", not one location at a time."""
+    from rolebeacon.app import _linkedin_methods
+
+    methods = _linkedin_methods([
+        SourceConfig(id="linkedin-europe", kind="linkedin", name="LinkedIn — Europe", enabled=True),
+        SourceConfig(id="linkedin-remote", kind="linkedin", name="LinkedIn — Remote", enabled=False),
+        SourceConfig(
+            id="linkedin-browser-europe", kind="linkedin_browser",
+            name="LinkedIn (signed in) — Europe", enabled=False,
+        ),
+        SourceConfig(id="adzuna-de", kind="adzuna", name="Adzuna — Germany", enabled=True),
+    ])
+
+    assert methods["linkedin"]["ids"] == ["linkedin-europe", "linkedin-remote"]
+    assert (methods["linkedin"]["enabled"], methods["linkedin"]["total"]) == (1, 2)
+    assert (methods["linkedin_browser"]["enabled"], methods["linkedin_browser"]["total"]) == (0, 1)
+
+
+def test_a_profile_with_no_generated_linkedin_rows_gets_no_linkedin_panel() -> None:
+    from rolebeacon.app import _linkedin_methods
+
+    assert _linkedin_methods([SourceConfig(id="adzuna-de", kind="adzuna", name="Adzuna")]) == {}
+
+
 def test_jobs_page_source_filter_groups_google_across_countries_and_company_list_narrows_watchlist(tmp_path) -> None:
     from rolebeacon.source_discovery import relocation_source_candidates
 

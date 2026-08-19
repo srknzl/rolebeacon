@@ -313,11 +313,14 @@ Built-in source adapters include:
 
 Only sources selected in setup are enabled. LinkedIn collection covers job search results and job
 postings and nothing else — profiles, connections, messages, and the feed stay out of scope. The
-default connector never signs in. The signed-in one opens a visible browser window, waits for you
-to log in, stores no credentials, and runs only when you ask for a refresh, never on the schedule:
+Sources page carries both methods side by side, with the risk of the signed-in one and the steps
+for using it, and switches either on as a whole. The default method never signs in. The signed-in
+one opens a visible browser window, waits for you to log in, stores no credentials, reads only
+posting descriptions through your session, and runs when you ask for a refresh, never on the
+schedule:
 
 ```bash
-uv run rolebeacon sync --interactive
+uv run rolebeacon sync --interactive --force
 ```
 
 See [docs/data-sources.md](docs/data-sources.md) before adding or enabling a source.
