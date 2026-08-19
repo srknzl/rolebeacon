@@ -803,26 +803,35 @@ FILTER_CHIP_LABELS: dict[str, str] = {
     "hide_unmet_experience": "Hiding unmet experience requirements",
 }
 
-# These two kinds generate one source row per relocation-target country - dozens of otherwise
-# identical "Google Careers"/"Amazon Jobs" entries. Every other kind (Adzuna's per-country rows,
-# Arbeitnow's general/sponsored split, company-scoped boards) is genuinely distinct and stays
-# listed individually, so only these two are grouped into a single dropdown option per kind.
-_GROUPED_SOURCE_LABELS = {"google_careers": "Google Careers", "amazon_jobs": "Amazon Jobs"}
+# These kinds generate one source row per relocation-target country - dozens of otherwise
+# identical "Google Careers"/"Amazon Jobs"/"LinkedIn" entries. Every other kind (Adzuna's
+# per-country rows, Arbeitnow's general/sponsored split, company-scoped boards) is genuinely
+# distinct and stays listed individually, so only these are grouped into one dropdown option.
+# LinkedIn's two kinds share a group because they are two ways into the same postings, which
+# deduplicate onto one canonical URL: "LinkedIn" is the answer to "where did this come from",
+# and how it was read is a collection detail belonging on the Sources page.
+_GROUPED_SOURCE_KINDS = {
+    "google_careers": ("google_careers", "Google Careers"),
+    "amazon_jobs": ("amazon_jobs", "Amazon Jobs"),
+    "linkedin": ("linkedin", "LinkedIn"),
+    "linkedin_browser": ("linkedin", "LinkedIn"),
+}
 
 
 def _source_filter_options(sources: list[SourceConfig]) -> list[dict[str, str]]:
-    seen_kinds: set[str] = set()
+    seen_groups: set[str] = set()
     options = []
     for source in sources:
-        if source.kind in _GROUPED_SOURCE_LABELS:
-            if source.kind in seen_kinds:
+        if source.kind in _GROUPED_SOURCE_KINDS:
+            value, label = _GROUPED_SOURCE_KINDS[source.kind]
+            if value in seen_groups:
                 continue
-            seen_kinds.add(source.kind)
-            # A fixed label per kind, not source.name: an individual row's saved name can carry a
+            seen_groups.add(value)
+            # A fixed label per group, not source.name: an individual row's saved name can carry a
             # stale per-country suffix from before this row was generated (save_sources() keeps an
             # existing row's name on every later save), which must never leak into a label that is
-            # supposed to represent every row of that kind.
-            options.append({"value": source.kind, "label": _GROUPED_SOURCE_LABELS[source.kind]})
+            # supposed to represent every row in that group.
+            options.append({"value": value, "label": label})
         else:
             options.append({"value": source.id, "label": source.name})
     return options
@@ -848,8 +857,9 @@ def _job_filters_from_query(
     values = dict(params)
     technologies = tuple(item for item in params.getlist("tech") if item.strip())
     source = values.get("source", "")
-    if source in _GROUPED_SOURCE_LABELS and sources is not None:
-        source_ids = tuple(item.id for item in sources if item.kind == source)
+    grouped = {kind for kind, (value, _label) in _GROUPED_SOURCE_KINDS.items() if value == source}
+    if grouped and sources is not None:
+        source_ids = tuple(item.id for item in sources if item.kind in grouped)
     else:
         source_ids = (source,) if source else ()
     company_list = values.get("company_list", "")

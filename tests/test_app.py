@@ -644,6 +644,10 @@ def test_source_filter_options_collapses_generated_rows_but_lists_others_individ
         SourceConfig(id="google-careers-germany", kind="google_careers", name="Google Careers — Germany"),
         SourceConfig(id="google-careers-france", kind="google_careers", name="Google Careers"),
         SourceConfig(id="amazon-jobs-germany", kind="amazon_jobs", name="Amazon Jobs"),
+        # Both LinkedIn kinds read the same postings, so they collapse into one option together.
+        SourceConfig(id="linkedin-europe", kind="linkedin", name="LinkedIn — Europe"),
+        SourceConfig(id="linkedin-turkiye", kind="linkedin", name="LinkedIn — Türkiye"),
+        SourceConfig(id="linkedin-browser-europe", kind="linkedin_browser", name="LinkedIn (signed in) — Europe"),
         SourceConfig(id="adzuna-de", kind="adzuna", name="Adzuna — Germany"),
         SourceConfig(id="adzuna-uk", kind="adzuna", name="Adzuna — UK"),
     ]
@@ -653,9 +657,27 @@ def test_source_filter_options_collapses_generated_rows_but_lists_others_individ
     assert options == [
         {"value": "google_careers", "label": "Google Careers"},
         {"value": "amazon_jobs", "label": "Amazon Jobs"},
+        {"value": "linkedin", "label": "LinkedIn"},
         {"value": "adzuna-de", "label": "Adzuna — Germany"},
         {"value": "adzuna-uk", "label": "Adzuna — UK"},
     ]
+
+
+def test_the_linkedin_filter_covers_both_the_guest_and_the_signed_in_rows() -> None:
+    """One "LinkedIn" option, every LinkedIn row behind it - the two kinds read the same postings."""
+    from starlette.datastructures import QueryParams
+
+    from rolebeacon.app import _job_filters_from_query
+
+    sources = [
+        SourceConfig(id="linkedin-europe", kind="linkedin", name="LinkedIn — Europe"),
+        SourceConfig(id="linkedin-browser-europe", kind="linkedin_browser", name="LinkedIn (signed in) — Europe"),
+        SourceConfig(id="adzuna-de", kind="adzuna", name="Adzuna — Germany"),
+    ]
+
+    filters = _job_filters_from_query(QueryParams("source=linkedin"), sources)
+
+    assert set(filters.source_ids) == {"linkedin-europe", "linkedin-browser-europe"}
 
 
 def test_jobs_page_source_filter_groups_google_across_countries_and_company_list_narrows_watchlist(tmp_path) -> None:

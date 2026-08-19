@@ -37,6 +37,11 @@ def main() -> None:
         action="store_true",
         help="Also run sources that open a browser window and may wait for you to sign in",
     )
+    sync_command.add_argument(
+        "--force",
+        action="store_true",
+        help="Run every enabled source now, ignoring its minimum interval",
+    )
     jobs = subparsers.add_parser("jobs", help="Refresh and export ranked job discovery results")
     jobs.add_argument("--no-sync", action="store_true", help="Export the existing local database without refreshing")
     jobs.add_argument("--start-ollama", action="store_true", help="Start an installed Ollama before refreshing")
@@ -142,7 +147,7 @@ def main() -> None:
         uvicorn.run(create_app(settings), host=settings.host, port=settings.port)
     elif args.command == "sync":
         sync_service = SyncService(settings, database, LlmClient(settings))
-        sync_result = asyncio.run(sync_service.run(manual=args.interactive))
+        sync_result = asyncio.run(sync_service.run(force=args.force, manual=args.interactive))
         print(json.dumps(sync_result.to_dict(), indent=2))
     elif args.command == "jobs":
         exit_code = _run_jobs_command(args, settings, database)
