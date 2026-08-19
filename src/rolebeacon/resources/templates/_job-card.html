@@ -6,7 +6,7 @@
   <div class="job-card-main">
     <div class="job-card-heading">
       <div>
-        <a href="/jobs/{{ job.id }}" class="job-title">{{ job.title }}</a>
+        <a href="/jobs/{{ job.id }}{% if return_to %}?return={{ return_to }}{% endif %}" class="job-title">{{ job.title }}</a>
         <div class="company">{{ job.company }}</div>
       </div>
       <div class="job-card-badges">

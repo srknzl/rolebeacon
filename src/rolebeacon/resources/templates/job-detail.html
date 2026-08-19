@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ job.title }} · RoleBeacon{% endblock %}
 {% block content %}
-<a class="back-link" href="/jobs">← All jobs</a>
+<a class="back-link" href="{{ back_link or "/jobs" }}">← {{ "Back to results" if back_link else "All jobs" }}</a>
 <div id="job-message" class="toast" role="status" aria-live="polite" hidden></div>
 <section class="detail-header">
   <div>

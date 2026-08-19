@@ -8,7 +8,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.parse import parse_qs, quote, urlencode, urlsplit
 
 import httpx
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request, status
@@ -140,6 +140,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "llm_model": app_settings.llm_model,
             "ineligible_score_cap": INELIGIBLE_SCORE_CAP,
             "csrf_token": csrf_token,
+            # Where a job card should send you back to. The list a job was opened from is part of
+            # the work - rebuilding six facets over 13,000 jobs by hand is not a back button.
+            "return_to": quote(str(request.url.path) + (f"?{request.url.query}" if request.url.query else ""), safe=""),
             **values,
         }
 
@@ -237,6 +240,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
         recommended, recommendation_reason = cover_letter_recommendation(job)
+        back_link = _same_site_path(request.query_params.get("return", ""))
         application = next((item for item in database.list_applications() if item["job_id"] == job_id), None)
         cover_letter_text = None
         if application and application.get("cover_letter_path"):
@@ -249,6 +253,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             page_context(
                 request,
                 job=job,
+                back_link=back_link,
                 application=application,
                 cover_letter_recommended=recommended,
                 cover_letter_reason=recommendation_reason,
@@ -853,6 +858,17 @@ _GROUPED_SOURCE_KINDS = {
 # Sources page switches a whole method on or off, because "public search or my own session" is the
 # real decision and "LinkedIn - Europe (signed in)" is just one row of whichever answer was given.
 LINKEDIN_METHOD_KINDS = ("linkedin", "linkedin_browser")
+
+
+def _same_site_path(value: str) -> str:
+    """A path from a `return` parameter, or "" when it is anything but a path on this site.
+
+    Rejects "//host" and "/\\host", which browsers resolve as another origin, so a link built
+    from this can only ever point back into RoleBeacon.
+    """
+    if not value.startswith("/") or value[1:2] in {"/", "\\"} or "://" in value:
+        return ""
+    return value
 
 
 def _linkedin_methods(sources: list[SourceConfig]) -> dict[str, dict[str, Any]]:

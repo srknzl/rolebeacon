@@ -1372,3 +1372,26 @@ def test_nav_marks_the_open_page_including_a_job_detail(tmp_path) -> None:
     assert '<a href="/jobs" title="Browse collected jobs and refine your search" class="is-current"' in listing.text
     assert '<a href="/jobs" title="Browse collected jobs and refine your search" class="is-current"' in detail.text
     assert '<a href="/sources" title="Inspect collection source health and sync history" class="is-current"' in elsewhere.text
+
+
+def test_a_job_opened_from_a_filtered_list_links_back_to_that_list(tmp_path) -> None:
+    app = create_app(configured_settings(tmp_path))
+    database = Database(app.state.settings.database_path)
+    job_id, _ = database.upsert_job(CollectedJob(
+        source="source-a", source_job_id="job-1", title="Backend Engineer", company="Example",
+        location="Remote", description="Java", url="https://example.com/jobs/1",
+    ))
+
+    with TestClient(app) as client:
+        listing = client.get("/jobs?work_model=remote&page_size=20")
+        carried = client.get(f"/jobs/{job_id}?return=%2Fjobs%3Fseniority%3Dsenior")
+        direct = client.get(f"/jobs/{job_id}")
+        offsite = client.get(f"/jobs/{job_id}?return=https%3A%2F%2Fevil.example%2Fx")
+        protocol_relative = client.get(f"/jobs/{job_id}?return=%2F%2Fevil.example%2Fx")
+
+    assert "return=%2Fjobs%3Fwork_model%3Dremote%26page_size%3D20" in listing.text
+    assert '<a class="back-link" href="/jobs?seniority=senior">← Back to results</a>' in carried.text
+    assert '<a class="back-link" href="/jobs">← All jobs</a>' in direct.text
+    # A return value is only ever a path on this site, so the link cannot be pointed off it.
+    assert '<a class="back-link" href="/jobs">← All jobs</a>' in offsite.text
+    assert '<a class="back-link" href="/jobs">← All jobs</a>' in protocol_relative.text
