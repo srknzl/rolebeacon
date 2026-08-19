@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import ipaddress
 import json
+import logging
 import os
 import sys
 from dataclasses import replace
@@ -31,7 +32,17 @@ def main() -> None:
     serve = subparsers.add_parser("serve", help="Run the local web application")
     serve.add_argument("--host")
     serve.add_argument("--port", type=int)
-    subparsers.add_parser("sync", help="Run one incremental sync")
+    sync_command = subparsers.add_parser("sync", help="Run one incremental sync")
+    sync_command.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Also run sources that open a browser window and may wait for you to sign in",
+    )
+    sync_command.add_argument(
+        "--force",
+        action="store_true",
+        help="Run every enabled source now, ignoring its minimum interval",
+    )
     jobs = subparsers.add_parser("jobs", help="Refresh and export ranked job discovery results")
     jobs.add_argument("--no-sync", action="store_true", help="Export the existing local database without refreshing")
     jobs.add_argument("--start-ollama", action="store_true", help="Start an installed Ollama before refreshing")
@@ -96,6 +107,14 @@ def main() -> None:
     if args.command == "jobs" and args.start_ollama:
         if settings.llm_mode != "ollama":
             parser.error("--start-ollama requires the saved scoring mode to be Ollama")
+    if args.command in {"sync", "jobs"}:
+        # Collectors report progress through logging; send it to stderr so the JSON these
+        # commands print on stdout stays pipeable. "serve" uses the refresh panel instead.
+        logging.basicConfig(
+            level=logging.WARNING, format="%(asctime)s %(message)s", datefmt="%H:%M:%S", stream=sys.stderr
+        )
+        # Only RoleBeacon's own progress, not every httpx request line.
+        logging.getLogger("rolebeacon").setLevel(logging.INFO)
     settings.ensure_directories()
     if args.command == "migrate":
         print(json.dumps(import_legacy(settings, args.legacy_root), indent=2))
@@ -146,7 +165,7 @@ def main() -> None:
         uvicorn.run(create_app(settings), host=settings.host, port=settings.port)
     elif args.command == "sync":
         sync_service = SyncService(settings, database, LlmClient(settings))
-        sync_result = asyncio.run(sync_service.run())
+        sync_result = asyncio.run(sync_service.run(force=args.force, manual=args.interactive))
         print(json.dumps(sync_result.to_dict(), indent=2))
     elif args.command == "jobs":
         exit_code = _run_jobs_command(args, settings, database)

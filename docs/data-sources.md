@@ -51,23 +51,123 @@ URL does not include coordinates, RoleBeacon derives a deterministic country or 
 applies it to every collected page. The preview reports matches from the newest provider page instead
 of presenting Amazon's unfiltered global count as local coverage.
 
-## LinkedIn boundary
+## LinkedIn
 
 LinkedIn does not expose a general personal job-search API. Its documented Job Posting and Apply
 Connect APIs are restricted partner integrations for ATS vendors, job distributors, and employer
 customers. They publish employer jobs to LinkedIn or connect applications; they do not provide a
 self-service API for a job seeker to search and download LinkedIn's corpus.
 
-RoleBeacon therefore does not log into or scrape LinkedIn, and has no LinkedIn ingestion path. An
-earlier revision read LinkedIn Job Alert emails through a user-owned Gmail label, but a digest email
-carries only a handful of links per message with no per-job description or company name recoverable
-without fetching LinkedIn's authenticated pages, which the no-scraping rule forbids. That collector
-was removed; use LinkedIn's own Job Alerts UI directly rather than through RoleBeacon.
+RoleBeacon therefore reads LinkedIn the only way it can without an account: the credential-free
+guest endpoints that serve a signed-out visitor. `seeMoreJobPostings/search` returns result cards
+carrying the job ID, title, employer, location, and posting date; `jobPosting/<id>` returns that
+posting's public description fragment. RoleBeacon never signs in, never sends a cookie, and never
+requests an authenticated page, a profile, a connection, or a message. An earlier revision read
+LinkedIn Job Alert emails through a user-owned Gmail label; that collector was removed because a
+digest email carries no recoverable description or employer name.
+
+Verified behavior, measured against the live endpoints rather than assumed:
+
+- Results page in tens, and `start=1000` returns HTTP 400 - a real ceiling, so a single query
+  reaches at most 1,000 postings. Reaching older jobs needs a narrower `f_TPR` recency window,
+  which the incremental sync produces naturally after a first backfill.
+- An empty body is **not** proof that a search is exhausted, which is the more expensive lesson.
+  During a real run LinkedIn answered `start=250` with an empty page and two walks stopped there
+  reporting "no more results"; asked again minutes later, that same offset served a full page, as
+  did 260 and 400. Under load LinkedIn says "nothing here" rather than 429, so an empty page is
+  slept on and asked again twice before the walk accepts it.
+- Roughly 1s spacing draws HTTP 429 after about ten postings; 3s spacing completed an 18-posting
+  run untouched. The collector paces at 2.5-4.5s per posting and treats 429 as a wait, not a
+  failure, retrying with escalating backoff before checkpointing.
+- The rate budget is bursty rather than fixed. A four-source run held ~16 postings a minute for
+  four and a half minutes, then spent five minutes paying a 60s penalty for every three or four
+  postings, then recovered to its old rate unprompted. The pace is therefore not a constant: every
+  429 widens the spacing shared by all LinkedIn sources and every served request eases it back, so
+  a walk tracks what LinkedIn is allowing at the time. One clock covers every source, because they
+  sync concurrently and LinkedIn counts the host, not the row.
+- Search answers HTTP 500 for a query it serves fine seconds later, so server errors are retried
+  on a short backoff and only checkpoint the walk once the retries are exhausted.
+- `Europe`, `North America`, and `Türkiye` all resolve as locations, so a continent is one source
+  row rather than dozens of per-country rows over the same postings.
+- The postings carry no JSON-LD, so descriptions are parsed from the `show-more-less-html__markup`
+  subtree only, keeping the repeated top-card title and employer out of the description text.
+
+Each target role is walked as its own search rather than as one OR'd query. The result ceiling and
+the relevance ordering both apply per query, so five roles joined with OR share a single
+1,000-result budget and the roles at the end of the string are the ones that lose; walked
+separately, each gets its own budget and its own best matches. Every role is walked, too - the
+five-role cap that keeps the other providers' single query readable does not apply when a role is
+a search of its own, and profile order decides which roles a stopped run reached.
+
+A source whose keywords were written by hand stays one search, because splitting an expression such
+as `java AND (kafka OR pulsar)` on OR would produce two broken queries. One posting often answers
+several of the role searches, so a run remembers the IDs it has read and does not pay a second
+paced request for the same posting.
+
+A walk is unbounded and resumable. It runs through every role search until each is exhausted or
+reaches the 1,000-result ceiling, or until the user stops it; the role and the offset reached are
+stored in the batch cursor alongside a fingerprint of the searches they belong to, so the next run
+continues inside the role it stopped in and starts over whenever the target roles or location have
+changed. Postings keep the canonical
+`https://www.linkedin.com/jobs/view/<id>/` URL, derived from the job ID rather than the card's
+country-specific tracking link, so the same posting deduplicates across sources.
+
+### The signed-in walk
+
+Guest throttling makes a long walk slow, so each generated location also gets a `linkedin_browser`
+row, disabled until chosen. The Sources page presents the two as one choice - public search or the
+user's own session - and switches every row of a method together, because "which way should
+LinkedIn be read" is the real decision and a per-location row is only how that answer is stored.
+The signed-in card carries the warning it deserves: automated access to signed-in pages is against
+LinkedIn's User Agreement, and the account at risk is the user's own, the same one they apply with.
+
+The browser is used for one thing: the posting description. Titles, employers, locations, and
+posting dates keep coming from the guest search cards even in a signed-in run. LinkedIn renders its
+own chrome in the account's display language, so a session set to Turkish reports a London job as
+"Birleşik Krallık" and a relative date as "4 gün önce"; Playwright's `locale` does not override it,
+and an eligibility gate cannot read it. The account's language is the user's setting to make, not
+something a collector should work around. Taking metadata from the English guest cards and only the
+body from the window sidesteps the problem entirely, and the body is the part the guest endpoints
+throttle hardest, so it is also where the session earns its keep.
+
+It opens a visible Chrome on a dedicated profile directory inside the application-data directory and
+waits for the user to sign in themselves if LinkedIn asks. RoleBeacon never types credentials and
+never stores them; the session lives in that profile directory and can be dropped on its own without
+touching the profile used for application autofill.
+
+Being signed in is read from the presence of the session cookie, never from the URL. LinkedIn serves
+a guest the same `/jobs/search/` and `/jobs/view/` addresses a member sees, so a first run walked
+seventeen postings signed out without ever asking for a sign-in - which collects nothing the public
+collector could not already reach and looks, from the desk, like a window refreshing itself. The
+cookie is checked by name only; its value is never read. When it is missing the walk opens the
+sign-in page, waits up to five minutes for the person to finish, and then asks again for the posting
+the sign-in interrupted.
+
+LinkedIn serves two different job pages, which is worth knowing before guessing at a selector. The
+signed-out pages and the signed-in *search* page are the older server-rendered markup, with
+`#job-details` and `job-card-container__link` class names. A signed-in `/jobs/view/<id>` page is the
+newer rewrite: content-hashed class names, no JSON-LD at all, and semantic ids such as
+`JobDetails_AboutTheJob_<jobId>`. The collector queries a small union of both shapes and logs once
+per run which one answered, so a redesign shows up in the log rather than as blank descriptions.
+
+Waiting for that container to exist is not enough - LinkedIn renders the section and its heading
+first and fills the posting in a moment later, so a walk that read on the element's arrival got a
+heading and nothing else. The wait is on rendered text length instead, and a posting that still
+yields no description is skipped with a warning rather than saved empty.
+
+The limits do not move: job search results and job postings only, never a profile, connection list,
+message, or the feed, and never an application submission. Because it opens a window and can wait
+on a person, `linkedin_browser` is an interactive kind - a scheduled sync always skips it as
+`interactive_source`, and it runs only for a manual refresh or `rolebeacon sync --interactive`.
+The web Refresh button still honours each source's minimum interval, so `--force` is what retries a
+signed-in walk immediately. Stopping is closing the window or Ctrl-C; either checkpoints the cursor,
+and the browser is shut down on a deadline so a driver that outlives its window cannot hold the run
+open.
 
 Official references:
 
 - [LinkedIn Job Posting API overview](https://learn.microsoft.com/en-us/linkedin/talent/job-postings/api/overview)
-- [LinkedIn Job Alerts](https://www.linkedin.com/help/linkedin/answer/a511279/)
+- [LinkedIn User Agreement](https://www.linkedin.com/legal/user-agreement)
 
 ## Recommended additions
 
@@ -115,6 +215,9 @@ Official provider references:
 - Google Cloud Talent Solution is search infrastructure for a customer's own uploaded job corpus;
   it is not an API for the public Google Jobs index.
 - Unofficial LinkedIn, Indeed, or Glassdoor scraper APIs are excluded from the default design.
+- LinkedIn coverage is job search results and job postings only, whether read through the guest
+  endpoints or through the user's own signed-in browser session. Profiles, connections, messages,
+  and the feed stay out of scope.
   They create account, terms-of-service, provenance, and breakage risk disproportionate to a
   personal job-search system.
 

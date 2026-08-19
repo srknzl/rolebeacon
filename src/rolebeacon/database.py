@@ -21,6 +21,14 @@ from .domain import CollectedJob, EligibilityResult, JobStatus, ScoreResult
 # endpoints, so this stands in for the whole model family.
 MODEL_SCORED_PROVIDER_FILTER = "model"
 
+Choice = str | tuple[str, ...]
+
+
+def _chosen(value: Choice) -> tuple[str, ...]:
+    """The values a choice filter is asking for, empty when it is asking for nothing."""
+    values = (value,) if isinstance(value, str) else tuple(value)
+    return tuple(item for item in values if item)
+
 
 @dataclass(slots=True)
 class JobFilters:
@@ -29,18 +37,21 @@ class JobFilters:
     query: str = ""
     title: str = ""
     technologies: tuple[str, ...] = ()
-    route: str = ""
-    status: str = ""
+    # Choice filters accept one value or several. Several are an OR within the facet and still an
+    # AND across facets, which is what a person means by ticking two boxes in one menu. A plain
+    # string is the same filter with one value, so existing callers read unchanged.
+    route: Choice = ""
+    status: Choice = ""
     source_ids: tuple[str, ...] = ()
     company: str = ""
     company_in: tuple[str, ...] = ()
     location: str = ""
-    eligibility: str = ""
-    sponsorship: str = ""
-    relocation: str = ""
-    work_model: str = ""
-    seniority: str = ""
-    provider: str = ""
+    eligibility: Choice = ""
+    sponsorship: Choice = ""
+    relocation: Choice = ""
+    work_model: Choice = ""
+    seniority: Choice = ""
+    provider: Choice = ""
     posted_within_days: int = 0
     min_score: int = 0
     min_title_match: int = 0
@@ -867,12 +878,16 @@ class Database:
         """Build the shared WHERE clauses so the list and its total count can never disagree."""
         clauses = ["j.active = 1", "j.merged_into_job_id IS NULL", "COALESCE(ms.total, 0) >= ?"]
         params: list[Any] = [filters.min_score]
-        if filters.route:
-            clauses.append("e.route = ?")
-            params.append(filters.route)
-        if filters.status:
-            clauses.append("j.status = ?")
-            params.append(filters.status)
+        for column, chosen in (
+            ("e.route", _chosen(filters.route)),
+            ("j.status", _chosen(filters.status)),
+            ("COALESCE(e.status, 'unknown')", _chosen(filters.eligibility)),
+            ("COALESCE(e.sponsorship, 'unknown')", _chosen(filters.sponsorship)),
+            ("COALESCE(e.relocation, 'unknown')", _chosen(filters.relocation)),
+        ):
+            if chosen:
+                clauses.append(f"{column} IN ({','.join('?' for _ in chosen)})")
+                params.extend(chosen)
         if filters.source_ids:
             placeholders = ",".join("?" for _ in filters.source_ids)
             clauses.append(f"EXISTS (SELECT 1 FROM job_sources js WHERE js.job_id = j.id AND js.source_id IN ({placeholders}))")
@@ -885,24 +900,18 @@ class Database:
             clauses.append(
                 "NOT EXISTS (SELECT 1 FROM json_each(j.requirements_json) req WHERE json_extract(req.value, '$.unmet') = 1)"
             )
-        if filters.eligibility:
-            clauses.append("COALESCE(e.status, 'unknown') = ?")
-            params.append(filters.eligibility)
-        if filters.sponsorship:
-            clauses.append("COALESCE(e.sponsorship, 'unknown') = ?")
-            params.append(filters.sponsorship)
-        if filters.relocation:
-            clauses.append("COALESCE(e.relocation, 'unknown') = ?")
-            params.append(filters.relocation)
-        if filters.work_model == "remote_worldwide":
-            clauses.append("j.location_bucket = 'remote:worldwide'")
-        elif filters.work_model == "remote":
-            clauses.append("j.location_bucket LIKE 'remote:%'")
-        elif filters.work_model == "onsite":
-            clauses.append("j.location_bucket NOT LIKE 'remote:%'")
-        if filters.seniority:
-            clauses.append("j.normalized_title LIKE ?")
-            params.append(f"%{filters.seniority}%")
+        work_models = {
+            "remote_worldwide": "j.location_bucket = 'remote:worldwide'",
+            "remote": "j.location_bucket LIKE 'remote:%'",
+            "onsite": "j.location_bucket NOT LIKE 'remote:%'",
+        }
+        wanted = [work_models[value] for value in _chosen(filters.work_model) if value in work_models]
+        if wanted:
+            clauses.append(f"({' OR '.join(wanted)})")
+        seniorities = _chosen(filters.seniority)
+        if seniorities:
+            clauses.append(f"({' OR '.join('j.normalized_title LIKE ?' for _ in seniorities)})")
+            params.extend(f"%{value}%" for value in seniorities)
         if filters.title:
             clauses.append("j.normalized_title LIKE ?")
             params.append(f"%{filters.title.casefold()}%")
@@ -935,14 +944,17 @@ class Database:
         if filters.min_stack_match > 0:
             clauses.append("COALESCE(json_extract(ms.dimensions_json, '$.stack'), 0) >= ?")
             params.append(filters.min_stack_match)
-        if filters.provider == MODEL_SCORED_PROVIDER_FILTER:
+        providers = _chosen(filters.provider)
+        if providers:
             # "Language model" is a family, not one provider: llm.py stores "ollama" for the
             # documented default mode and "openai-compatible" for every other endpoint. Matching
             # any scored non-rules provider keeps the filter correct if a third one is added.
-            clauses.append("COALESCE(ms.provider, '') NOT IN ('', 'rules')")
-        elif filters.provider:
-            clauses.append("COALESCE(ms.provider, '') = ?")
-            params.append(filters.provider)
+            clauses.append("({})".format(" OR ".join(
+                "COALESCE(ms.provider, '') NOT IN ('', 'rules')" if value == MODEL_SCORED_PROVIDER_FILTER
+                else "COALESCE(ms.provider, '') = ?"
+                for value in providers
+            )))
+            params.extend(value for value in providers if value != MODEL_SCORED_PROVIDER_FILTER)
         if filters.hide_mismatched_titles:
             # role_domain <= 9 is "unrelated" in both rule-based scoring (_role_match returns 2 or
             # 6 for a different role family, never 10-21) and the LLM prompt's own documented

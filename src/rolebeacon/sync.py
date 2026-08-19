@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
+from collections import deque
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -27,8 +29,42 @@ from .scoring import (
 
 # Different sources hit different providers, so syncing them concurrently is safe - these two
 # caps just keep any one provider from being hammered hard enough to get rate-limited/blocked.
+# A long collector run is invisible otherwise: with one source working for an hour, the panel's
+# source counter never moves. Collectors report progress with one ordinary logging call, and it
+# reaches both audiences from there - the terminal via the CLI's stderr handler, and the web UI
+# via this buffer, which /api/sync/status serves to the refresh panel it already polls.
+SYNC_ACTIVITY: deque[str] = deque(maxlen=200)
+
+
+class ActivityLogHandler(logging.Handler):
+    """Keep the newest RoleBeacon log records where the web UI can read them."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            SYNC_ACTIVITY.append(self.format(record))
+        except Exception:  # pragma: no cover - logging must never break a sync
+            self.handleError(record)
+
+
+def recent_activity() -> list[str]:
+    return list(SYNC_ACTIVITY)
+
+
+def install_activity_log() -> None:
+    """Idempotently attach the buffer to the package logger."""
+    logger = logging.getLogger("rolebeacon")
+    if not any(isinstance(handler, ActivityLogHandler) for handler in logger.handlers):
+        handler = ActivityLogHandler()
+        handler.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%H:%M:%S"))
+        logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+
+
 SOURCE_CONCURRENCY = 6
 PER_KIND_CONCURRENCY = 2
+# Kinds that open a window and can wait on a person. Only ever run when someone asked for a
+# refresh: a scheduled sync must never take over the desktop while its user is doing something else.
+INTERACTIVE_KINDS = {"linkedin_browser"}
 DEFAULT_SNAPSHOT_DROP_RATIO = 0.5
 DEFAULT_SNAPSHOT_MINIMUM_BASELINE = 20
 
@@ -105,10 +141,12 @@ class SyncService:
         self.llm = llm
         self.status = SyncStatus()
         self._lock = asyncio.Lock()
+        self._manual = False
 
     async def run(self, force: bool = False, manual: bool = False) -> SyncStatus:
         if self._lock.locked():
             return self.status
+        self._manual = manual
         async with self._lock:
             if not self.settings.setup_complete or not self.settings.activated:
                 self.status = SyncStatus(error="setup_required")
@@ -117,6 +155,7 @@ class SyncService:
             if process_lock is None:
                 self.status = SyncStatus(error="sync_already_running", phase="failed", phase_message="Another process is refreshing")
                 return self.status
+            SYNC_ACTIVITY.clear()
             self.database.reset_stale_sync_runs()
             sources = [source for source in self.settings.load_sources() if source.enabled]
             self.status = SyncStatus(
@@ -369,6 +408,8 @@ class SyncService:
             self.status.progress_percent = 10 + int(50 * self.status.sources_completed / max(1, self.status.sources_total))
 
     def _skip_reason(self, source: Any, state: dict[str, Any], force: bool) -> tuple[str, datetime | None]:
+        if source.kind in INTERACTIVE_KINDS and not self._manual:
+            return "interactive_source", None
         now = datetime.now(UTC)
         retry_at = state.get("next_eligible_sync_at")
         if retry_at and state.get("status") == "error" and not force:
@@ -458,7 +499,13 @@ def engineering_job(job: CollectedJob, search_profile: dict[str, Any]) -> bool:
 
 
 _URL_QUERY_KINDS = {"google_careers": "q", "amazon_jobs": "base_query"}
-_OPTION_QUERY_KINDS = {"adzuna": "query", "jooble": "query", "serpapi": "query", "remotive": "search"}
+# Providers that take the roles as separate searches instead of one OR'd query - see
+# linkedin_role_queries() for why LinkedIn is walked that way.
+_ROLE_SEARCH_KINDS = {"linkedin", "linkedin_browser"}
+_OPTION_QUERY_KINDS = {
+    "adzuna": "query", "jooble": "query", "serpapi": "query", "remotive": "search",
+    "linkedin": "keywords", "linkedin_browser": "keywords",
+}
 
 
 def personalize_source(source: Any, search_profile: dict[str, Any]) -> Any:
@@ -481,7 +528,20 @@ def personalize_source(source: Any, search_profile: dict[str, Any]) -> Any:
         query[key] = role_query
         return replace(source, url=urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment)))
     if source.kind in _OPTION_QUERY_KINDS:
-        return replace(source, options={**source.options, _OPTION_QUERY_KINDS[source.kind]: role_query})
+        options = {**source.options, _OPTION_QUERY_KINDS[source.kind]: role_query}
+        if source.kind in _ROLE_SEARCH_KINDS:
+            # LinkedIn walks the roles one search at a time rather than as one OR'd query, because
+            # its 1,000-result ceiling and its relevance ordering both apply per query. The joined
+            # string stays as the keywords option: it is what a hand-edited source falls back to,
+            # and what the row shows for a reader of the sources file.
+            #
+            # Every role goes in, not the five that fit a readable OR string. A separate search is
+            # not a longer query, later roles mostly return postings the earlier ones already read
+            # and are skipped without a second request, and the walk is checkpointed - so the cost
+            # of a role near the end of the list is a few search pages, not a full walk. Profile
+            # order is what decides which roles a stopped run reached.
+            options["role_queries"] = roles
+        return replace(source, options=options)
     return source
 
 

@@ -644,6 +644,10 @@ def test_source_filter_options_collapses_generated_rows_but_lists_others_individ
         SourceConfig(id="google-careers-germany", kind="google_careers", name="Google Careers — Germany"),
         SourceConfig(id="google-careers-france", kind="google_careers", name="Google Careers"),
         SourceConfig(id="amazon-jobs-germany", kind="amazon_jobs", name="Amazon Jobs"),
+        # Both LinkedIn kinds read the same postings, so they collapse into one option together.
+        SourceConfig(id="linkedin-europe", kind="linkedin", name="LinkedIn — Europe"),
+        SourceConfig(id="linkedin-turkiye", kind="linkedin", name="LinkedIn — Türkiye"),
+        SourceConfig(id="linkedin-browser-europe", kind="linkedin_browser", name="LinkedIn (signed in) — Europe"),
         SourceConfig(id="adzuna-de", kind="adzuna", name="Adzuna — Germany"),
         SourceConfig(id="adzuna-uk", kind="adzuna", name="Adzuna — UK"),
     ]
@@ -653,9 +657,52 @@ def test_source_filter_options_collapses_generated_rows_but_lists_others_individ
     assert options == [
         {"value": "google_careers", "label": "Google Careers"},
         {"value": "amazon_jobs", "label": "Amazon Jobs"},
+        {"value": "linkedin", "label": "LinkedIn"},
         {"value": "adzuna-de", "label": "Adzuna — Germany"},
         {"value": "adzuna-uk", "label": "Adzuna — UK"},
     ]
+
+
+def test_the_linkedin_filter_covers_both_the_guest_and_the_signed_in_rows() -> None:
+    """One "LinkedIn" option, every LinkedIn row behind it - the two kinds read the same postings."""
+    from starlette.datastructures import QueryParams
+
+    from rolebeacon.app import _job_filters_from_query
+
+    sources = [
+        SourceConfig(id="linkedin-europe", kind="linkedin", name="LinkedIn — Europe"),
+        SourceConfig(id="linkedin-browser-europe", kind="linkedin_browser", name="LinkedIn (signed in) — Europe"),
+        SourceConfig(id="adzuna-de", kind="adzuna", name="Adzuna — Germany"),
+    ]
+
+    filters = _job_filters_from_query(QueryParams("source=linkedin"), sources)
+
+    assert set(filters.source_ids) == {"linkedin-europe", "linkedin-browser-europe"}
+
+
+def test_each_linkedin_method_is_switched_as_a_whole_rather_than_row_by_row() -> None:
+    """The Sources panel offers "public search" or "my own session", not one location at a time."""
+    from rolebeacon.app import _linkedin_methods
+
+    methods = _linkedin_methods([
+        SourceConfig(id="linkedin-europe", kind="linkedin", name="LinkedIn — Europe", enabled=True),
+        SourceConfig(id="linkedin-remote", kind="linkedin", name="LinkedIn — Remote", enabled=False),
+        SourceConfig(
+            id="linkedin-browser-europe", kind="linkedin_browser",
+            name="LinkedIn (signed in) — Europe", enabled=False,
+        ),
+        SourceConfig(id="adzuna-de", kind="adzuna", name="Adzuna — Germany", enabled=True),
+    ])
+
+    assert methods["linkedin"]["ids"] == ["linkedin-europe", "linkedin-remote"]
+    assert (methods["linkedin"]["enabled"], methods["linkedin"]["total"]) == (1, 2)
+    assert (methods["linkedin_browser"]["enabled"], methods["linkedin_browser"]["total"]) == (0, 1)
+
+
+def test_a_profile_with_no_generated_linkedin_rows_gets_no_linkedin_panel() -> None:
+    from rolebeacon.app import _linkedin_methods
+
+    assert _linkedin_methods([SourceConfig(id="adzuna-de", kind="adzuna", name="Adzuna")]) == {}
 
 
 def test_jobs_page_source_filter_groups_google_across_countries_and_company_list_narrows_watchlist(tmp_path) -> None:

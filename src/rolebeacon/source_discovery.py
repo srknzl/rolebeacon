@@ -227,7 +227,10 @@ class SourceDiscoveryService:
 def same_source(left: SourceConfig, right: SourceConfig) -> bool:
     if left.kind != right.kind:
         return False
-    if left.kind in {"google_careers", "amazon_jobs"}:
+    if left.kind in {"google_careers", "amazon_jobs", "linkedin", "linkedin_browser"}:
+        # Query-driven kinds: the search URL (its location/remote filter) is the identity. They
+        # carry no board slug or tenant, so the tuple below would make every row of the kind look
+        # like the same source and collapse them onto one another on save.
         return _canonical_url(left.url) == _canonical_url(right.url)
     return (
         left.kind,
@@ -322,6 +325,54 @@ def relocation_source_candidates(countries: list[dict[str, str]]) -> list[Source
         "max_pages": 10, "ingestion_filter": True, "official_first_party": True,
         "url": f"https://www.google.com/about/careers/applications/jobs/results/?{urlencode({'has_remote': 'true'})}",
     }))
+    return candidates
+
+
+# The human-readable search page behind each generated row. The collector itself reads LinkedIn's
+# guest API endpoints, but this is what the Sources table links to and what same_source() compares.
+LINKEDIN_SEARCH_PAGE = "https://www.linkedin.com/jobs/search/"
+
+
+def linkedin_source_candidates(locations: list[dict[str, str]]) -> list[SourceConfig]:
+    """Build LinkedIn job-search sources per location the candidate can work in, twice over.
+
+    Each location gets a public row, which needs no account, and a signed-in row, which opens a
+    browser window carrying the user's own session. Both are disabled until chosen: the public
+    one is the default path, and the signed-in one is there for when its throttling makes a walk
+    impractical. They deduplicate against each other downstream, because a posting's canonical URL
+    comes from its job ID either way.
+
+    Continent targets are deliberately NOT expanded into member countries the way
+    relocation_source_candidates() expands them. LinkedIn resolves "Europe" and "North America"
+    as geographies in their own right (verified against the live public search), so one row
+    covers what would otherwise become dozens of separate walks over overlapping results.
+
+    No keywords here - personalize_source() injects the candidate's real target_roles at every
+    sync, so a placeholder would never actually reach LinkedIn.
+    """
+    names = dict.fromkeys(
+        str(item.get("name", "")).strip() for item in locations if str(item.get("name", "")).strip()
+    )
+    candidates: list[SourceConfig] = []
+    for kind, label in (("linkedin", "LinkedIn"), ("linkedin_browser", "LinkedIn (signed in)")):
+        common: dict[str, Any] = {
+            "kind": kind, "enabled": False, "min_sync_interval_seconds": 14400,
+            "trust_priority": 60, "ingestion_filter": True,
+        }
+        candidates += [
+            SourceConfig.from_dict({
+                "id": _source_id(kind, "", name), "name": f"{label} \u2014 {name}",
+                "location": name, "url": f"{LINKEDIN_SEARCH_PAGE}?{urlencode({'location': name})}", **common,
+            })
+            for name in names
+        ]
+        # One location-free row for postings tagged remote rather than placed in a country, which no
+        # per-location query above can match. Added once per kind, not per location.
+        candidates.append(SourceConfig.from_dict({
+            "id": f"{kind.replace('_', '-')}-remote", "name": f"{label} \u2014 Remote",
+            "location": "", "remote": True,
+            "url": f"{LINKEDIN_SEARCH_PAGE}?{urlencode({'f_WT': '2'})}", **common,
+        }))
     return candidates
 
 

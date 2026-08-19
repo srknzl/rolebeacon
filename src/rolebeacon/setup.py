@@ -28,7 +28,7 @@ from .profile import (
     relocation_countries,
 )
 from .services import validate_candidate_profile
-from .source_discovery import relocation_source_candidates
+from .source_discovery import linkedin_source_candidates, relocation_source_candidates
 
 MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 READY = "ready"
@@ -306,6 +306,12 @@ class SetupService:
             + [item.model_dump(mode="json") for item in payload.mobility.relocation_targets]
         )
         generated, _ = self.settings.save_sources(relocation_source_candidates(countries))
+        # LinkedIn takes the raw, unexpanded targets: it resolves a continent as one geography,
+        # so expanding EUROPE into 42 country rows would walk the same postings 42 times.
+        self.settings.save_sources(linkedin_source_candidates(
+            [{"name": country_names_by_code().get(code, code)} for code in payload.mobility.work_authorizations]
+            + [{"name": item.country_name} for item in payload.mobility.relocation_targets]
+        ))
         enabled_source_ids = list(payload.enabled_source_ids)
         for sentinel, kind in (("__google_careers__", "google_careers"), ("__amazon_jobs__", "amazon_jobs")):
             if sentinel in enabled_source_ids:

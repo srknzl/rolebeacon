@@ -319,10 +319,22 @@ Built-in source adapters include:
 - We Work Remotely
 - Greenhouse, Lever, Ashby, SmartRecruiters, Workday, and Personio public career endpoints
 - Google Careers and Amazon Jobs first-party public-site connectors
+- LinkedIn job search, through its credential-free guest endpoints or, if you switch it on, a
+  browser you sign in to yourself
 - optional Adzuna, Jooble, and SerpApi adapters
 
-Only sources selected in setup are enabled. LinkedIn authenticated pages are never scraped, and
-RoleBeacon has no LinkedIn connector at all.
+Only sources selected in setup are enabled. LinkedIn collection covers job search results and job
+postings and nothing else — profiles, connections, messages, and the feed stay out of scope. The
+Sources page carries both methods side by side, with the risk of the signed-in one and the steps
+for using it, and switches either on as a whole. The default method never signs in. The signed-in
+one opens a visible browser window, waits for you to log in, stores no credentials, reads only
+posting descriptions through your session, and runs when you ask for a refresh, never on the
+schedule:
+
+```bash
+uv run rolebeacon sync --interactive --force
+```
+
 See [docs/data-sources.md](docs/data-sources.md) before adding or enabling a source.
 
 The Sources page also accepts a public company careers URL. RoleBeacon detects the connector, calls only

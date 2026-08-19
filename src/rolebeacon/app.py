@@ -8,7 +8,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 import httpx
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request, status
@@ -35,7 +35,7 @@ from .services import ArtifactService, ProfileValidationError, cover_letter_reco
 from .setup import LocalModelService, SetupService
 from .source_catalog import SourceCatalog, SourceCatalogError
 from .source_discovery import SourceDiscoveryError, SourceDiscoveryService, detect_source
-from .sync import Scheduler, SyncService
+from .sync import Scheduler, SyncService, install_activity_log, recent_activity
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -61,6 +61,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        install_activity_log()
         if app_settings.auto_sync and app_settings.setup_complete and app_settings.activated:
             scheduler.start(run_immediately=True)
         try:
@@ -189,6 +190,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 jobs=jobs,
                 filters=filters,
                 selected=values,
+                chosen={key: _selected(request.query_params, key) for key in MULTI_FILTER_KEYS},
                 sort=sort,
                 total=total,
                 all_matches_total=all_matches_total,
@@ -200,8 +202,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     request.query_params, sources=sources, hidden_title_count=hidden_title_count
                 ),
                 sort_options=JOB_SORT_LABELS,
-                technology_options=preferences.get("preferred_skills", []),
-                sources=_source_filter_options(sources),
+                # Every facet's choices as plain (value, label) pairs, so the template renders
+                # them all the same way whatever shape they were stored in.
+                facet_options={
+                    "source": [(item["value"], item["label"]) for item in _source_filter_options(sources)],
+                    "route": [(str(item.get("id", "")), str(item.get("label", "")))
+                              for item in app_settings.load_strategies()],
+                    "tech": [(skill, skill) for skill in preferences.get("preferred_skills", [])],
+                },
                 query_error=query_error,
             ),
         )
@@ -281,7 +289,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return templates.TemplateResponse(
             request,
             "sources.html",
-            page_context(request, sources=rows, coverage=coverage, source_catalog=source_catalog.view()),
+            page_context(
+                request, sources=rows, coverage=coverage, source_catalog=source_catalog.view(),
+                linkedin_methods=_linkedin_methods(list(configured.values())),
+            ),
         )
 
     @app.get("/duplicates", response_class=HTMLResponse)
@@ -459,7 +470,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/sync/status")
     async def sync_status() -> dict[str, Any]:
-        return sync_service.status.to_dict()
+        # A collector that runs for an hour moves no counter, so the panel also shows what it is
+        # actually doing right now.
+        return {**sync_service.status.to_dict(), "activity": recent_activity()}
 
     @app.get("/api/model/status")
     async def model_status() -> dict[str, Any]:
@@ -815,26 +828,60 @@ FILTER_CHIP_LABELS: dict[str, str] = {
 # URL naming one stored provider still filters, and falls back to showing that raw value.
 _PROVIDER_CHIP_LABELS = {"rules": "Rules only", MODEL_SCORED_PROVIDER_FILTER: "Language model"}
 
-# These two kinds generate one source row per relocation-target country - dozens of otherwise
-# identical "Google Careers"/"Amazon Jobs" entries. Every other kind (Adzuna's per-country rows,
-# Arbeitnow's general/sponsored split, company-scoped boards) is genuinely distinct and stays
-# listed individually, so only these two are grouped into a single dropdown option per kind.
-_GROUPED_SOURCE_LABELS = {"google_careers": "Google Careers", "amazon_jobs": "Amazon Jobs"}
+# These kinds generate one source row per relocation-target country - dozens of otherwise
+# identical "Google Careers"/"Amazon Jobs"/"LinkedIn" entries. Every other kind (Adzuna's
+# per-country rows, Arbeitnow's general/sponsored split, company-scoped boards) is genuinely
+# distinct and stays listed individually, so only these are grouped into one dropdown option.
+# LinkedIn's two kinds share a group because they are two ways into the same postings, which
+# deduplicate onto one canonical URL: "LinkedIn" is the answer to "where did this come from",
+# and how it was read is a collection detail belonging on the Sources page.
+_GROUPED_SOURCE_KINDS = {
+    "google_careers": ("google_careers", "Google Careers"),
+    "amazon_jobs": ("amazon_jobs", "Amazon Jobs"),
+    "linkedin": ("linkedin", "LinkedIn"),
+    "linkedin_browser": ("linkedin", "LinkedIn"),
+}
+
+
+# The two ways RoleBeacon reads LinkedIn, each spread over one generated row per location. The
+# Sources page switches a whole method on or off, because "public search or my own session" is the
+# real decision and "LinkedIn - Europe (signed in)" is just one row of whichever answer was given.
+LINKEDIN_METHOD_KINDS = ("linkedin", "linkedin_browser")
+
+
+def _linkedin_methods(sources: list[SourceConfig]) -> dict[str, dict[str, Any]]:
+    """The generated rows behind each LinkedIn collection method, keyed by kind.
+
+    Empty for a profile that never generated them, which is what hides the panel: the rows come
+    from setup, so there is nothing to explain before one has been saved.
+    """
+    methods = {}
+    for kind in LINKEDIN_METHOD_KINDS:
+        rows = [source for source in sources if source.kind == kind]
+        if rows:
+            methods[kind] = {
+                "ids": [source.id for source in rows],
+                "names": [source.name for source in rows],
+                "enabled": sum(1 for source in rows if source.enabled),
+                "total": len(rows),
+            }
+    return methods
 
 
 def _source_filter_options(sources: list[SourceConfig]) -> list[dict[str, str]]:
-    seen_kinds: set[str] = set()
+    seen_groups: set[str] = set()
     options = []
     for source in sources:
-        if source.kind in _GROUPED_SOURCE_LABELS:
-            if source.kind in seen_kinds:
+        if source.kind in _GROUPED_SOURCE_KINDS:
+            value, label = _GROUPED_SOURCE_KINDS[source.kind]
+            if value in seen_groups:
                 continue
-            seen_kinds.add(source.kind)
-            # A fixed label per kind, not source.name: an individual row's saved name can carry a
+            seen_groups.add(value)
+            # A fixed label per group, not source.name: an individual row's saved name can carry a
             # stale per-country suffix from before this row was generated (save_sources() keeps an
             # existing row's name on every later save), which must never leak into a label that is
-            # supposed to represent every row of that kind.
-            options.append({"value": source.kind, "label": _GROUPED_SOURCE_LABELS[source.kind]})
+            # supposed to represent every row in that group.
+            options.append({"value": value, "label": label})
         else:
             options.append({"value": source.id, "label": source.name})
     return options
@@ -854,16 +901,32 @@ def _as_float(value: str | None, default: float = 0) -> float:
         return default
 
 
+# Facets a person can tick more than one box in. Everything else is a single value by nature: a
+# threshold, a free-text match, or a sort.
+MULTI_FILTER_KEYS = (
+    "eligibility", "work_model", "seniority", "job_status", "source", "route",
+    "sponsorship", "relocation", "provider", "tech",
+)
+
+
+def _selected(params: Any, key: str) -> tuple[str, ...]:
+    """Every value chosen for one facet, in query order and without blanks."""
+    if hasattr(params, "getlist"):
+        return tuple(dict.fromkeys(item.strip() for item in params.getlist(key) if item.strip()))
+    value = str(dict(params).get(key, "")).strip()
+    return (value,) if value else ()
+
+
 def _job_filters_from_query(
     params: Any, sources: list[SourceConfig] | None = None, preferences: dict[str, Any] | None = None
 ) -> JobFilters:
     values = dict(params)
     technologies = tuple(item for item in params.getlist("tech") if item.strip())
-    source = values.get("source", "")
-    if source in _GROUPED_SOURCE_LABELS and sources is not None:
-        source_ids = tuple(item.id for item in sources if item.kind == source)
-    else:
-        source_ids = (source,) if source else ()
+    chosen_sources = _selected(params, "source")
+    grouped = {kind for kind, (value, _label) in _GROUPED_SOURCE_KINDS.items() if value in chosen_sources}
+    source_ids = tuple(item for item in chosen_sources if item not in {value for value, _ in _GROUPED_SOURCE_KINDS.values()})
+    if grouped and sources is not None:
+        source_ids += tuple(item.id for item in sources if item.kind in grouped)
     company_list = values.get("company_list", "")
     company_in: tuple[str, ...] = ()
     if company_list in {"priority", "watchlist"} and preferences is not None:
@@ -873,18 +936,18 @@ def _job_filters_from_query(
         query=values.get("q", "").strip(),
         title=values.get("title", "").strip(),
         technologies=technologies,
-        route=values.get("route", ""),
-        status=values.get("job_status", ""),
+        route=_selected(params, "route"),
+        status=_selected(params, "job_status"),
         source_ids=source_ids,
         company=values.get("company", "").strip(),
         company_in=company_in,
         location=values.get("location", "").strip(),
-        eligibility=values.get("eligibility", ""),
-        sponsorship=values.get("sponsorship", ""),
-        relocation=values.get("relocation", ""),
-        work_model=values.get("work_model", ""),
-        seniority=values.get("seniority", ""),
-        provider=values.get("provider", ""),
+        eligibility=_selected(params, "eligibility"),
+        sponsorship=_selected(params, "sponsorship"),
+        relocation=_selected(params, "relocation"),
+        work_model=_selected(params, "work_model"),
+        seniority=_selected(params, "seniority"),
+        provider=_selected(params, "provider"),
         posted_within_days=_as_int(values.get("posted_within")),
         min_score=_as_int(values.get("min_score")),
         min_title_match=_as_int(values.get("min_title_match")),
@@ -896,6 +959,16 @@ def _job_filters_from_query(
         # HTML forms omit an unchecked box either way) means hide, which is the requested default.
         hide_mismatched_titles=values.get("show_mismatched_titles", "") not in {"1", "true", "on"},
     )
+
+
+def _chip_href(params: Any, key: str, value: str = "") -> str:
+    """The current query minus one filter, or minus one value of a filter that holds several."""
+    kept = [
+        (name, item)
+        for name, item in (params.multi_items() if hasattr(params, "multi_items") else dict(params).items())
+        if name != "page" and not (name == key and (not value or item == value))
+    ]
+    return f"/jobs?{urlencode(kept)}" if kept else "/jobs"
 
 
 def _active_filter_chips(
@@ -913,21 +986,27 @@ def _active_filter_chips(
                 "key": "show_mismatched_titles",
                 "label": "Hiding different-role titles",
                 "value": f"{hidden_title_count} job{'' if hidden_title_count == 1 else 's'}",
+                "href": f"{_chip_href(params, 'show_mismatched_titles')}&show_mismatched_titles=1",
                 "inverse": True,
             }
         )
     for key, label in FILTER_CHIP_LABELS.items():
-        if key == "tech":
-            selected = [item for item in params.getlist("tech") if item.strip()]
-            if selected:
-                chips.append({"key": key, "label": label, "value": ", ".join(selected)})
+        if key in MULTI_FILTER_KEYS:
+            # One chip per chosen value, each removing only itself: a facet with three boxes
+            # ticked has to be narrowable one box at a time.
+            for value in _selected(params, key):
+                shown = value
+                if key == "source":
+                    shown = source_labels.get(value, value)
+                elif key == "provider":
+                    shown = _PROVIDER_CHIP_LABELS.get(value, value)
+                chips.append({"key": key, "label": label,
+                              "href": _chip_href(params, key, value), "value": shown})
             continue
         value = str(values.get(key, "")).strip()
         if not value or value in {"0", "0.0"}:
             continue
-        if key == "source":
-            value = source_labels.get(value, value)
-        elif key == "company_list":
+        if key == "company_list":
             value = "Priority companies" if value == "priority" else "Watchlist" if value == "watchlist" else value
         elif key == "provider":
             value = _PROVIDER_CHIP_LABELS.get(value, value)
@@ -935,6 +1014,7 @@ def _active_filter_chips(
             {
                 "key": key,
                 "label": label,
+                "href": _chip_href(params, key),
                 "value": "yes" if key in {"has_salary", "hide_unmet_experience", "show_mismatched_titles"} else value,
             }
         )
