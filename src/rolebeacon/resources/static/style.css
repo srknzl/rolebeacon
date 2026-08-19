@@ -121,6 +121,18 @@ code {
 .topbar nav { display: flex; gap: 22px; flex: 1; }
 .topbar nav a { text-decoration: none; color: var(--muted); font-size: 13px; font-weight: 650; }
 .topbar nav a:hover { color: var(--ink); }
+/* The open page, marked in weight and colour rather than by an underline alone, so it survives
+   the narrow layout where the nav becomes a stacked menu. */
+.topbar nav a.is-current { color: var(--ink); position: relative; }
+.topbar nav a.is-current::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -19px;
+  height: 2px;
+  background: var(--brand);
+}
 
 .nav-toggle {
   display: none;
@@ -169,6 +181,8 @@ code {
   .topbar nav.is-open { display: grid; }
   .topbar nav a { display: block; padding: 10px 12px; border-radius: 7px; font-size: 14px; white-space: normal; overflow: visible; }
   .topbar nav a:hover { background: var(--line-soft); }
+  .topbar nav a.is-current { background: var(--line-soft); }
+  .topbar nav a.is-current::after { display: none; }
   .topbar > #sync-button { white-space: nowrap; }
   .container { padding: 30px 16px; }
   .company-grid { grid-template-columns: 1fr; }

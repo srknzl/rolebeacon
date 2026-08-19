@@ -15,16 +15,24 @@
         <span>RoleBeacon</span>
       </a>
       <button class="nav-toggle" id="nav-toggle" type="button" aria-expanded="false" aria-controls="primary-nav" aria-label="Open navigation">Menu</button>
+      {# A page is current when its own path or anything below it is open, so /jobs/1234 still
+         marks Jobs. Ordered discovery first, then the pages that configure what discovery sees. #}
+      {% set nav_items = [
+        ("/setup", "Setup", "Configure your profile, search preferences, sources, and scoring engine", not setup_complete),
+        ("/jobs", "Jobs", "Browse collected jobs and refine your search", true),
+        ("/review", "Review", "Step through your bookmarked jobs one at a time, highest score first", true),
+        ("/applications", "Job tracking", "Track bookmarked, applied, and offered jobs on one board", true),
+        ("/companies", "Companies", "Review evidence-based company research separately from job fit", true),
+        ("/sources", "Sources", "Inspect collection source health and sync history", true),
+        ("/duplicates", "Duplicates", "Review potential cross-source duplicate jobs", true),
+        ("/imports", "Import", "Add a job manually without RoleBeacon fetching the URL", true),
+        ("/settings", "Settings", "Update saved search preferences", true),
+      ] %}
       <nav id="primary-nav">
-        {% if not setup_complete %}<a href="/setup" title="Configure your profile, search preferences, sources, and scoring engine">Setup</a>{% endif %}
-        <a href="/jobs" title="Browse collected jobs and refine your search">Jobs</a>
-        <a href="/review" title="Step through your bookmarked jobs one at a time, highest score first">Review</a>
-        <a href="/applications" title="Track bookmarked, applied, and offered jobs on one board">Job tracking</a>
-        <a href="/companies" title="Review evidence-based company research separately from job fit">Companies</a>
-        <a href="/sources" title="Inspect collection source health and sync history">Sources</a>
-        <a href="/duplicates" title="Review potential cross-source duplicate jobs">Duplicates</a>
-        <a href="/imports" title="Add a job manually without RoleBeacon fetching the URL">Import</a>
-        <a href="/settings" title="Update saved search preferences">Settings</a>
+        {% for path, label, hint, shown in nav_items if shown %}
+        {% set current = request.url.path == path or request.url.path.startswith(path + "/") %}
+        <a href="{{ path }}" title="{{ hint }}" {% if current %}class="is-current" aria-current="page"{% endif %}>{{ label }}</a>
+        {% endfor %}
       </nav>
       <a class="mode-badge {% if llm_enabled %}is-llm{% endif %}" href="/settings" title="{% if llm_enabled %}LLM mode: {{ llm_model }} writes scoring evidence, company assessments, and cover letters. Answers can differ between runs, and if the endpoint is unreachable RoleBeacon stops instead of silently scoring with rules.{% else %}Rules only: collection, eligibility, scoring, and company research run on deterministic local rules, so the same input always gives the same result. Claims quote a matched sentence from a source. Cover letters need an LLM and stay disabled.{% endif %}">{{ llm_model if llm_enabled else 'Rules only' }}</a>
       {% if setup_complete %}<button id="sync-button" class="button button-primary" type="button" title="Collect new and updated jobs from activated sources">Refresh now</button>{% endif %}

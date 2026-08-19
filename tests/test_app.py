@@ -1352,3 +1352,23 @@ def test_seniority_facet_offers_every_level_the_scorer_reads(tmp_path) -> None:
     # scorer recognises in a title but the filter offered no way to ask for.
     for level in seniority_level_options():
         assert f'name="seniority" value="{level["code"]}"' in page.text
+
+
+def test_nav_marks_the_open_page_including_a_job_detail(tmp_path) -> None:
+    app = create_app(configured_settings(tmp_path))
+    database = Database(app.state.settings.database_path)
+    job_id, _ = database.upsert_job(CollectedJob(
+        source="source-a", source_job_id="job-1", title="Backend Engineer", company="Example",
+        location="Remote", description="Java", url="https://example.com/jobs/1",
+    ))
+
+    with TestClient(app) as client:
+        listing = client.get("/jobs")
+        detail = client.get(f"/jobs/{job_id}")
+        elsewhere = client.get("/sources")
+
+    # A job detail still belongs to Jobs: the nav marks the section, not the exact URL.
+    assert listing.text.count('aria-current="page"') == 1
+    assert '<a href="/jobs" title="Browse collected jobs and refine your search" class="is-current"' in listing.text
+    assert '<a href="/jobs" title="Browse collected jobs and refine your search" class="is-current"' in detail.text
+    assert '<a href="/sources" title="Inspect collection source health and sync history" class="is-current"' in elsewhere.text
