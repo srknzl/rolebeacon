@@ -501,6 +501,9 @@ def engineering_job(job: CollectedJob, search_profile: dict[str, Any]) -> bool:
 
 
 _URL_QUERY_KINDS = {"google_careers": "q", "amazon_jobs": "base_query"}
+# Providers that take the roles as separate searches instead of one OR'd query - see
+# linkedin_role_queries() for why LinkedIn is walked that way.
+_ROLE_SEARCH_KINDS = {"linkedin", "linkedin_browser"}
 _OPTION_QUERY_KINDS = {
     "adzuna": "query", "jooble": "query", "serpapi": "query", "remotive": "search",
     "linkedin": "keywords", "linkedin_browser": "keywords",
@@ -527,7 +530,20 @@ def personalize_source(source: Any, search_profile: dict[str, Any]) -> Any:
         query[key] = role_query
         return replace(source, url=urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment)))
     if source.kind in _OPTION_QUERY_KINDS:
-        return replace(source, options={**source.options, _OPTION_QUERY_KINDS[source.kind]: role_query})
+        options = {**source.options, _OPTION_QUERY_KINDS[source.kind]: role_query}
+        if source.kind in _ROLE_SEARCH_KINDS:
+            # LinkedIn walks the roles one search at a time rather than as one OR'd query, because
+            # its 1,000-result ceiling and its relevance ordering both apply per query. The joined
+            # string stays as the keywords option: it is what a hand-edited source falls back to,
+            # and what the row shows for a reader of the sources file.
+            #
+            # Every role goes in, not the five that fit a readable OR string. A separate search is
+            # not a longer query, later roles mostly return postings the earlier ones already read
+            # and are skipped without a second request, and the walk is checkpointed - so the cost
+            # of a role near the end of the list is a few search pages, not a full walk. Profile
+            # order is what decides which roles a stopped run reached.
+            options["role_queries"] = roles
+        return replace(source, options=options)
     return source
 
 

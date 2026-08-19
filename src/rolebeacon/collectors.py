@@ -1245,9 +1245,9 @@ def linkedin_time_filter(since: datetime, now: datetime | None = None) -> str:
     return f"r{max(elapsed, LINKEDIN_MINIMUM_TIME_FILTER_SECONDS)}"
 
 
-def linkedin_search_params(config: SourceConfig, since: datetime, start: int) -> dict[str, Any]:
+def linkedin_search_params(config: SourceConfig, keywords: str, since: datetime, start: int) -> dict[str, Any]:
     params: dict[str, Any] = {
-        "keywords": str(config.options.get("keywords", "")),
+        "keywords": keywords,
         "location": str(config.options.get("location", "")),
         "start": start,
         "f_TPR": linkedin_time_filter(since),
@@ -1257,29 +1257,50 @@ def linkedin_search_params(config: SourceConfig, since: datetime, start: int) ->
     return params
 
 
+def linkedin_role_queries(config: SourceConfig) -> list[str]:
+    """The searches this source walks, one per target role.
+
+    LinkedIn ranks and caps each query on its own, so five roles OR'd into one string share a
+    single 1,000-result ceiling and a single relevance ordering - the roles at the end of the OR
+    are the ones that lose. Walked separately they get a ceiling each, and each role's own best
+    matches are reached rather than whatever the combined query happened to rank first.
+
+    A source whose keywords were written by hand stays one query: splitting an expression like
+    "java AND (kafka OR pulsar)" on OR would produce two broken searches.
+    """
+    stored = config.options.get("role_queries")
+    queries = [str(value).strip() for value in stored if str(value).strip()] if isinstance(stored, list) else []
+    return queries or [str(config.options.get("keywords", "")).strip()]
+
+
 def linkedin_query_fingerprint(config: SourceConfig) -> str:
-    """Identify the query a saved offset belongs to.
+    """Identify the searches a saved position belongs to.
 
     Deliberately excludes f_TPR, which is derived from the incremental sync window and so differs
-    on every run; including it would discard a usable offset every time.
+    on every run; including it would discard a usable offset every time. The role list is included
+    because a position means nothing once the searches it counted through have changed.
     """
-    key = "|".join(
-        str(config.options.get(name, ""))
-        for name in ("keywords", "location", "remote")
-    )
+    key = "|".join([
+        *linkedin_role_queries(config),
+        str(config.options.get("location", "")),
+        str(config.options.get("remote", "")),
+    ])
     return blake2s(key.encode(), digest_size=6).hexdigest()
 
 
-def linkedin_parse_cursor(cursor: str, fingerprint: str) -> int:
-    """Resume offset for this query, or 0 when the saved cursor cannot be trusted."""
-    stored, separator, offset = str(cursor).partition(":")
+def linkedin_parse_cursor(cursor: str, fingerprint: str) -> tuple[int, int]:
+    """Which role search to resume and at which offset, or the start when the cursor is unusable."""
+    stored, _, position = str(cursor).partition(":")
+    index, separator, offset = position.partition(":")
     if not separator or stored != fingerprint:
-        return 0
+        return 0, 0
     try:
-        value = int(offset)
+        resume = (int(index), int(offset))
     except ValueError:
-        return 0
-    return value if 0 < value < LINKEDIN_RESULT_CEILING else 0
+        return 0, 0
+    if resume[0] < 0 or not 0 <= resume[1] < LINKEDIN_RESULT_CEILING:
+        return 0, 0
+    return resume
 
 
 class _JobCardParser(HTMLParser):
@@ -1469,37 +1490,58 @@ class LinkedInCollector(Collector):
     attribution = "Jobs collected from LinkedIn's public job search (https://www.linkedin.com/jobs)."
 
     async def collect(self, since: datetime, cursor: str = "") -> CollectionBatch:
-        if not str(self.config.options.get("keywords", "")).strip():
+        queries = linkedin_role_queries(self.config)
+        if not queries[0]:
             raise ValueError("LinkedIn source requires search keywords")
         fingerprint = linkedin_query_fingerprint(self.config)
-        start = linkedin_parse_cursor(cursor, fingerprint)
+        index, start = linkedin_parse_cursor(cursor, fingerprint)
+        if index >= len(queries):  # the role list shrank after the position was saved
+            index, start = 0, 0
         progress = _LinkedInProgress(self.config.name or self.config.id)
         jobs: list[CollectedJob] = []
+        # One posting matches several of the role searches - a "Senior Backend Engineer" listing
+        # answers both that query and "Backend Engineer" - and each read costs a paced request.
+        # Deduplication downstream would still store it once, but only after paying for it twice.
+        read: set[str] = set()
         requests = 0
         checkpoint = ""
         seen = 0
         empty_pages = 0
         next_break = random.randint(*LINKEDIN_BREAK_AFTER_RANGE)
+        location = str(self.config.options.get("location", "")) or "anywhere"
 
-        if start:
+        if (index, start) != (0, 0):
             progress.announce(
-                f"continuing from posting {start:,}; collecting everything posted in the last "
+                f"continuing from posting {start:,} of role search {index + 1} of {len(queries)}, "
+                f"\"{queries[index]}\"; collecting everything posted in the last "
                 f"{_linkedin_duration((datetime.now(UTC) - since).total_seconds())}")
         else:
             progress.announce(
-                f"starting from scratch; keywords \"{self.config.options.get('keywords', '')}\", "
-                f"location \"{self.config.options.get('location', '') or 'anywhere'}\"")
+                f"starting from scratch; {len(queries)} role search{'' if len(queries) == 1 else 'es'} "
+                f"in \"{location}\", beginning with \"{queries[0]}\"")
 
         try:
-            while start < LINKEDIN_RESULT_CEILING:
-                response = await self._get(LINKEDIN_SEARCH_URL, progress, params=linkedin_search_params(self.config, since, start))
+            while index < len(queries):
+                if start >= LINKEDIN_RESULT_CEILING:
+                    progress.announce(
+                        f"reached LinkedIn's {LINKEDIN_RESULT_CEILING:,}-result ceiling "
+                        f"for \"{queries[index]}\"")
+                    index, start, empty_pages = index + 1, 0, 0
+                    continue
+                response = await self._get(
+                    LINKEDIN_SEARCH_URL, progress,
+                    params=linkedin_search_params(self.config, queries[index], since, start),
+                )
                 requests += 1
                 if response is None:
                     checkpoint = self.stopped_message
                     break
                 if response.status_code == httpx.codes.BAD_REQUEST:
-                    progress.announce(f"reached LinkedIn's {LINKEDIN_RESULT_CEILING:,}-result ceiling for this search")
-                    break
+                    progress.announce(
+                        f"reached LinkedIn's {LINKEDIN_RESULT_CEILING:,}-result ceiling "
+                        f"for \"{queries[index]}\"")
+                    index, start, empty_pages = index + 1, 0, 0
+                    continue
                 response.raise_for_status()
                 cards = linkedin_parse_cards(response.text)
                 if not cards:
@@ -1514,8 +1556,11 @@ class LinkedInCollector(Collector):
                         )
                         await _linkedin_pause(LINKEDIN_RATE_LIMIT_BACKOFF_SECONDS)
                         continue
-                    progress.announce(f"finished — {len(jobs):,} postings, no more results")
-                    break
+                    progress.announce(
+                        f"finished \"{queries[index]}\" — no more results "
+                        f"(role search {index + 1} of {len(queries)}, {len(jobs):,} postings so far)")
+                    index, start, empty_pages = index + 1, 0, 0
+                    continue
                 empty_pages = 0
                 for card in cards:
                     # start counts postings finished with, and is only advanced at the end of the
@@ -1528,7 +1573,10 @@ class LinkedInCollector(Collector):
                         # upsert_job rejects an empty company identity anyway.
                         log.warning("%s: posting %s has no employer name; skipping", progress.label, card["id"])
                         readable = False
+                    if readable and card["id"] in read:
+                        readable = False  # an earlier role search in this run already read it
                     if readable:
+                        read.add(card["id"])
                         job, fetched = await self._read_posting(card, progress, since, len(jobs))
                         requests += fetched
                         if job is None and not fetched:
@@ -1544,17 +1592,19 @@ class LinkedInCollector(Collector):
                     start += 1
                 if checkpoint:
                     break
-            else:
-                progress.announce(f"reached LinkedIn's {LINKEDIN_RESULT_CEILING:,}-result ceiling for this search")
         except asyncio.CancelledError:
             checkpoint = "stopped"
 
         if checkpoint:
             progress.announce(
-                f"{checkpoint} after {len(jobs):,} postings; will resume from posting {start:,}")
+                f"{checkpoint} after {len(jobs):,} postings; will resume from posting {start:,} "
+                f"of role search {index + 1} of {len(queries)}")
+        else:
+            progress.announce(f"finished — {len(jobs):,} postings from {len(queries)} role search"
+                              f"{'' if len(queries) == 1 else 'es'}")
         return CollectionBatch(
             jobs=jobs,
-            cursor=f"{fingerprint}:{start}" if checkpoint else "",
+            cursor=f"{fingerprint}:{index}:{start}" if checkpoint else "",
             complete_snapshot=False,
             requests_made=requests,
             attribution=self.attribution,

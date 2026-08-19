@@ -92,10 +92,23 @@ Verified behavior, measured against the live endpoints rather than assumed:
 - The postings carry no JSON-LD, so descriptions are parsed from the `show-more-less-html__markup`
   subtree only, keeping the repeated top-card title and employer out of the description text.
 
-A walk is unbounded and resumable. It runs until the search is exhausted, the 1,000-result ceiling
-is reached, or the user stops it; the offset reached is stored in the batch cursor alongside a
-fingerprint of the query it belongs to, so the next run continues where it stopped and starts over
-whenever the target roles or location have changed. Postings keep the canonical
+Each target role is walked as its own search rather than as one OR'd query. The result ceiling and
+the relevance ordering both apply per query, so five roles joined with OR share a single
+1,000-result budget and the roles at the end of the string are the ones that lose; walked
+separately, each gets its own budget and its own best matches. Every role is walked, too - the
+five-role cap that keeps the other providers' single query readable does not apply when a role is
+a search of its own, and profile order decides which roles a stopped run reached.
+
+A source whose keywords were written by hand stays one search, because splitting an expression such
+as `java AND (kafka OR pulsar)` on OR would produce two broken queries. One posting often answers
+several of the role searches, so a run remembers the IDs it has read and does not pay a second
+paced request for the same posting.
+
+A walk is unbounded and resumable. It runs through every role search until each is exhausted or
+reaches the 1,000-result ceiling, or until the user stops it; the role and the offset reached are
+stored in the batch cursor alongside a fingerprint of the searches they belong to, so the next run
+continues inside the role it stopped in and starts over whenever the target roles or location have
+changed. Postings keep the canonical
 `https://www.linkedin.com/jobs/view/<id>/` URL, derived from the job ID rather than the card's
 country-specific tracking link, so the same posting deduplicates across sources.
 

@@ -121,7 +121,7 @@
     <div><p class="eyebrow">LINKEDIN</p><h2>Two ways to collect</h2></div>
     <span>Job searches and job postings only — never profiles, connections, messages, or the feed.</span>
   </div>
-  <p class="muted">LinkedIn publishes no job API, so RoleBeacon reads it two ways. Both walk the same search for your own target roles and locations, and a posting collected either way deduplicates onto the same job. Pick one — running both only reads everything twice.</p>
+  <p class="muted">LinkedIn publishes no job API, so RoleBeacon reads it two ways. Both walk the same searches — one per target role, in each of your locations — and a posting collected either way deduplicates onto the same job. Pick one — running both only reads everything twice.</p>
   <div class="linkedin-methods">
     {% set public = linkedin_methods.get("linkedin") %}
     {% if public %}
