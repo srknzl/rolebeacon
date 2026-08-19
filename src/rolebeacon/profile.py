@@ -387,14 +387,24 @@ def generate_strategies(
             )
 
     if mobility.remote_from_current_country:
+        # The name is derived from the mobility code the strategy carries, not read from the
+        # candidate profile. They are separate fields on separate schemas that nothing cross-checks,
+        # and a payload where they disagree produced a strategy claiming one country while naming
+        # another - which _country_match() matches on either, recording the wrong country against a
+        # real eligibility decision. The CLI wizard keeps them in sync; the JSON paths need not.
+        remote_from = known_countries.get(mobility.current_country_code)
+        remote_name = (
+            remote_from.country_name if remote_from
+            else country_names_by_code()[mobility.current_country_code]
+        )
         strategies.append(
             SearchStrategyV1(
                 id=strategy_id("remote-from", mobility.current_country_code),
-                label=f"Remote from {candidate.location.country_name}",
+                label=f"Remote from {remote_name}",
                 kind="remote",
                 threshold=75,
                 country_code=mobility.current_country_code,
-                country_name=candidate.location.country_name,
+                country_name=remote_name,
             )
         )
     strategies.append(SearchStrategyV1(id="other", label="Other opportunities", kind="other", threshold=80))

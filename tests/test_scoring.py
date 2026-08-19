@@ -281,6 +281,36 @@ def test_second_work_authorization_without_a_relocation_target_still_gets_a_stra
     assert result.location_fit == "authorized:DE"
 
 
+def test_the_remote_strategy_names_the_country_its_code_belongs_to() -> None:
+    """The candidate profile and the mobility profile can disagree; the strategy cannot."""
+    candidate_in_germany = CandidateProfileV1.model_validate({
+        **CANDIDATE.model_dump(mode="json"),
+        "location": {"country_code": "DE", "country_name": "Germany", "city": "Berlin"},
+    })
+    remote = MobilityProfileV1.model_validate({
+        **MOBILITY.model_dump(mode="json"), "remote_from_current_country": True,
+    })
+
+    strategies = [item.model_dump(mode="json") for item in generate_strategies(candidate_in_germany, remote, PREFERENCES)]
+    from_current = next(item for item in strategies if item["kind"] == "remote")
+
+    # Mobility says TR, the candidate profile says Germany. A strategy that carried both would
+    # match a German job and then record "remote:TR" against it.
+    assert (from_current["country_code"], from_current["country_name"]) == ("TR", "Türkiye")
+    assert from_current["label"] == "Remote from Türkiye"
+
+
+def test_the_remote_strategy_keeps_the_profile_name_when_the_two_agree() -> None:
+    remote = MobilityProfileV1.model_validate({
+        **MOBILITY.model_dump(mode="json"), "remote_from_current_country": True,
+    })
+
+    strategies = [item.model_dump(mode="json") for item in generate_strategies(CANDIDATE, remote, PREFERENCES)]
+    from_current = next(item for item in strategies if item["kind"] == "remote")
+
+    assert (from_current["country_code"], from_current["country_name"]) == ("TR", "Türkiye")
+
+
 def test_authorized_country_listed_as_a_relocation_target_keeps_its_cities() -> None:
     authorized = MobilityProfileV1.model_validate({
         **MOBILITY.model_dump(mode="json"), "work_authorizations": ["TR", "DE"],
