@@ -253,7 +253,8 @@ async def test_collect_resumes_from_a_saved_offset() -> None:
 
     await _collect(httpx.MockTransport(handler), config, cursor=f"{fingerprint}:340")
 
-    assert requested == [340]
+    # The saved offset, then the two retries an empty page always gets before it is believed.
+    assert requested == [340, 340, 340]
 
 
 async def test_cancelling_checkpoints_the_jobs_already_collected() -> None:
@@ -572,3 +573,36 @@ async def test_closing_the_window_checkpoints_the_walk(monkeypatch) -> None:
 
     assert batch.truncated is True
     assert linkedin_parse_cursor(batch.cursor, linkedin_query_fingerprint(config)) == 1
+
+
+async def test_one_empty_page_does_not_end_a_walk() -> None:
+    """LinkedIn serves an empty page under load; believing the first one cost a real run 60% of it."""
+    asked: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "seeMoreJobPostings" not in request.url.path:
+            return httpx.Response(200, text=POSTING_FRAGMENT)
+        start = int(request.url.params.get("start", 0))
+        asked.append(start)
+        if start == 2 and asked.count(2) == 1:
+            return httpx.Response(200, text="")  # the empty page LinkedIn serves when it wants a rest
+        return httpx.Response(200, text=SEARCH_FRAGMENT if start in (0, 2) else "")
+
+    batch = await _collect(httpx.MockTransport(handler), source())
+
+    assert asked.count(2) == 2  # the empty offset was asked again rather than accepted as the end
+    assert len(batch.jobs) == 2  # one usable posting from each of the two real pages
+
+
+async def test_a_search_that_stays_empty_is_accepted_as_finished(caplog) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "seeMoreJobPostings" in request.url.path:
+            return httpx.Response(200, text=SEARCH_FRAGMENT if not int(request.url.params.get("start", 0)) else "")
+        return httpx.Response(200, text=POSTING_FRAGMENT)
+
+    with caplog.at_level(logging.INFO, logger="rolebeacon.collectors"):
+        batch = await _collect(httpx.MockTransport(handler), source())
+
+    assert "no more results" in caplog.text
+    assert batch.cursor == ""  # exhausted, so the next run starts at the top of a fresh window
+    assert batch.truncated is False

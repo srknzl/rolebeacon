@@ -1181,6 +1181,12 @@ LINKEDIN_RATE_LIMIT_ATTEMPTS = 3
 LINKEDIN_PACE_WIDENING = 1.5
 LINKEDIN_PACE_RELAXATION = 0.99
 LINKEDIN_PACE_CEILING_SECONDS = 45.0
+# An empty result page is not proof that a search is exhausted. In a real run LinkedIn answered
+# start=250 with an empty body and ended two walks that were nowhere near finished; asked again
+# unhurried, that same offset served a full page, as did 260 and 400. Under load LinkedIn says
+# "nothing here" rather than 429, so an empty page is slept on and asked again before it is
+# believed - the cost of being wrong is silently dropping most of a location's postings.
+LINKEDIN_EMPTY_PAGE_ATTEMPTS = 2
 
 
 async def _linkedin_pause(seconds: float) -> None:
@@ -1469,6 +1475,7 @@ class LinkedInCollector(Collector):
         requests = 0
         checkpoint = ""
         seen = 0
+        empty_pages = 0
         next_break = random.randint(*LINKEDIN_BREAK_AFTER_RANGE)
 
         if start:
@@ -1493,8 +1500,20 @@ class LinkedInCollector(Collector):
                 response.raise_for_status()
                 cards = linkedin_parse_cards(response.text)
                 if not cards:
+                    if empty_pages < LINKEDIN_EMPTY_PAGE_ATTEMPTS:
+                        empty_pages += 1
+                        linkedin_widen_pace()
+                        log.warning(
+                            "%s: empty result page at posting %s, which LinkedIn also serves when it "
+                            "wants a slower client; waiting %s and asking again (%d of %d)",
+                            progress.label, f"{start:,}", _linkedin_duration(LINKEDIN_RATE_LIMIT_BACKOFF_SECONDS),
+                            empty_pages, LINKEDIN_EMPTY_PAGE_ATTEMPTS,
+                        )
+                        await _linkedin_pause(LINKEDIN_RATE_LIMIT_BACKOFF_SECONDS)
+                        continue
                     progress.announce(f"finished — {len(jobs):,} postings, no more results")
                     break
+                empty_pages = 0
                 for card in cards:
                     # start counts postings finished with, and is only advanced at the end of the
                     # iteration: an interrupted walk then resumes at the posting it never read
@@ -1658,6 +1677,7 @@ class LinkedInBrowserCollector(Collector):
         jobs: list[CollectedJob] = []
         requests = 0
         seen = 0
+        empty_pages = 0
         next_break = random.randint(*LINKEDIN_BREAK_AFTER_RANGE)
         checkpoint = ""
         reported_path = ""
@@ -1679,8 +1699,22 @@ class LinkedInBrowserCollector(Collector):
                     requests += 1
                     found = list(dict.fromkeys(await page.evaluate(LINKEDIN_SEARCH_SCRIPT)))
                     if not found:
+                        # Same trap as the public walk: a results page can come back empty because
+                        # LinkedIn wants a slower client, not because the search ran out.
+                        if empty_pages < LINKEDIN_EMPTY_PAGE_ATTEMPTS:
+                            empty_pages += 1
+                            linkedin_widen_pace()
+                            log.warning(
+                                "%s: no results on the page at posting %s; waiting %s and asking again (%d of %d)",
+                                progress.label, f"{start:,}",
+                                _linkedin_duration(LINKEDIN_RATE_LIMIT_BACKOFF_SECONDS),
+                                empty_pages, LINKEDIN_EMPTY_PAGE_ATTEMPTS,
+                            )
+                            await _linkedin_pause(LINKEDIN_RATE_LIMIT_BACKOFF_SECONDS)
+                            continue
                         progress.announce(f"finished — {len(jobs):,} postings, no more results")
                         break
+                    empty_pages = 0
                     for job_id in found:
                         # Advanced at the end of the iteration, so an interrupted walk resumes at
                         # the posting it never finished rather than one past it.

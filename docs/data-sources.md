@@ -68,9 +68,14 @@ digest email carries no recoverable description or employer name.
 
 Verified behavior, measured against the live endpoints rather than assumed:
 
-- Results page in tens. `start=975` returns an empty body and `start=1000` returns HTTP 400, so a
-  single query reaches at most 1,000 postings. Reaching older jobs needs a narrower `f_TPR`
-  recency window, which the incremental sync produces naturally after a first backfill.
+- Results page in tens, and `start=1000` returns HTTP 400 - a real ceiling, so a single query
+  reaches at most 1,000 postings. Reaching older jobs needs a narrower `f_TPR` recency window,
+  which the incremental sync produces naturally after a first backfill.
+- An empty body is **not** proof that a search is exhausted, which is the more expensive lesson.
+  During a real run LinkedIn answered `start=250` with an empty page and two walks stopped there
+  reporting "no more results"; asked again minutes later, that same offset served a full page, as
+  did 260 and 400. Under load LinkedIn says "nothing here" rather than 429, so an empty page is
+  slept on and asked again twice before the walk accepts it.
 - Roughly 1s spacing draws HTTP 429 after about ten postings; 3s spacing completed an 18-posting
   run untouched. The collector paces at 2.5-4.5s per posting and treats 429 as a wait, not a
   failure, retrying with escalating backoff before checkpointing.
