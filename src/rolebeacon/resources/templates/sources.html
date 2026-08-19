@@ -75,7 +75,7 @@
     </div>
     <span>Nothing is saved until you confirm the preview.</span>
   </div>
-  <p class="muted">Paste the public board URL, not a LinkedIn company page. Greenhouse, Lever, Ashby, SmartRecruiters, Workday, Personio, Google Careers, and Amazon Jobs are detected automatically.</p>
+  <p class="muted">Paste the public board URL, not a LinkedIn company page. Greenhouse, Lever, Ashby, SmartRecruiters, Workday, Personio, Google Careers, and Amazon Jobs are detected automatically. LinkedIn searches are generated from your own locations during setup rather than added by URL.</p>
   <form id="source-discovery-form" class="source-discovery-form">
     <label>Company name {{ tip("The employer name RoleBeacon should use when normalizing and matching jobs from this board.") }}
       <input id="source-company" maxlength="120" placeholder="Example: Cloudflare" autocomplete="organization">
@@ -101,7 +101,7 @@
 
   <details class="source-help">
     <summary>What about Google, Microsoft, Amazon, Meta, Apple, Netflix, or LinkedIn?</summary>
-    <p>Google Careers and Amazon Jobs have dedicated first-party connectors. Microsoft, Meta, Apple, Netflix, and LinkedIn still require their own adapters, so RoleBeacon reports that limitation instead of pretending the URL is supported. Authenticated LinkedIn pages are never scraped.</p>
+    <p>Google Careers and Amazon Jobs have dedicated first-party connectors, and LinkedIn is collected through its credential-free public job search — RoleBeacon never signs in, so authenticated LinkedIn pages, profiles, connections, and messages are never read. Microsoft, Meta, Apple, and Netflix still require their own adapters, so RoleBeacon reports that limitation instead of pretending the URL is supported.</p>
   </details>
 </section>
 

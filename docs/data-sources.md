@@ -51,23 +51,47 @@ URL does not include coordinates, RoleBeacon derives a deterministic country or 
 applies it to every collected page. The preview reports matches from the newest provider page instead
 of presenting Amazon's unfiltered global count as local coverage.
 
-## LinkedIn boundary
+## LinkedIn
 
 LinkedIn does not expose a general personal job-search API. Its documented Job Posting and Apply
 Connect APIs are restricted partner integrations for ATS vendors, job distributors, and employer
 customers. They publish employer jobs to LinkedIn or connect applications; they do not provide a
 self-service API for a job seeker to search and download LinkedIn's corpus.
 
-RoleBeacon therefore does not log into or scrape LinkedIn, and has no LinkedIn ingestion path. An
-earlier revision read LinkedIn Job Alert emails through a user-owned Gmail label, but a digest email
-carries only a handful of links per message with no per-job description or company name recoverable
-without fetching LinkedIn's authenticated pages, which the no-scraping rule forbids. That collector
-was removed; use LinkedIn's own Job Alerts UI directly rather than through RoleBeacon.
+RoleBeacon therefore reads LinkedIn the only way it can without an account: the credential-free
+guest endpoints that serve a signed-out visitor. `seeMoreJobPostings/search` returns result cards
+carrying the job ID, title, employer, location, and posting date; `jobPosting/<id>` returns that
+posting's public description fragment. RoleBeacon never signs in, never sends a cookie, and never
+requests an authenticated page, a profile, a connection, or a message. An earlier revision read
+LinkedIn Job Alert emails through a user-owned Gmail label; that collector was removed because a
+digest email carries no recoverable description or employer name.
+
+Verified behavior, measured against the live endpoints rather than assumed:
+
+- Results page in tens. `start=975` returns an empty body and `start=1000` returns HTTP 400, so a
+  single query reaches at most 1,000 postings. Reaching older jobs needs a narrower `f_TPR`
+  recency window, which the incremental sync produces naturally after a first backfill.
+- Roughly 1s spacing draws HTTP 429 after about ten postings; 3s spacing completed an 18-posting
+  run untouched. The collector paces at 2.5-4.5s per posting and treats 429 as a wait, not a
+  failure, retrying with escalating backoff before checkpointing.
+- Search answers HTTP 500 for a query it serves fine seconds later, so server errors are retried
+  on a short backoff and only checkpoint the walk once the retries are exhausted.
+- `Europe`, `North America`, and `Türkiye` all resolve as locations, so a continent is one source
+  row rather than dozens of per-country rows over the same postings.
+- The postings carry no JSON-LD, so descriptions are parsed from the `show-more-less-html__markup`
+  subtree only, keeping the repeated top-card title and employer out of the description text.
+
+A walk is unbounded and resumable. It runs until the search is exhausted, the 1,000-result ceiling
+is reached, or the user stops it; the offset reached is stored in the batch cursor alongside a
+fingerprint of the query it belongs to, so the next run continues where it stopped and starts over
+whenever the target roles or location have changed. Postings keep the canonical
+`https://www.linkedin.com/jobs/view/<id>/` URL, derived from the job ID rather than the card's
+country-specific tracking link, so the same posting deduplicates across sources.
 
 Official references:
 
 - [LinkedIn Job Posting API overview](https://learn.microsoft.com/en-us/linkedin/talent/job-postings/api/overview)
-- [LinkedIn Job Alerts](https://www.linkedin.com/help/linkedin/answer/a511279/)
+- [LinkedIn User Agreement](https://www.linkedin.com/legal/user-agreement)
 
 ## Recommended additions
 
@@ -115,6 +139,7 @@ Official provider references:
 - Google Cloud Talent Solution is search infrastructure for a customer's own uploaded job corpus;
   it is not an API for the public Google Jobs index.
 - Unofficial LinkedIn, Indeed, or Glassdoor scraper APIs are excluded from the default design.
+- Authenticated LinkedIn pages stay out of scope; only the credential-free guest endpoints are read.
   They create account, terms-of-service, provenance, and breakage risk disproportionate to a
   personal job-search system.
 

@@ -1037,3 +1037,23 @@ td small { display: block; color: var(--muted); }
   .source-library-row > a { grid-column: 1; }
   .source-library-actions { grid-column: 1 / -1; }
 }
+
+.sync-activity {
+  margin: 0.75rem 0 0;
+  padding: 0.5rem 0.75rem;
+  max-height: 11rem;
+  overflow-y: auto;
+  list-style: none;
+  border-radius: 6px;
+  background: var(--bg);
+  border: 1px solid var(--line-soft);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.sync-activity li {
+  white-space: pre-wrap;
+  word-break: break-word;
+}

@@ -28,7 +28,7 @@ from .services import ArtifactService, ProfileValidationError, cover_letter_reco
 from .setup import LocalModelService, SetupService
 from .source_catalog import SourceCatalog, SourceCatalogError
 from .source_discovery import SourceDiscoveryError, SourceDiscoveryService, detect_source
-from .sync import Scheduler, SyncService
+from .sync import Scheduler, SyncService, install_activity_log, recent_activity
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -54,6 +54,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        install_activity_log()
         if app_settings.auto_sync and app_settings.setup_complete and app_settings.activated:
             scheduler.start(run_immediately=True)
         try:
@@ -448,7 +449,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/sync/status")
     async def sync_status() -> dict[str, Any]:
-        return sync_service.status.to_dict()
+        # A collector that runs for an hour moves no counter, so the panel also shows what it is
+        # actually doing right now.
+        return {**sync_service.status.to_dict(), "activity": recent_activity()}
 
     @app.get("/api/model/status")
     async def model_status() -> dict[str, Any]:

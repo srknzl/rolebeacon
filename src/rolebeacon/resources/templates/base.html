@@ -45,6 +45,7 @@
         <li data-sync-step="complete"><span></span>Finish refresh</li>
       </ol>
       <div id="sync-model-health" class="model-health"></div>
+      <ol id="sync-activity" class="sync-activity" hidden></ol>
     </section>
     <section id="company-research-panel" class="sync-panel company-research-panel" aria-live="polite" hidden>
       <div class="sync-panel-heading"><div><p class="eyebrow">COMPANY RESEARCH</p><h2 id="company-research-phase">Preparing research</h2></div><button id="company-research-close" class="button button-quiet" type="button">Hide</button></div>
@@ -110,6 +111,7 @@
       const syncScoring = document.getElementById("sync-scoring");
       const syncModelHealth = document.getElementById("sync-model-health");
       const syncClose = document.getElementById("sync-panel-close");
+      const syncActivity = document.getElementById("sync-activity");
       let syncPollingTimer;
       const phaseOrder = ["preparing", "checking_model", "collecting", "scoring", "complete"];
       function showSyncPanel() { syncPanel.hidden = false; }
@@ -141,6 +143,17 @@
         syncSources.textContent = `Collect job sources (${state.sources_completed || 0}/${state.sources_total || 0}; ${state.jobs_changed || 0} changed)`;
         syncScoring.textContent = `Rank eligible jobs (${state.jobs_scored || 0}/${state.jobs_to_score || 0})`;
         document.querySelectorAll("[data-sync-step]").forEach(item => { item.dataset.state = stepState(state.phase || "idle", item.dataset.syncStep); });
+        const activity = Array.isArray(state.activity) ? state.activity : [];
+        syncActivity.hidden = activity.length === 0;
+        if (activity.length) {
+          const atBottom = syncActivity.scrollTop + syncActivity.clientHeight >= syncActivity.scrollHeight - 8;
+          syncActivity.replaceChildren(...activity.map(line => {
+            const item = document.createElement("li");
+            item.textContent = line;
+            return item;
+          }));
+          if (atBottom) syncActivity.scrollTop = syncActivity.scrollHeight;
+        }
         if (state.llm_status === "rules_only") {
           syncModelHealth.className = "model-health model-health-rules";
           syncModelHealth.textContent = "Rules-only scoring is active. Collection and deterministic ranking continue without an LLM.";

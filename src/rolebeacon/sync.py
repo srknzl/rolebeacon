@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
+from collections import deque
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -26,6 +28,37 @@ from .scoring import (
 
 # Different sources hit different providers, so syncing them concurrently is safe - these two
 # caps just keep any one provider from being hammered hard enough to get rate-limited/blocked.
+# A long collector run is invisible otherwise: with one source working for an hour, the panel's
+# source counter never moves. Collectors report progress with one ordinary logging call, and it
+# reaches both audiences from there - the terminal via the CLI's stderr handler, and the web UI
+# via this buffer, which /api/sync/status serves to the refresh panel it already polls.
+SYNC_ACTIVITY: deque[str] = deque(maxlen=200)
+
+
+class ActivityLogHandler(logging.Handler):
+    """Keep the newest RoleBeacon log records where the web UI can read them."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            SYNC_ACTIVITY.append(self.format(record))
+        except Exception:  # pragma: no cover - logging must never break a sync
+            self.handleError(record)
+
+
+def recent_activity() -> list[str]:
+    return list(SYNC_ACTIVITY)
+
+
+def install_activity_log() -> None:
+    """Idempotently attach the buffer to the package logger."""
+    logger = logging.getLogger("rolebeacon")
+    if not any(isinstance(handler, ActivityLogHandler) for handler in logger.handlers):
+        handler = ActivityLogHandler()
+        handler.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%H:%M:%S"))
+        logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+
+
 SOURCE_CONCURRENCY = 6
 PER_KIND_CONCURRENCY = 2
 DEFAULT_SNAPSHOT_DROP_RATIO = 0.5
@@ -116,6 +149,7 @@ class SyncService:
             if process_lock is None:
                 self.status = SyncStatus(error="sync_already_running", phase="failed", phase_message="Another process is refreshing")
                 return self.status
+            SYNC_ACTIVITY.clear()
             self.database.reset_stale_sync_runs()
             sources = [source for source in self.settings.load_sources() if source.enabled]
             self.status = SyncStatus(
@@ -460,7 +494,10 @@ def engineering_job(job: CollectedJob, search_profile: dict[str, Any]) -> bool:
 
 
 _URL_QUERY_KINDS = {"google_careers": "q", "amazon_jobs": "base_query"}
-_OPTION_QUERY_KINDS = {"adzuna": "query", "jooble": "query", "serpapi": "query", "remotive": "search"}
+_OPTION_QUERY_KINDS = {
+    "adzuna": "query", "jooble": "query", "serpapi": "query", "remotive": "search",
+    "linkedin": "keywords",
+}
 
 
 def personalize_source(source: Any, search_profile: dict[str, Any]) -> Any:

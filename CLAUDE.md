@@ -27,7 +27,8 @@ an LLM must never be required for collection, deterministic scoring, or setup.
   on-demand generated artifacts (e.g. cover letters), which are written in the job
   posting's own language.
 - Never automate a final application submission. The user must review and submit.
-- Do not scrape authenticated LinkedIn pages. RoleBeacon currently has no LinkedIn ingestion path.
+- Do not scrape authenticated LinkedIn pages, profiles, connections, or messages. The LinkedIn
+  collector reads only LinkedIn's credential-free public job endpoints and never signs in.
 - Keep profiles, generated artifacts, browser sessions, OAuth tokens, secrets, and SQLite files
   in the ignored operating-system application-data directory.
 - Do not contact external sources before setup is explicitly activated.

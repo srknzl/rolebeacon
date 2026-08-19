@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import ipaddress
 import json
+import logging
 import os
 import sys
 from dataclasses import replace
@@ -90,6 +91,14 @@ def main() -> None:
     if args.command == "jobs" and args.start_ollama:
         if settings.llm_mode != "ollama":
             parser.error("--start-ollama requires the saved scoring mode to be Ollama")
+    if args.command in {"sync", "jobs"}:
+        # Collectors report progress through logging; send it to stderr so the JSON these
+        # commands print on stdout stays pipeable. "serve" uses the refresh panel instead.
+        logging.basicConfig(
+            level=logging.WARNING, format="%(asctime)s %(message)s", datefmt="%H:%M:%S", stream=sys.stderr
+        )
+        # Only RoleBeacon's own progress, not every httpx request line.
+        logging.getLogger("rolebeacon").setLevel(logging.INFO)
     settings.ensure_directories()
     if args.command == "migrate":
         print(json.dumps(import_legacy(settings, args.legacy_root), indent=2))
