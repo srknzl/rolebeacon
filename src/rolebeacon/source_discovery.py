@@ -227,7 +227,7 @@ class SourceDiscoveryService:
 def same_source(left: SourceConfig, right: SourceConfig) -> bool:
     if left.kind != right.kind:
         return False
-    if left.kind in {"google_careers", "amazon_jobs", "linkedin"}:
+    if left.kind in {"google_careers", "amazon_jobs", "linkedin", "linkedin_browser"}:
         # Query-driven kinds: the search URL (its location/remote filter) is the identity. They
         # carry no board slug or tenant, so the tuple below would make every row of the kind look
         # like the same source and collapse them onto one another on save.

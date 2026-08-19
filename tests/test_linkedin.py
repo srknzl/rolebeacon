@@ -376,8 +376,12 @@ def test_generated_sources_stay_distinct_when_saved(tmp_path, monkeypatch) -> No
     settings.save_sources(candidates)
     settings.save_sources(candidates)  # a second setup save must update in place, not duplicate
 
-    saved = [item for item in settings.load_sources() if item.kind == "linkedin"]
-    assert sorted(item.options.get("location", "") for item in saved) == ["", "Europe", "North America", "Türkiye"]
+    # Both kinds: neither carries a board slug or tenant, so both need URL identity to stay apart.
+    for kind in ("linkedin", "linkedin_browser"):
+        saved = [item for item in settings.load_sources() if item.kind == kind]
+        assert sorted(item.options.get("location", "") for item in saved) == [
+            "", "Europe", "North America", "Türkiye"
+        ]
 
 
 async def test_a_transient_server_error_is_retried_rather_than_failing_the_run() -> None:
