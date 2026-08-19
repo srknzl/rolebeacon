@@ -31,7 +31,12 @@ def main() -> None:
     serve = subparsers.add_parser("serve", help="Run the local web application")
     serve.add_argument("--host")
     serve.add_argument("--port", type=int)
-    subparsers.add_parser("sync", help="Run one incremental sync")
+    sync_command = subparsers.add_parser("sync", help="Run one incremental sync")
+    sync_command.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Also run sources that open a browser window and may wait for you to sign in",
+    )
     jobs = subparsers.add_parser("jobs", help="Refresh and export ranked job discovery results")
     jobs.add_argument("--no-sync", action="store_true", help="Export the existing local database without refreshing")
     jobs.add_argument("--start-ollama", action="store_true", help="Start an installed Ollama before refreshing")
@@ -137,7 +142,7 @@ def main() -> None:
         uvicorn.run(create_app(settings), host=settings.host, port=settings.port)
     elif args.command == "sync":
         sync_service = SyncService(settings, database, LlmClient(settings))
-        sync_result = asyncio.run(sync_service.run())
+        sync_result = asyncio.run(sync_service.run(manual=args.interactive))
         print(json.dumps(sync_result.to_dict(), indent=2))
     elif args.command == "jobs":
         exit_code = _run_jobs_command(args, settings, database)

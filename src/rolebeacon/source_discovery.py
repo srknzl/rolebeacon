@@ -334,7 +334,13 @@ LINKEDIN_SEARCH_PAGE = "https://www.linkedin.com/jobs/search/"
 
 
 def linkedin_source_candidates(locations: list[dict[str, str]]) -> list[SourceConfig]:
-    """Build one public LinkedIn job-search source per location the candidate can work in.
+    """Build LinkedIn job-search sources per location the candidate can work in, twice over.
+
+    Each location gets a public row, which needs no account, and a signed-in row, which opens a
+    browser window carrying the user's own session. Both are disabled until chosen: the public
+    one is the default path, and the signed-in one is there for when its throttling makes a walk
+    impractical. They deduplicate against each other downstream, because a posting's canonical URL
+    comes from its job ID either way.
 
     Continent targets are deliberately NOT expanded into member countries the way
     relocation_source_candidates() expands them. LinkedIn resolves "Europe" and "North America"
@@ -344,26 +350,29 @@ def linkedin_source_candidates(locations: list[dict[str, str]]) -> list[SourceCo
     No keywords here - personalize_source() injects the candidate's real target_roles at every
     sync, so a placeholder would never actually reach LinkedIn.
     """
-    common: dict[str, Any] = {
-        "kind": "linkedin", "enabled": False, "min_sync_interval_seconds": 14400,
-        "trust_priority": 60, "ingestion_filter": True,
-    }
     names = dict.fromkeys(
         str(item.get("name", "")).strip() for item in locations if str(item.get("name", "")).strip()
     )
-    candidates = [
-        SourceConfig.from_dict({
-            "id": _source_id("linkedin", "", name), "name": f"LinkedIn \u2014 {name}",
-            "location": name, "url": f"{LINKEDIN_SEARCH_PAGE}?{urlencode({'location': name})}", **common,
-        })
-        for name in names
-    ]
-    # One location-free row for postings tagged remote rather than placed in a country, which no
-    # per-location query above can match. Added once, not per location.
-    candidates.append(SourceConfig.from_dict({
-        "id": "linkedin-remote", "name": "LinkedIn \u2014 Remote", "location": "", "remote": True,
-        "url": f"{LINKEDIN_SEARCH_PAGE}?{urlencode({'f_WT': '2'})}", **common,
-    }))
+    candidates: list[SourceConfig] = []
+    for kind, label in (("linkedin", "LinkedIn"), ("linkedin_browser", "LinkedIn (signed in)")):
+        common: dict[str, Any] = {
+            "kind": kind, "enabled": False, "min_sync_interval_seconds": 14400,
+            "trust_priority": 60, "ingestion_filter": True,
+        }
+        candidates += [
+            SourceConfig.from_dict({
+                "id": _source_id(kind, "", name), "name": f"{label} \u2014 {name}",
+                "location": name, "url": f"{LINKEDIN_SEARCH_PAGE}?{urlencode({'location': name})}", **common,
+            })
+            for name in names
+        ]
+        # One location-free row for postings tagged remote rather than placed in a country, which no
+        # per-location query above can match. Added once per kind, not per location.
+        candidates.append(SourceConfig.from_dict({
+            "id": f"{kind.replace('_', '-')}-remote", "name": f"{label} \u2014 Remote",
+            "location": "", "remote": True,
+            "url": f"{LINKEDIN_SEARCH_PAGE}?{urlencode({'f_WT': '2'})}", **common,
+        }))
     return candidates
 
 

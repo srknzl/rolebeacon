@@ -74,6 +74,12 @@ Verified behavior, measured against the live endpoints rather than assumed:
 - Roughly 1s spacing draws HTTP 429 after about ten postings; 3s spacing completed an 18-posting
   run untouched. The collector paces at 2.5-4.5s per posting and treats 429 as a wait, not a
   failure, retrying with escalating backoff before checkpointing.
+- The rate budget is bursty rather than fixed. A four-source run held ~16 postings a minute for
+  four and a half minutes, then spent five minutes paying a 60s penalty for every three or four
+  postings, then recovered to its old rate unprompted. The pace is therefore not a constant: every
+  429 widens the spacing shared by all LinkedIn sources and every served request eases it back, so
+  a walk tracks what LinkedIn is allowing at the time. One clock covers every source, because they
+  sync concurrently and LinkedIn counts the host, not the row.
 - Search answers HTTP 500 for a query it serves fine seconds later, so server errors are retried
   on a short backoff and only checkpoint the walk once the retries are exhausted.
 - `Europe`, `North America`, and `Türkiye` all resolve as locations, so a continent is one source
@@ -87,6 +93,25 @@ fingerprint of the query it belongs to, so the next run continues where it stopp
 whenever the target roles or location have changed. Postings keep the canonical
 `https://www.linkedin.com/jobs/view/<id>/` URL, derived from the job ID rather than the card's
 country-specific tracking link, so the same posting deduplicates across sources.
+
+### The signed-in walk
+
+Guest throttling makes a long walk slow, so each generated location also gets a `linkedin_browser`
+row, disabled until chosen. It opens a visible Chrome on a dedicated profile directory inside the
+application-data directory, waits for the user to sign in themselves if LinkedIn asks, and walks the
+same searches through the same cursor, break, and progress machinery. RoleBeacon never types
+credentials and never stores them; the session lives in that profile directory and can be dropped
+on its own without touching the profile used for application autofill.
+
+The limits do not move: job search results and job postings only, never a profile, connection list,
+message, or the feed, and never an application submission. Because it opens a window and can wait
+on a person, `linkedin_browser` is an interactive kind — a scheduled sync always skips it as
+`interactive_source`, and it runs only for a manual refresh or `rolebeacon sync --interactive`.
+
+Postings are read from a `JobPosting` JSON-LD block when the page carries one and from the
+description markup otherwise; which path answered is logged once per run, and a posting that yields
+no description is skipped with a warning rather than saved empty, so a LinkedIn redesign is visible
+in the log instead of silently producing blank jobs.
 
 Official references:
 
@@ -139,7 +164,9 @@ Official provider references:
 - Google Cloud Talent Solution is search infrastructure for a customer's own uploaded job corpus;
   it is not an API for the public Google Jobs index.
 - Unofficial LinkedIn, Indeed, or Glassdoor scraper APIs are excluded from the default design.
-- Authenticated LinkedIn pages stay out of scope; only the credential-free guest endpoints are read.
+- LinkedIn coverage is job search results and job postings only, whether read through the guest
+  endpoints or through the user's own signed-in browser session. Profiles, connections, messages,
+  and the feed stay out of scope.
   They create account, terms-of-service, provenance, and breakage risk disproportionate to a
   personal job-search system.
 

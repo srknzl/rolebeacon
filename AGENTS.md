@@ -27,8 +27,10 @@ an LLM must never be required for collection, deterministic scoring, or setup.
   on-demand generated artifacts (e.g. cover letters), which are written in the job
   posting's own language.
 - Never automate a final application submission. The user must review and submit.
-- Do not scrape authenticated LinkedIn pages, profiles, connections, or messages. The LinkedIn
-  collector reads only LinkedIn's credential-free public job endpoints and never signs in.
+- Never read LinkedIn profiles, connections, messages, or the feed. LinkedIn collection covers job
+  search results and job postings only. The default collector uses credential-free public endpoints
+  and never signs in; the signed-in collector drives a visible browser the user logs into
+  themselves, stores no credentials, and runs only on a refresh a person asked for.
 - Keep profiles, generated artifacts, browser sessions, OAuth tokens, secrets, and SQLite files
   in the ignored operating-system application-data directory.
 - Do not contact external sources before setup is explicitly activated.

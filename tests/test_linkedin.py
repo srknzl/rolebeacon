@@ -224,6 +224,10 @@ def instant_pacing(monkeypatch) -> None:
         return None
 
     monkeypatch.setattr(collectors, "_linkedin_pause", immediately)
+    # The request pace is process-wide state that rate limits widen, so start every test from the
+    # same rhythm rather than from whatever the previous one left behind.
+    monkeypatch.setattr(collectors, "_linkedin_ready_at", 0.0)
+    monkeypatch.setattr(collectors, "_linkedin_pace_scale", 1.0)
 
 
 async def test_collect_walks_pages_until_results_run_out() -> None:
@@ -266,9 +270,10 @@ async def test_cancelling_checkpoints_the_jobs_already_collected() -> None:
 
     assert [job.source_job_id for job in batch.jobs] == ["4439500109"]
     assert batch.truncated is True
-    # Both cards of page one were consumed before the cancel, so the walk resumes at result 3.
-    assert batch.cursor == f"{linkedin_query_fingerprint(config)}:3"
-    assert linkedin_parse_cursor(batch.cursor, linkedin_query_fingerprint(config)) == 3
+    # Page one is finished with, and the cancel landed on the first posting of page two - which
+    # was never read, so the walk has to resume at it rather than past it.
+    assert batch.cursor == f"{linkedin_query_fingerprint(config)}:2"
+    assert linkedin_parse_cursor(batch.cursor, linkedin_query_fingerprint(config)) == 2
 
 
 async def test_repeated_rate_limiting_checkpoints_instead_of_failing() -> None:
@@ -350,9 +355,14 @@ def test_generated_sources_do_not_expand_a_continent_into_member_countries() -> 
         [{"name": "Türkiye"}, {"name": "Europe"}, {"name": "North America"}, {"name": "Europe"}]
     )
 
-    assert [item.options.get("location") for item in sources] == ["Türkiye", "Europe", "North America", ""]
-    assert sources[-1].options["remote"] is True
-    assert all(item.kind == "linkedin" and not item.enabled for item in sources)
+    public = [item for item in sources if item.kind == "linkedin"]
+    signed_in = [item for item in sources if item.kind == "linkedin_browser"]
+
+    for rows in (public, signed_in):
+        assert [item.options.get("location") for item in rows] == ["Türkiye", "Europe", "North America", ""]
+        assert rows[-1].options["remote"] is True
+    # Both paths ship switched off, so neither reaches LinkedIn until it is chosen.
+    assert not any(item.enabled for item in sources)
     # Keywords are injected per sync by personalize_source, never baked into a generated row.
     assert all("keywords" not in item.options for item in sources)
 
@@ -419,3 +429,142 @@ async def test_every_linkedin_source_shares_one_request_pace(monkeypatch) -> Non
 
     assert len(waits) == 1
     assert collectors.LINKEDIN_POSTING_DELAY_RANGE[0] <= waits[0] <= collectors.LINKEDIN_POSTING_DELAY_RANGE[1]
+
+
+async def test_a_rate_limit_slows_every_later_request(monkeypatch) -> None:
+    """The pace LinkedIn allows is discovered, not guessed: each 429 widens the shared spacing."""
+    from rolebeacon import collectors
+
+    waits: list[float] = []
+
+    async def record(seconds: float) -> None:
+        waits.append(seconds)
+
+    monkeypatch.setattr(collectors, "_linkedin_pause", record)
+    monkeypatch.setattr(collectors, "_linkedin_ready_at", 0.0)
+    monkeypatch.setattr(collectors, "_linkedin_pace_scale", 1.0)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "seeMoreJobPostings" in request.url.path:
+            return httpx.Response(200, text=SEARCH_FRAGMENT if not waits else "")
+        return httpx.Response(429)
+
+    await _collect(httpx.MockTransport(handler), source())
+
+    assert collectors._linkedin_pace_scale > 1.0
+    # The widened spacing is what the next request actually waits, not just a recorded number.
+    assert max(waits) > collectors.LINKEDIN_POSTING_DELAY_RANGE[1]
+
+
+def test_widening_stops_at_a_ceiling(monkeypatch) -> None:
+    from rolebeacon import collectors
+
+    monkeypatch.setattr(collectors, "_linkedin_pace_scale", 1.0)
+    for _ in range(50):
+        collectors.linkedin_widen_pace()
+
+    slowest = collectors.LINKEDIN_POSTING_DELAY_RANGE[1] * collectors._linkedin_pace_scale
+    assert slowest == pytest.approx(collectors.LINKEDIN_PACE_CEILING_SECONDS)
+
+
+class _FakePage:
+    """Enough of a Playwright page to walk a search without a browser: goto records, evaluate answers."""
+
+    def __init__(self, pages: list[list[str]], posting: dict[str, str], url: str = "https://www.linkedin.com/jobs/"):
+        self.pages = pages
+        self.posting = posting
+        self.url = url
+        self.visited: list[str] = []
+
+    async def goto(self, url: str, **_kwargs) -> None:
+        self.visited.append(url)
+
+    async def evaluate(self, script: str):
+        if "jobs/view" in script and "querySelectorAll" in script and "ld+json" not in script:
+            return self.pages.pop(0) if self.pages else []
+        return self.posting
+
+
+def _browser_source(**options) -> SourceConfig:
+    values = {"keywords": "Backend Engineer", "location": "Europe", **options}
+    return SourceConfig.from_dict({"id": "linkedin-browser-europe", "kind": "linkedin_browser",
+                                   "name": "LinkedIn (signed in) — Europe", **values})
+
+
+async def _browser_collect(page, config: SourceConfig, cursor: str = "", monkeypatch=None):
+    from contextlib import asynccontextmanager
+
+    from rolebeacon import collectors
+
+    @asynccontextmanager
+    async def fake_browser(_progress):
+        yield page
+
+    monkeypatch.setattr(collectors, "_linkedin_browser", fake_browser)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _r: httpx.Response(404))) as client:
+        collector = collectors.LinkedInBrowserCollector(config, client)
+        return await collector.collect(datetime.now(UTC) - timedelta(days=30), cursor)
+
+
+async def test_the_signed_in_walk_collects_postings_from_the_page(monkeypatch) -> None:
+    posting = {"via": "json-ld", "title": "Senior Backend Engineer", "company": "Wolt",
+               "location": "Berlin, Germany", "description": "<p>Build the platform.</p>",
+               "posted": POSTED_YESTERDAY}
+    page = _FakePage([["4439500109", "4439500110"], []], posting)
+
+    batch = await _browser_collect(page, _browser_source(), monkeypatch=monkeypatch)
+
+    assert [job.source_job_id for job in batch.jobs] == ["4439500109", "4439500110"]
+    assert batch.jobs[0].company == "Wolt"
+    assert batch.jobs[0].description == "Build the platform."
+    # The same canonical URL the public collector produces, so the two paths deduplicate.
+    assert batch.jobs[0].url == linkedin_posting_url("4439500109")
+    assert batch.complete_snapshot is False
+    assert batch.cursor == ""
+
+
+async def test_the_signed_in_walk_skips_a_posting_it_could_not_read(monkeypatch, caplog) -> None:
+    """An empty description means LinkedIn moved its markup - that has to be loud, not silent."""
+    page = _FakePage([["4439500109"], []], {"via": "", "title": "", "company": "", "description": "", "posted": ""})
+
+    with caplog.at_level(logging.WARNING, logger="rolebeacon.collectors"):
+        batch = await _browser_collect(page, _browser_source(), monkeypatch=monkeypatch)
+
+    assert batch.jobs == []
+    assert "returned no description" in caplog.text
+
+
+async def test_the_signed_in_walk_waits_for_a_sign_in(monkeypatch, caplog) -> None:
+    from rolebeacon import collectors
+
+    posting = {"via": "json-ld", "title": "Backend Engineer", "company": "Wolt",
+               "location": "Berlin", "description": "<p>Work.</p>", "posted": POSTED_ON}
+    page = _FakePage([["4439500109"], []], posting, url="https://www.linkedin.com/login")
+
+    async def sign_in_after_a_moment(_seconds: float) -> None:
+        page.url = "https://www.linkedin.com/jobs/search/"
+
+    monkeypatch.setattr(collectors, "_linkedin_pause", sign_in_after_a_moment)
+    with caplog.at_level(logging.INFO, logger="rolebeacon.collectors"):
+        batch = await _browser_collect(page, _browser_source(), monkeypatch=monkeypatch)
+
+    assert "waiting for you to sign in" in caplog.text
+    assert "signed in, continuing" in caplog.text
+    assert len(batch.jobs) == 1
+
+
+async def test_closing_the_window_checkpoints_the_walk(monkeypatch) -> None:
+    config = _browser_source()
+
+    class ClosedPage(_FakePage):
+        async def goto(self, url: str, **kwargs) -> None:
+            if len(self.visited) >= 2:  # the search page loaded, then the window went away
+                raise RuntimeError("Target page, context or browser has been closed")
+            await super().goto(url, **kwargs)
+
+    page = ClosedPage([["4439500109", "4439500110"]], {"via": "", "description": ""})
+
+    batch = await _browser_collect(page, config, monkeypatch=monkeypatch)
+
+    assert batch.truncated is True
+    assert linkedin_parse_cursor(batch.cursor, linkedin_query_fingerprint(config)) == 1

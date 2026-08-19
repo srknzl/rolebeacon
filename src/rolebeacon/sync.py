@@ -61,6 +61,9 @@ def install_activity_log() -> None:
 
 SOURCE_CONCURRENCY = 6
 PER_KIND_CONCURRENCY = 2
+# Kinds that open a window and can wait on a person. Only ever run when someone asked for a
+# refresh: a scheduled sync must never take over the desktop while its user is doing something else.
+INTERACTIVE_KINDS = {"linkedin_browser"}
 DEFAULT_SNAPSHOT_DROP_RATIO = 0.5
 DEFAULT_SNAPSHOT_MINIMUM_BASELINE = 20
 
@@ -137,10 +140,12 @@ class SyncService:
         self.llm = llm
         self.status = SyncStatus()
         self._lock = asyncio.Lock()
+        self._manual = False
 
     async def run(self, force: bool = False, manual: bool = False) -> SyncStatus:
         if self._lock.locked():
             return self.status
+        self._manual = manual
         async with self._lock:
             if not self.settings.setup_complete or not self.settings.activated:
                 self.status = SyncStatus(error="setup_required")
@@ -402,6 +407,8 @@ class SyncService:
             self.status.progress_percent = 10 + int(50 * self.status.sources_completed / max(1, self.status.sources_total))
 
     def _skip_reason(self, source: Any, state: dict[str, Any], force: bool) -> tuple[str, datetime | None]:
+        if source.kind in INTERACTIVE_KINDS and not self._manual:
+            return "interactive_source", None
         now = datetime.now(UTC)
         retry_at = state.get("next_eligible_sync_at")
         if retry_at and state.get("status") == "error" and not force:
@@ -496,7 +503,7 @@ def engineering_job(job: CollectedJob, search_profile: dict[str, Any]) -> bool:
 _URL_QUERY_KINDS = {"google_careers": "q", "amazon_jobs": "base_query"}
 _OPTION_QUERY_KINDS = {
     "adzuna": "query", "jooble": "query", "serpapi": "query", "remotive": "search",
-    "linkedin": "keywords",
+    "linkedin": "keywords", "linkedin_browser": "keywords",
 }
 
 

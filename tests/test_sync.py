@@ -364,3 +364,27 @@ async def test_process_lock_prevents_two_refresh_processes_from_racing(tmp_path)
         owner._release_process_lock(handle)
 
     assert result.error == "sync_already_running"
+
+
+def test_a_browser_source_only_runs_when_a_person_asked_for_it(tmp_path) -> None:
+    """A scheduled sync must never open a window; a manual refresh is what allows it."""
+    settings = Settings.load(tmp_path)
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    service = SyncService(settings, database, LlmClient(settings))
+    source = SourceConfig.from_dict({"id": "linkedin-browser-europe", "kind": "linkedin_browser", "name": "LinkedIn"})
+
+    assert service._skip_reason(source, {}, force=False) == ("interactive_source", None)
+    # Even forcing a scheduled run must not open one - only a person asking for it does.
+    assert service._skip_reason(source, {}, force=True) == ("interactive_source", None)
+
+    service._manual = True
+    assert service._skip_reason(source, {}, force=False) == ("", None)
+
+
+def test_target_roles_reach_the_signed_in_linkedin_source_too() -> None:
+    source = SourceConfig.from_dict({"id": "linkedin-browser-europe", "kind": "linkedin_browser", "name": "LinkedIn"})
+
+    personalized = personalize_source(source, {"target_roles": ["Backend Engineer", "Platform Engineer"]})
+
+    assert personalized.options["keywords"] == "Backend Engineer OR Platform Engineer"
