@@ -34,6 +34,9 @@ MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 READY = "ready"
 MISSING = "missing"
 AMBIGUOUS = "ambiguous"
+# Setup asks for "Google Careers" once and gets one generated source per country, so the payload
+# names the family and complete() expands it into the rows it just saved.
+SOURCE_SENTINELS = {"__google_careers__": "google_careers", "__amazon_jobs__": "amazon_jobs"}
 CLEARANCE_LABELS = {
     "unknown": "Unknown — clearance-restricted roles stay unknown and are never inferred",
     "cannot_meet": "Cannot meet clearance requirements",
@@ -305,23 +308,29 @@ class SetupService:
             [{"country_code": code} for code in payload.mobility.work_authorizations]
             + [item.model_dump(mode="json") for item in payload.mobility.relocation_targets]
         )
-        generated, _ = self.settings.save_sources(relocation_source_candidates(countries))
+        board_candidates = relocation_source_candidates(countries)
         # LinkedIn takes the raw, unexpanded targets: it resolves a continent as one geography,
         # so expanding EUROPE into 42 country rows would walk the same postings 42 times.
-        self.settings.save_sources(linkedin_source_candidates(
+        linkedin_candidates = linkedin_source_candidates(
             [{"name": country_names_by_code().get(code, code)} for code in payload.mobility.work_authorizations]
             + [{"name": item.country_name} for item in payload.mobility.relocation_targets]
-        ))
+        )
+        # Everything the payload names is checked before anything is written. The CLI wizard
+        # documents that a run it does not finish leaves the configuration untouched, and it
+        # saves through this method, so a rejected payload must not leave generated rows behind.
+        known_ids = {source.id for source in self.settings.load_sources()}
+        known_ids.update(source.id for source in board_candidates + linkedin_candidates)
+        unknown_sources = sorted(set(payload.enabled_source_ids) - known_ids - set(SOURCE_SENTINELS))
+        if unknown_sources:
+            raise ValueError(f"Unknown source IDs: {', '.join(unknown_sources)}")
+
+        generated, _ = self.settings.save_sources(board_candidates)
+        self.settings.save_sources(linkedin_candidates)
         enabled_source_ids = list(payload.enabled_source_ids)
-        for sentinel, kind in (("__google_careers__", "google_careers"), ("__amazon_jobs__", "amazon_jobs")):
+        for sentinel, kind in SOURCE_SENTINELS.items():
             if sentinel in enabled_source_ids:
                 enabled_source_ids.remove(sentinel)
                 enabled_source_ids += [source.id for source in generated if source.kind == kind]
-
-        source_kinds = {source.id: source.kind for source in self.settings.load_sources()}
-        unknown_sources = sorted(set(enabled_source_ids) - set(source_kinds))
-        if unknown_sources:
-            raise ValueError(f"Unknown source IDs: {', '.join(unknown_sources)}")
         strategies = generate_strategies(payload.candidate, payload.mobility, payload.preferences)
         updated = self.settings.save_setup(
             candidate=profile,

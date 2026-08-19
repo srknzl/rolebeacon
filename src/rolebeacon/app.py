@@ -117,6 +117,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 # is the no-JavaScript equivalent of the fetch wrapper's X-CSRF-Token header.
                 form_values = parse_qs((await request.body()).decode("utf-8", errors="replace"))
                 supplied_token = form_values.get("csrf_token", [""])[-1]
+            # A request carrying neither header is not from a browser, so it is not the request
+            # a CSRF token defends against: curl, the CLI, and scripts reach the local API
+            # without scraping a token out of the HTML. Every browser able to be induced into a
+            # cross-site request sends at least one of the two, and local_origin_guard above
+            # already refuses anything that did not arrive at the configured local host.
             if (origin or request.headers.get("sec-fetch-site")) and not secrets.compare_digest(
                 supplied_token, csrf_token
             ):

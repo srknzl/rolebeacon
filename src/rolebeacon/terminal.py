@@ -70,6 +70,10 @@ class Terminal:
         except (EOFError, KeyboardInterrupt) as error:
             raise Cancelled("Setup cancelled. Nothing was saved.") from error
         answer = answer.strip()
+        # Accepted cost of uniform navigation: these words can never be entered as data, so a
+        # company named "Q" or an exclude phrase "cancel" cannot be typed here. A prefix such as
+        # ":q" would fix it but makes every other prompt worse, and the values are rare enough
+        # that the documented `rolebeacon setup --from-json PATH` is the escape hatch for them.
         if answer.casefold() in CANCEL_WORDS:
             raise Cancelled("Setup cancelled. Nothing was saved.")
         if answer.casefold() in BACK_WORDS:

@@ -694,3 +694,17 @@ def test_setup_complete_disables_generated_sources_dropped_from_relocation_targe
     germany = next(s for s in settings.load_sources() if s.id == "google-careers-germany")
     assert not france.enabled
     assert germany.enabled
+
+
+def test_a_rejected_setup_leaves_the_source_list_untouched(tmp_path) -> None:
+    settings = Settings.load(tmp_path)
+    before = [source.id for source in settings.load_sources()]
+    payload = setup_payload()
+    payload["enabled_source_ids"] = ["no-such-source"]
+
+    with pytest.raises(ValueError, match="Unknown source IDs"):
+        SetupService(settings).complete(payload)
+
+    # The wizard documents that an unfinished run writes nothing, and it saves through complete(),
+    # so the per-country rows it generates must not survive a payload that was rejected.
+    assert [source.id for source in settings.load_sources()] == before
