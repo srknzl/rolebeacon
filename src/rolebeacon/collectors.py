@@ -1623,6 +1623,14 @@ LINKEDIN_LOGIN_URL = "https://www.linkedin.com/login"
 # LinkedIn's session cookie. Only its presence is ever tested; RoleBeacon neither reads its value
 # nor types a credential - the user signs in themselves in the window, and Chrome keeps the session.
 LINKEDIN_SESSION_COOKIE = "li_at"
+# Where a posting's description lives, in either page. The signed-out page is server-rendered, but
+# the signed-in one is a hydrated application: a first signed-in run read 35 postings a fraction of
+# a second after domcontentloaded and got an empty shell every time - no description, no title, no
+# employer. So the walk waits for this to appear before it reads anything.
+LINKEDIN_POSTING_BODY = (
+    "#job-details, .jobs-description__content, .jobs-box__html-content, .show-more-less-html__markup"
+)
+LINKEDIN_POSTING_WAIT_MS = 15000
 # One evaluation per posting, trying the structured contract before the styled DOM. Which one
 # answered is logged once per run, so a LinkedIn redesign shows up as a change in the log rather
 # than as postings that quietly arrive empty.
@@ -1650,8 +1658,7 @@ LINKEDIN_POSTING_SCRIPT = """() => {
     const node = document.querySelector(selectors);
     return node ? node.innerText.trim().split('\\n')[0].trim() : '';
   };
-  const body = document.querySelector(
-    '#job-details, .jobs-description__content, .jobs-box__html-content, .show-more-less-html__markup');
+  const body = document.querySelector('__BODY__');
   out.via = body ? 'the page markup' : '';
   out.description = body ? body.innerHTML : '';
   out.title = pick('.job-details-jobs-unified-top-card__job-title, .topcard__title, h1');
@@ -1660,7 +1667,7 @@ LINKEDIN_POSTING_SCRIPT = """() => {
     '.job-details-jobs-unified-top-card__primary-description-container, .topcard__flavor--bullet');
   out.posted = pick('time[datetime]');
   return out;
-}"""
+}""".replace("__BODY__", LINKEDIN_POSTING_BODY)
 # Result-card class names change constantly; a link to a posting does not.
 LINKEDIN_SEARCH_SCRIPT = """() => Array.from(document.querySelectorAll('a[href*="/jobs/view/"]'))
   .map((link) => (link.getAttribute('href') || '').match(/\\/jobs\\/view\\/(?:[^\\/?#]*-)?(\\d+)/))
@@ -1725,6 +1732,7 @@ class LinkedInBrowserCollector(Collector):
                         await _linkedin_gate()
                         await self._open(page, linkedin_posting_url(job_id), progress)
                         requests += 1
+                        await _linkedin_wait_for_posting(page)
                         posting = dict(await page.evaluate(LINKEDIN_POSTING_SCRIPT))
                         if not reported_path:
                             reported_path = str(posting.get("via") or "nothing")
@@ -1813,6 +1821,18 @@ async def _linkedin_browser(progress: _LinkedInProgress) -> AsyncIterator[Any]:
             yield context.pages[0] if context.pages else await context.new_page()
         finally:
             await context.close()
+
+
+async def _linkedin_wait_for_posting(page: Any) -> None:
+    """Let the description render before reading it, and read whatever is there if it never does.
+
+    A timeout is not treated as an error: the caller already skips a posting it could not read,
+    with a warning, and a window that has actually gone away fails at the very next call anyway.
+    """
+    try:
+        await page.wait_for_selector(LINKEDIN_POSTING_BODY, timeout=LINKEDIN_POSTING_WAIT_MS)
+    except Exception:  # noqa: BLE001 - a missing description is the caller's decision, not an error here
+        return
 
 
 async def _linkedin_signed_in(page: Any) -> bool:

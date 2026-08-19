@@ -492,9 +492,13 @@ class _FakePage:
         self.url = url
         self.context = _FakeContext(signed_in)
         self.visited: list[str] = []
+        self.waited: list[str] = []
 
     async def goto(self, url: str, **_kwargs) -> None:
         self.visited.append(url)
+
+    async def wait_for_selector(self, selector: str, **_kwargs) -> None:
+        self.waited.append(selector)
 
     async def evaluate(self, script: str):
         if "jobs/view" in script and "querySelectorAll" in script and "ld+json" not in script:
@@ -538,6 +542,36 @@ async def test_the_signed_in_walk_collects_postings_from_the_page(monkeypatch) -
     assert batch.jobs[0].url == linkedin_posting_url("4439500109")
     assert batch.complete_snapshot is False
     assert batch.cursor == ""
+
+
+async def test_the_signed_in_walk_waits_for_the_description_to_render(monkeypatch) -> None:
+    """The signed-in page hydrates: read it too early and every posting arrives as an empty shell."""
+    from rolebeacon import collectors
+
+    posting = {"via": "the page markup", "title": "Backend Engineer", "company": "Wolt",
+               "location": "Berlin", "description": "<p>Work.</p>", "posted": POSTED_ON}
+    page = _FakePage([["4439500109"], []], posting)
+
+    await _browser_collect(page, _browser_source(), monkeypatch=monkeypatch)
+
+    assert page.waited == [collectors.LINKEDIN_POSTING_BODY]
+
+
+async def test_a_description_that_never_renders_is_skipped_rather_than_failing(monkeypatch, caplog) -> None:
+    """A wait that times out is not an error - the posting is skipped and the walk carries on."""
+
+    class SlowPage(_FakePage):
+        async def wait_for_selector(self, selector: str, **kwargs) -> None:
+            raise TimeoutError(f"Timeout waiting for {selector}")
+
+    page = SlowPage([["4439500109", "4439500110"], []], {"via": "", "description": ""})
+
+    with caplog.at_level(logging.WARNING, logger="rolebeacon.collectors"):
+        batch = await _browser_collect(page, _browser_source(), monkeypatch=monkeypatch)
+
+    assert batch.jobs == []
+    assert batch.truncated is False  # walked to the end rather than checkpointing on the timeout
+    assert caplog.text.count("returned no description") == 2
 
 
 async def test_the_signed_in_walk_skips_a_posting_it_could_not_read(monkeypatch, caplog) -> None:
