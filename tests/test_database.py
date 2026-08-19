@@ -627,6 +627,27 @@ def test_regenerating_an_artifact_cannot_rewind_a_prepared_application(tmp_path)
     assert application["resume_path"] == "resume-2.pdf"
 
 
+def test_an_omitted_field_is_kept_and_an_empty_one_is_cleared(tmp_path) -> None:
+    """Regenerating a resume must not blank the note; clearing a stale path must be possible."""
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    job_id, _ = database.upsert_job(sample_job())
+    database.save_application(job_id, status="preparing", resume_path="resume.pdf", notes="Ask about on-call")
+
+    database.save_application(job_id, status="preparing", resume_path="resume-2.pdf")
+    kept = database.list_applications()[0]
+
+    database.save_application(job_id, status="preparing", notes="")
+    cleared = database.list_applications()[0]
+
+    database.save_application(job_id, status="preparing", resume_path="")
+    dropped = database.list_applications()[0]
+
+    assert (kept["notes"], kept["resume_path"]) == ("Ask about on-call", "resume-2.pdf")
+    assert (cleared["notes"], cleared["resume_path"]) == ("", "resume-2.pdf")
+    assert dropped["resume_path"] == ""
+
+
 def test_recording_an_outcome_puts_a_job_on_the_pipeline_board(tmp_path) -> None:
     database = Database(tmp_path / "jobs.sqlite3")
     database.initialize()

@@ -1153,22 +1153,33 @@ class Database:
     ) -> None:
         now = _iso()
         with self.connect() as connection:
+            # A missing argument is NULL and keeps what is stored, so a caller that regenerates one
+            # artifact never blanks the others. An empty string is a real value and clears the
+            # column, which the old "empty means keep" sentinel made impossible to express - a note
+            # or a path pointing at a deleted file could never be taken back.
             connection.execute(
                 f"""
                 INSERT INTO applications (
                     job_id, status, resume_path, cover_letter_path, packet_path, notes, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (
+                    :job_id, :status, COALESCE(:resume_path, ''), COALESCE(:cover_letter_path, ''),
+                    COALESCE(:packet_path, ''), COALESCE(:notes, ''), :now, :now
+                )
                 ON CONFLICT(job_id) DO UPDATE SET
                     status = CASE
                         WHEN {self._artifact_stage('excluded.status')} > {self._artifact_stage('applications.status')}
                         THEN excluded.status ELSE applications.status END,
-                    resume_path = CASE WHEN excluded.resume_path <> '' THEN excluded.resume_path ELSE applications.resume_path END,
-                    cover_letter_path = CASE WHEN excluded.cover_letter_path <> '' THEN excluded.cover_letter_path ELSE applications.cover_letter_path END,
-                    packet_path = CASE WHEN excluded.packet_path <> '' THEN excluded.packet_path ELSE applications.packet_path END,
-                    notes = CASE WHEN excluded.notes <> '' THEN excluded.notes ELSE applications.notes END,
-                    updated_at = excluded.updated_at
+                    resume_path = COALESCE(:resume_path, applications.resume_path),
+                    cover_letter_path = COALESCE(:cover_letter_path, applications.cover_letter_path),
+                    packet_path = COALESCE(:packet_path, applications.packet_path),
+                    notes = COALESCE(:notes, applications.notes),
+                    updated_at = :now
                 """,
-                (job_id, status, resume_path or "", cover_letter_path or "", packet_path or "", notes or "", now, now),
+                {
+                    "job_id": job_id, "status": status, "resume_path": resume_path,
+                    "cover_letter_path": cover_letter_path, "packet_path": packet_path,
+                    "notes": notes, "now": now,
+                },
             )
 
     def list_applications(self) -> list[dict[str, Any]]:
