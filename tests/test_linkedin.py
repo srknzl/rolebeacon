@@ -544,6 +544,28 @@ async def test_the_signed_in_walk_collects_postings_from_the_page(monkeypatch) -
     assert batch.cursor == ""
 
 
+async def test_a_browser_that_will_not_close_does_not_hold_the_run_open(monkeypatch) -> None:
+    """A stop has to stop: a cancelled walk once left the driver waiting on a browser long gone."""
+    from rolebeacon import collectors
+
+    class Stuck:
+        def __init__(self):
+            self.asked = False
+
+        async def close(self) -> None:
+            self.asked = True
+            await asyncio.sleep(3600)
+
+        stop = close
+
+    context, playwright = Stuck(), Stuck()
+    monkeypatch.setattr(collectors, "LINKEDIN_BROWSER_CLOSE_SECONDS", 0.01)
+
+    await asyncio.wait_for(collectors._linkedin_close(context, playwright), 5)
+
+    assert context.asked and playwright.asked
+
+
 async def test_the_signed_in_walk_waits_for_the_description_to_render(monkeypatch) -> None:
     """The signed-in page hydrates: read it too early and every posting arrives as an empty shell."""
     from rolebeacon import collectors

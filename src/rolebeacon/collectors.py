@@ -10,7 +10,7 @@ import re
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from hashlib import blake2s
@@ -1631,6 +1631,7 @@ LINKEDIN_POSTING_BODY = (
     "#job-details, .jobs-description__content, .jobs-box__html-content, .show-more-less-html__markup"
 )
 LINKEDIN_POSTING_WAIT_MS = 15000
+LINKEDIN_BROWSER_CLOSE_SECONDS = 10.0
 # One evaluation per posting, trying the structured contract before the styled DOM. Which one
 # answered is logged once per run, so a LinkedIn redesign shows up as a change in the log rather
 # than as postings that quietly arrive empty.
@@ -1812,15 +1813,27 @@ async def _linkedin_browser(progress: _LinkedInProgress) -> AsyncIterator[Any]:
     profile = Settings.load().data_dir / "linkedin-profile"
     profile.mkdir(parents=True, exist_ok=True)
     progress.announce("opening Chrome")
-    async with async_playwright() as playwright:
-        context = await playwright.chromium.launch_persistent_context(
-            str(profile), headless=False, channel="chrome"
-        )
-        try:
-            context.set_default_timeout(LINKEDIN_BROWSER_TIMEOUT_MS)
-            yield context.pages[0] if context.pages else await context.new_page()
-        finally:
-            await context.close()
+    playwright = await async_playwright().start()
+    context = await playwright.chromium.launch_persistent_context(
+        str(profile), headless=False, channel="chrome"
+    )
+    try:
+        context.set_default_timeout(LINKEDIN_BROWSER_TIMEOUT_MS)
+        yield context.pages[0] if context.pages else await context.new_page()
+    finally:
+        await _linkedin_close(context, playwright)
+
+
+async def _linkedin_close(context: Any, playwright: Any) -> None:
+    """Shut the browser down on a deadline, because a stop has to actually stop.
+
+    A cancelled walk left the driver waiting on a browser that had already gone: the window was
+    closed, every posting was collected and saved, and the process still sat there. Each step gets
+    its own bounded wait and a failure to shut down is not worth reporting - the run is over.
+    """
+    for shutdown in (context.close, playwright.stop):
+        with suppress(Exception):
+            await asyncio.wait_for(shutdown(), LINKEDIN_BROWSER_CLOSE_SECONDS)
 
 
 async def _linkedin_wait_for_posting(page: Any) -> None:
