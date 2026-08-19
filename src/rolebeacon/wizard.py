@@ -499,9 +499,12 @@ class SetupWizard:
             entry = self.terminal.ask_from_catalog(
                 f"{prompt} [{name or code}]" if code else prompt, self._country_options()
             )
-            if entry is not None:
+            if entry is not None and entry[0] != CLEAR_WORD:
                 return entry
-            if code and name:
+            # The clear word drops a stored country and a blank line keeps it, the same as at the
+            # neighbouring country prompts. Neither can answer a required prompt, which asks again
+            # rather than storing "-" as a country code and failing five steps later at the save.
+            if entry is None and code and name:
                 return code, name
             if not required:
                 return "", ""

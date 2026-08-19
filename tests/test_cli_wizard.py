@@ -326,6 +326,29 @@ def test_editing_an_existing_setup_preserves_saved_values(tmp_path) -> None:
     assert Settings.load().load_search_profile()["target_roles"] == ["Backend Engineer"]
 
 
+def test_the_clear_word_cannot_become_a_country_code(tmp_path) -> None:
+    """"-" is the documented clear word, so it is tried here - and a country is required."""
+    console = Console({**HAPPY_PATH, "Current country": ["-", "TR"]})
+
+    _, summary = run_wizard(tmp_path, console)
+
+    assert summary is not None  # rejected at the prompt, not five steps later at the save
+    assert "This value is required" in console.text
+    location = Settings.load().load_candidate_profile()["location"]
+    assert (location["country_code"], location["country_name"]) == ("TR", "Türkiye")
+    assert Settings.load().load_mobility_profile()["current_country_code"] == "TR"
+
+
+def test_the_clear_word_keeps_a_stored_country_out_of_the_draft(tmp_path) -> None:
+    """Re-running setup and answering "-" must not replace a saved country with the sentinel."""
+    run_wizard(tmp_path, Console(HAPPY_PATH))
+
+    _, summary = run_wizard(tmp_path, Console({"Current country": ["-", "DE"], "What next": ["save"]}))
+
+    assert summary is not None
+    assert Settings.load().load_candidate_profile()["location"]["country_code"] == "DE"
+
+
 def test_the_wizard_and_the_json_import_produce_the_same_setup(tmp_path, monkeypatch) -> None:
     run_wizard(tmp_path, Console({**HAPPY_PATH, "Source packs": []}))
     from_wizard = Settings.load()
