@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_help.html" import tip %}
+{% from "_help.html" import card_legend, tip %}
 {% block title %}Jobs · RoleBeacon{% endblock %}
 
 {# A facet menu: one button that opens a panel of choices. Multi-select facets tick boxes, so
@@ -31,7 +31,7 @@
     <p class="eyebrow">DISCOVERY</p><h1>Jobs</h1>
     {# Nearly half the corpus can sit behind the different-role default, so the count that says so
        is body text next to the heading, and the number itself is the control that reveals them. #}
-    <p class="match-count">
+    <p class="match-count">{{ card_legend() }}
       {% if total %}<strong>{{ total|thousands }} matching job{{ '' if total == 1 else 's' }}</strong>{% elif all_matches_total %}<strong>No visible matches</strong> of {{ all_matches_total|thousands }} jobs{% else %}<strong>No matches</strong>{% endif %}
       {%- if hidden_title_count %} · <a href="{{ request.url.include_query_params(show_mismatched_titles=1, page=1) }}">{{ hidden_title_count|thousands }} hidden as different role{{ '' if hidden_title_count == 1 else 's' }} — show</a>
       {%- elif selected.get('show_mismatched_titles') %} · <a href="{{ request.url.remove_query_params('show_mismatched_titles') }}">different-role titles included — hide</a>{% endif %}

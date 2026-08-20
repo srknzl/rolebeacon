@@ -85,13 +85,13 @@
       <label>Security-clearance policy {{ tip("Optional sensitive local-only fact. RoleBeacon never infers it from nationality, location, or résumé text.") }}<select id="clearance-status"><option value="unknown">Unknown / not configured</option><option value="cannot_meet">I explicitly cannot meet clearance requirements</option><option value="eligible_to_attempt">I may be eligible to undergo vetting</option><option value="has_active_clearance">I have an active clearance (add exact credentials through Setup JSON)</option></select></label>
     </div>
     <div class="checkbox-row">
-      <label title="Allows remote roles only when the posting explicitly permits work from your current country or worldwide."><input id="remote-current" type="checkbox" checked> Remote work from my current country</label>
-      <label title="Allows relocation strategies for the target countries above; visa support remains an eligibility requirement."><input id="relocate" type="checkbox" checked> Willing to relocate</label>
-      <label title="Allows roles offered through an independent-contractor agreement."><input id="contractor" type="checkbox" checked> Contractor arrangements accepted</label>
-      <label title="Allows roles where an employer-of-record hires you locally on the company's behalf."><input id="eor" type="checkbox" checked> Employer-of-record arrangements accepted</label>
-      <label title="When enabled, relocation targets outside your work authorizations require explicit visa-sponsorship evidence."><input id="sponsorship-required" type="checkbox" checked> Sponsorship required outside authorized countries</label>
-      <label title="Reject only postings whose comparable stated salary is below your minimum; unknown pay stays unknown."><input id="salary-hard-filter" type="checkbox"> Enforce salary minimum as a hard filter</label>
-      <label title="Optional candidate-owned clearance policy; unknown remains the default."><input id="clearance-vetting" type="checkbox"> Willing to undergo clearance vetting</label>
+      <label><input id="remote-current" type="checkbox" checked> Remote work from my current country {{ tip("Allows remote roles only when the posting explicitly permits work from your current country or worldwide.") }}</label>
+      <label><input id="relocate" type="checkbox" checked> Willing to relocate {{ tip("Allows relocation strategies for the target countries above; visa support remains an eligibility requirement.") }}</label>
+      <label><input id="contractor" type="checkbox" checked> Contractor arrangements accepted {{ tip("Allows roles offered through an independent-contractor agreement.") }}</label>
+      <label><input id="eor" type="checkbox" checked> Employer-of-record arrangements accepted {{ tip("Allows roles where an employer-of-record hires you locally on the company's behalf.") }}</label>
+      <label><input id="sponsorship-required" type="checkbox" checked> Sponsorship required outside authorized countries {{ tip("When enabled, relocation targets outside your work authorizations require explicit visa-sponsorship evidence.") }}</label>
+      <label><input id="salary-hard-filter" type="checkbox"> Enforce salary minimum as a hard filter {{ tip("Reject only postings whose comparable stated salary is below your minimum; unknown pay stays unknown.") }}</label>
+      <label><input id="clearance-vetting" type="checkbox"> Willing to undergo clearance vetting {{ tip("Optional candidate-owned clearance policy; unknown remains the default.") }}</label>
     </div>
     {% if editing %}<details>
       <summary>Plan preferences with an LLM</summary>
@@ -125,16 +125,16 @@
       {% for source in sources %}
         {% if source.kind not in ['adzuna', 'jooble', 'serpapi', 'google_careers', 'amazon_jobs'] %}
         {% set source_help = "Public Europe-focused jobs feed, useful for relocation opportunities." if source.id == 'arbeitnow' else "Arbeitnow roles that explicitly advertise visa sponsorship." if source.id == 'arbeitnow-sponsored' else "Public remote engineering jobs feed; target roles are applied during ingestion." if source.kind == 'jobicy' else "Remote software-development feed; your target roles filter collected jobs." if source.kind == 'remotive' else "Remote job board feed; country eligibility and target roles are checked after collection." if source.kind == 'remoteok' else "Remote job board API; country eligibility and target roles are checked after collection." if source.kind == 'himalayas' else "Programming feed; your target roles filter collected jobs after collection." if source.kind == 'wwr' else "A public source contacted only after setup is activated." %}
-        <label title="{{ source_help }}"><input class="source-choice" type="checkbox" value="{{ source.id }}"> {{ source.name }} {{ tip(source_help) }}</label>
+        <label><input class="source-choice" type="checkbox" value="{{ source.id }}"> {{ source.name }} {{ tip(source_help) }}</label>
         {% endif %}
       {% endfor %}
       {% set google_help = "Official Google careers search personalized from your target roles and relocation targets at sync time." %}
       {% set google_ids = sources|selectattr('kind', 'equalto', 'google_careers')|map(attribute='id')|join(',') %}
-      <label title="{{ google_help }}"><input class="source-choice" type="checkbox" value="__google_careers__" data-source-ids="{{ google_ids }}"
+      <label><input class="source-choice" type="checkbox" value="__google_careers__" data-source-ids="{{ google_ids }}"
         {% if sources|selectattr('kind', 'equalto', 'google_careers')|selectattr('enabled')|list %}checked{% endif %}> Google Careers {{ tip(google_help) }}<span class="source-choice-note">Searches every country you're authorized to work in or willing to relocate to, plus one Remote-eligible search covering roles with no fixed country.</span></label>
       {% set amazon_help = "Official Amazon careers search personalized from your target roles and relocation targets at sync time." %}
       {% set amazon_ids = sources|selectattr('kind', 'equalto', 'amazon_jobs')|map(attribute='id')|join(',') %}
-      <label title="{{ amazon_help }}"><input class="source-choice" type="checkbox" value="__amazon_jobs__" data-source-ids="{{ amazon_ids }}"
+      <label><input class="source-choice" type="checkbox" value="__amazon_jobs__" data-source-ids="{{ amazon_ids }}"
         {% if sources|selectattr('kind', 'equalto', 'amazon_jobs')|selectattr('enabled')|list %}checked{% endif %}> Amazon Jobs {{ tip(amazon_help) }}<span class="source-choice-note">Searches every country you're authorized to work in or willing to relocate to. Amazon's own search has no remote-eligible filter, so there's no Remote row here.</span></label>
     </div>
   </section>

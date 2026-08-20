@@ -4,3 +4,10 @@
 {% macro tip(text) -%}
 <span class="help-tip" role="note" tabindex="0" aria-label="{{ text }}" data-tooltip="{{ text }}">?</span>
 {%- endmacro %}
+
+{# What the score circle and the badges on a job card mean. One legend per list beats the same
+   definition repeated as a native tooltip on every card, which is unreachable by touch and
+   keyboard alike. #}
+{% macro card_legend() -%}
+{{ tip("Each card leads with its opportunity score, 0 to 100: job fit (80%) blended with company fit (20%), after eligibility has been checked. The badges are the posting's eligibility when it is not eligible, the verdict against the governing strategy's own threshold, and your own pipeline decision.") }}
+{%- endmacro %}

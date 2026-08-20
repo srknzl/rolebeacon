@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_help.html" import card_legend %}
 {% block title %}Dashboard · RoleBeacon{% endblock %}
 {% block content %}
 <section class="stats-grid">
@@ -11,7 +12,7 @@
 
 <section class="section-heading">
   <div>
-    <h1>Recommended now</h1>
+    <h1>Recommended now {{ card_legend() }}</h1>
     <p class="muted">Eligible jobs scoring 65 or higher, from your enabled sources only — <a href="/sources">see exact coverage</a>.</p>
   </div>
   <a href="/jobs?min_score=65">View all →</a>

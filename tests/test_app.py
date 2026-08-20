@@ -594,6 +594,29 @@ def test_the_facet_endpoint_counts_what_each_value_would_leave(tmp_path) -> None
     assert counts["work_model"]["remote_worldwide"] == 1
 
 
+def test_what_a_badge_means_is_reachable_without_a_mouse(tmp_path) -> None:
+    settings = replace(configured_settings(tmp_path), auto_sync=False)
+    app = create_app(settings)
+    app.state.database.upsert_job(
+        CollectedJob(
+            source="fixture", source_job_id="1", title="Backend Engineer", company="Example",
+            location="Remote Worldwide", description="Build Python distributed systems",
+            url="https://example.com/jobs/1", published_at=datetime.now(UTC),
+        )
+    )
+
+    with TestClient(app) as client:
+        page = client.get("/jobs")
+
+    # A native title never opens on touch or on keyboard focus, and the mode explanation is 400
+    # characters of one unwrappable strip. Both are help-tips now.
+    assert "Rules only: collection, eligibility, scoring" not in page.text.split("mode-badge")[0]
+    assert 'data-tooltip="Rules only: collection, eligibility, scoring' in page.text
+    # And the card definitions are one legend for the list rather than a tooltip on every card.
+    assert page.text.count('data-tooltip="Each card leads with its opportunity score') == 1
+    assert "Overall opportunity score from 0 to 100" not in page.text
+
+
 def test_dashboard_jobs_api_and_feedback(tmp_path) -> None:
     settings = configured_settings(tmp_path)
     app = create_app(settings)

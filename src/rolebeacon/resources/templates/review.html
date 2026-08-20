@@ -1,8 +1,9 @@
 {% extends "base.html" %}
+{% from "_help.html" import card_legend %}
 {% block title %}Review bookmarks · RoleBeacon{% endblock %}
 {% block content %}
 <section class="section-heading">
-  <div><p class="eyebrow">BOOKMARKED</p><h1>Review your bookmarks</h1></div>
+  <div><p class="eyebrow">BOOKMARKED</p><h1>Review your bookmarks {{ card_legend() }}</h1></div>
   <a href="/jobs?job_status=bookmarked&sort=job_fit">View all →</a>
 </section>
 {% if not total %}
@@ -23,12 +24,13 @@
     <form action="/api/jobs/{{ job.id }}/feedback" method="post" class="decision-grid">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="return" value="/review?i={{ index }}">
-      <button name="status" value="applied" class="button button-primary" title="You submitted this application yourself. It moves to Applied on the pipeline board.">I applied</button>
-      <button name="status" value="new" class="button" title="Take it out of the bookmark queue without judging it. It stays in the Jobs list.">Remove bookmark</button>
-      <button name="status" value="not_interested" class="button button-quiet" title="Hide this job from recommendations. The original posting is not changed.">Not interested</button>
+      <button name="status" value="applied" class="button button-primary">I applied</button>
+      <button name="status" value="new" class="button">Remove bookmark</button>
+      <button name="status" value="not_interested" class="button button-quiet">Not interested</button>
     </form>
     <a class="button" href="/jobs/{{ job.id }}?return=%2Freview%3Fi%3D{{ index }}">Open full job →</a>
   </div>
+  <p class="decision-legend">Applied moves it to the pipeline board · Remove bookmark leaves it in the Jobs list · Not interested keeps it out of recommendations. Neither changes the original posting.</p>
   {% if job.gaps %}
   <div class="review-gaps"><h3>Gaps</h3><ul>{% for gap in job.gaps[:3] %}<li>{{ gap }}</li>{% endfor %}</ul></div>
   {% endif %}

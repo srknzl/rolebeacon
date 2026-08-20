@@ -1,3 +1,4 @@
+{% from "_help.html" import tip -%}
 <!doctype html>
 <html lang="en">
   <head>
@@ -34,7 +35,10 @@
         <a href="{{ path }}" title="{{ hint }}" {% if current %}class="is-current" aria-current="page"{% endif %}>{{ label }}</a>
         {% endfor %}
       </nav>
-      <a class="mode-badge {% if llm_enabled %}is-llm{% endif %}" href="/settings" title="{% if llm_enabled %}LLM mode: {{ llm_model }} writes scoring evidence, company assessments, and cover letters. Answers can differ between runs, and if the endpoint is unreachable RoleBeacon stops instead of silently scoring with rules.{% else %}Rules only: collection, eligibility, scoring, and company research run on deterministic local rules, so the same input always gives the same result. Claims quote a matched sentence from a source. Cover letters need an LLM and stay disabled.{% endif %}">{{ llm_model if llm_enabled else 'Rules only' }}</a>
+      {% set mode_help = "LLM mode: " ~ llm_model ~ " writes scoring evidence, company assessments, and cover letters. Answers can differ between runs, and if the endpoint is unreachable RoleBeacon stops instead of silently scoring with rules." if llm_enabled else "Rules only: collection, eligibility, scoring, and company research run on deterministic local rules, so the same input always gives the same result. Claims quote a matched sentence from a source. Cover letters need an LLM and stay disabled." %}
+      {# 400 characters of explanation rendered as one unreadable native strip, and never at all
+         on a touch device. The tip wraps, opens on keyboard focus, and sits outside the link. #}
+      <span class="mode-badge-group"><a class="mode-badge {% if llm_enabled %}is-llm{% endif %}" href="/settings" title="Scoring mode — open Settings">{{ llm_model if llm_enabled else 'Rules only' }}</a>{{ tip(mode_help) }}</span>
       {% if setup_complete %}<button id="sync-button" class="button button-primary" type="button" title="Collect new and updated jobs from activated sources">Refresh now</button>{% endif %}
     </header>
     <div class="sync-strip {% if sync.running %}is-running{% endif %}" id="sync-strip">

@@ -1,6 +1,6 @@
 <article class="job-card">
   {% set display_score = job.opportunity_score or job.score or 0 %}
-  <div class="score score-{{ 'high' if display_score >= 80 else 'mid' if display_score >= 65 else 'low' }}" title="Overall opportunity score from 0 to 100. It blends job fit (80%) with company fit (20%) after eligibility has been checked.">
+  <div class="score score-{{ 'high' if display_score >= 80 else 'mid' if display_score >= 65 else 'low' }}">
     {{ display_score or '—' }}
   </div>
   <div class="job-card-main">
@@ -13,9 +13,9 @@
          already guarantees and "new" is 99% of every list, so a badge for either is three
          pixels of colour saying nothing - and it drowns the verdict, which does vary. #}
       <div class="job-card-badges">
-        {% if job.eligibility_status != 'eligible' %}<span class="status status-{{ job.eligibility_status or 'unknown' }}" title="Eligibility is checked before fit and cannot be overridden by a high score.">{{ job.eligibility_status or 'eligibility unknown' }}</span>{% endif %}
-        {% if job.verdict %}<span class="status status-{{ job.verdict }}" title="Verdict uses the threshold configured for this job's governing search strategy.">{{ job.verdict|replace('_', ' ') }}</span>{% endif %}
-        {% if job.status and job.status != 'new' %}<span class="status status-{{ job.status }}" title="Your own pipeline decision for this job.">{{ job.status }}</span>{% endif %}
+        {% if job.eligibility_status != 'eligible' %}<span class="status status-{{ job.eligibility_status or 'unknown' }}">{{ job.eligibility_status or 'eligibility unknown' }}</span>{% endif %}
+        {% if job.verdict %}<span class="status status-{{ job.verdict }}">{{ job.verdict|replace('_', ' ') }}</span>{% endif %}
+        {% if job.status and job.status != 'new' %}<span class="status status-{{ job.status }}">{{ job.status }}</span>{% endif %}
       </div>
     </div>
     {# One line of facts about the posting. Each item is a short tag: the full sentence behind
