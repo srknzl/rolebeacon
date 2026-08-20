@@ -340,7 +340,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/imports", response_class=HTMLResponse)
     async def imports_page(request: Request, imported: int = 0) -> HTMLResponse:
-        return templates.TemplateResponse(request, "imports.html", page_context(request, imported=imported))
+        return templates.TemplateResponse(
+            request,
+            "imports.html",
+            page_context(
+                request,
+                imported=imported,
+                # A form with no record of what it produced gives no way back to a job you typed
+                # in yourself, and no way to tell whether the last one saved.
+                recent=database.list_jobs(JobFilters(source_ids=("manual",)), sort="newest", limit=10),
+            ),
+        )
 
     @app.get("/companies", response_class=HTMLResponse)
     async def companies_page(request: Request, q: str = "") -> HTMLResponse:

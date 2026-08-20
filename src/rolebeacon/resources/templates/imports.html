@@ -2,20 +2,40 @@
 {% from "_help.html" import tip %}
 {% block title %}Import · RoleBeacon{% endblock %}
 {% block content %}
-<section class="page-heading"><div><p class="eyebrow">MANUAL FALLBACK</p><h1>Import a job</h1><p>This form stores only what you paste. RoleBeacon does not fetch the URL.</p></div></section>
+<section class="page-heading"><div><p class="eyebrow">MANUAL FALLBACK</p><h1>Import a job</h1><p>For an alert, a browser result, or a private posting that RoleBeacon cannot collect directly. This form stores only what you paste — it does not fetch the URL.</p></div></section>
 {% if imported %}<div class="notice">Imported successfully. <a href="/jobs/{{ imported }}">Open job</a></div>{% endif %}
 <form class="form-stack import-form" method="post" action="/api/imports">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <section class="panel">
     <div class="import-grid">
-      <label>Job title {{ tip("Copy the role title exactly as shown in the posting.") }}<input name="title" required></label>
-      <label>Company {{ tip("The employer or hiring company shown in the posting.") }}<input name="company" required></label>
-      <label>Job URL {{ tip("Kept as a reference and application link. RoleBeacon does not fetch it from this form.") }}<input name="url" type="url" required></label>
+      <label>Job title <span class="required-mark">required</span> {{ tip("Copy the role title exactly as shown in the posting.") }}<input name="title" required></label>
+      <label>Company <span class="required-mark">required</span> {{ tip("The employer or hiring company shown in the posting.") }}<input name="company" required></label>
+      <label>Job URL <span class="required-mark">required</span> {{ tip("Kept as a reference and application link. RoleBeacon does not fetch it from this form.") }}<input name="url" type="url" required></label>
       <label>Location {{ tip("City, country, or remote-region wording from the posting.") }}<input name="location"></label>
-      <label>Remote scope {{ tip("Copy any explicit remote-country or timezone restriction, such as Worldwide, EMEA, or Türkiye.") }}<input name="remote_scope"></label>
+      {# A list, not a select: worldwide and "not stated" are fixed, but a regional scope is
+         whatever the posting says, and eligibility reads the wording itself. #}
+      <label>Remote scope {{ tip("Copy any explicit remote-country or timezone restriction, such as Worldwide, EMEA, or Türkiye. Leave blank for an on-site role, or when the posting says nothing.") }}<input name="remote_scope" list="remote-scope-options" placeholder="blank for on-site"></label>
+      <datalist id="remote-scope-options">
+        <option value="Remote — worldwide"></option>
+        <option value="Remote — scope not stated"></option>
+        <option value="Remote — EMEA"></option>
+        <option value="Remote — Europe"></option>
+        <option value="Remote — United States"></option>
+        <option value="Remote — Türkiye"></option>
+        <option value="Hybrid"></option>
+      </datalist>
       <label class="import-description">Description {{ tip("Paste the full job description when possible for more accurate eligibility and fit scoring.") }}<textarea name="description" rows="14"></textarea></label>
     </div>
-    <div class="import-actions"><p class="muted">Use this for an alert, browser result, or private posting that RoleBeacon cannot collect directly.</p><button class="button button-primary" type="submit">Import without fetching</button></div>
+    <div class="import-actions"><p class="muted">Scored like any collected job once it is saved.</p><button class="button button-primary" type="submit">Import without fetching</button></div>
   </section>
 </form>
+
+{% if recent %}
+<section class="section-heading"><div><h2>Imported by hand</h2><p>The {{ recent|length }} most recent. They are ordinary jobs: scored, filterable, and shown on the Jobs page.</p></div><a href="/jobs?source=manual">View all →</a></section>
+<ul class="import-history">
+  {% for job in recent %}
+  <li><a href="/jobs/{{ job.id }}">{{ job.title }}</a> <span>{{ job.company }}{% if job.location %} · {{ job.location }}{% endif %} · added {{ job.first_seen_at|time_ago }}</span></li>
+  {% endfor %}
+</ul>
+{% endif %}
 {% endblock %}

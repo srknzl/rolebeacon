@@ -544,6 +544,33 @@ def test_setup_planning_requires_an_enabled_model(tmp_path) -> None:
     assert "Choose Ollama" in response.json()["detail"]
 
 
+def test_the_import_page_keeps_a_trail_of_what_it_created(tmp_path) -> None:
+    settings = replace(configured_settings(tmp_path), auto_sync=False)
+    app = create_app(settings)
+
+    with TestClient(app) as client:
+        empty = client.get("/imports")
+        created = client.post(
+            "/api/imports",
+            json={
+                "title": "Staff Backend Engineer",
+                "company": "Paste Co",
+                "url": "https://example.test/jobs/pasted",
+                "remote_scope": "Remote — worldwide",
+            },
+        )
+        page = client.get("/imports")
+
+    assert created.status_code == 201
+    assert "Imported by hand" not in empty.text
+    # A form that gives no way back to what it created cannot be checked or corrected.
+    assert "Imported by hand" in page.text
+    assert f'href="/jobs/{created.json()["job_id"]}"' in page.text
+    assert "Staff Backend Engineer" in page.text
+    # Required fields say so before the request fails, rather than after.
+    assert page.text.count('<span class="required-mark">required</span>') == 3
+
+
 def test_dashboard_jobs_api_and_feedback(tmp_path) -> None:
     settings = configured_settings(tmp_path)
     app = create_app(settings)
