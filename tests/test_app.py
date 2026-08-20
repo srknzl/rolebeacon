@@ -1664,3 +1664,46 @@ def test_the_companies_page_drops_a_superseded_assessment_and_offers_the_unresea
     # A model-written assessment is still shown in full on the profile itself.
     assert detail.status_code == 200
     assert "Remote work is described as regional." in detail.text
+
+
+def test_duplicate_review_shows_what_differs_and_decides_a_whole_set_at_once(tmp_path) -> None:
+    # Three copies of one posting produce three pair rows, and the old table asked about each of
+    # them separately while showing the same title, company and location on both sides.
+    settings = replace(configured_settings(tmp_path), auto_sync=False)
+    app = create_app(settings)
+    database = app.state.database
+    job_ids = []
+    for index, source in enumerate(("greenhouse-example", "linkedin-remote", "arbeitnow")):
+        job_id, _ = database.upsert_job(
+            CollectedJob(
+                source=source, source_job_id=f"copy-{index}", title="Platform Engineer", company="Example",
+                location="Remote", description="Build platforms.", url=f"https://{source}.test/jobs/{index}",
+            )
+        )
+        job_ids.append(job_id)
+
+    with TestClient(app) as client:
+        page = client.get("/duplicates")
+        merged = client.post(
+            "/api/duplicates/merge",
+            json={"candidate_ids": [1, 2, 3], "keep_job_id": job_ids[1]},
+        )
+        after = client.get("/duplicates")
+
+    assert page.status_code == 200
+    # One set, one heading, and the fields every copy agrees on are stated once.
+    assert page.text.count('class="duplicate-set"') == 1
+    assert page.text.count("Platform Engineer") == 1
+    assert "3 copies" in page.text
+    # What distinguishes the copies is on the page: where each came from and where it lives.
+    for source in ("greenhouse-example", "linkedin-remote", "arbeitnow"):
+        assert source in page.text
+    assert "https://arbeitnow.test/jobs/2" in page.text
+    # The bulk merge asks before it runs instead of being the page's primary button.
+    assert "data-confirm=" in page.text
+    # One decision retires every pair in the set, keeping the copy the reader picked.
+    assert merged.status_code == 200
+    # Three copies, three pair rows, two copies folded into the keeper - one request.
+    assert merged.json() == {"job_id": job_ids[1], "merged": 2}
+    assert "No duplicates to review" in after.text
+    assert [database.get_job(job_id)["merged_into_job_id"] for job_id in job_ids] == [job_ids[1], None, job_ids[1]]

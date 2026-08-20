@@ -204,6 +204,10 @@
         });
         {% if sync.running or sync.error %}startSyncPolling();{% endif %}
       }
+      // A bulk action that cannot be undone from the page asks first, in the browser's own words.
+      document.querySelectorAll("[data-confirm]").forEach(form => form.addEventListener("submit", event => {
+        if (!window.confirm(form.dataset.confirm)) event.preventDefault();
+      }));
       const companyResearchPanel = document.getElementById("company-research-panel");
       const companyResearchPhase = document.getElementById("company-research-phase");
       const companyResearchMessage = document.getElementById("company-research-message");

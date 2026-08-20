@@ -1,16 +1,66 @@
 {% extends "base.html" %}
 {% block title %}Duplicates · RoleBeacon{% endblock %}
 {% block content %}
-{% set exact_count = candidates|selectattr("similarity", "ge", 0.999)|list|length %}
-<section class="page-heading"><div><p class="eyebrow">DATA QUALITY</p><h1>Duplicate review</h1><p>Probable matches stay separate until you decide.</p></div>{% if exact_count %}<form method="post" action="/api/duplicates/merge-exact"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button-primary" title="Merge every pair below that is a 100% exact match, keeping each pair's first job. Anything under 100% stays for you to review individually.">Merge all exact matches ({{ exact_count }})</button></form>{% endif %}</section>
-{% if candidates %}
-<div class="table-wrap"><table><thead><tr><th>First job</th><th>Candidate</th><th>Similarity</th><th>Decision</th></tr></thead><tbody>
-{% for item in candidates %}<tr>
-  <td><a href="/jobs/{{ item.job_id }}"><strong>{{ item.job_title }}</strong></a><small>{{ item.job_company }} · {{ item.job_location }}</small></td>
-  <td><a href="/jobs/{{ item.candidate_job_id }}"><strong>{{ item.candidate_title }}</strong></a><small>{{ item.candidate_company }} · {{ item.candidate_location }}</small></td>
-  <td>{{ (item.similarity * 100)|round|int }}%</td>
-  <td><form class="inline-form" method="post" action="/api/duplicates/{{ item.id }}/merge"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button-primary" name="keep_job_id" value="{{ item.job_id }}">Merge, keep first</button></form><form class="inline-form" method="post" action="/api/duplicates/{{ item.id }}/dismiss"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button">Keep separate</button></form></td>
-</tr>{% endfor %}
-</tbody></table></div>
+<section class="page-heading">
+  <div><p class="eyebrow">DATA QUALITY</p><h1>Duplicate review</h1><p>Probable matches stay separate until you decide. Each set below is one decision: keep one copy, or keep them all.</p></div>
+  <span>{{ duplicates.total }} sets{% if duplicates.exact_total %} · {{ duplicates.exact_total }} identical{% endif %}</span>
+</section>
+{% if duplicates.clusters %}
+{% if duplicates.exact_total %}
+{# The bulk merge used to be the page's primary button with nothing to preview. The sets it
+   would act on are the ones marked identical below, and it asks before it runs. #}
+<form class="bulk-merge" method="post" action="/api/duplicates/merge-exact" data-confirm="Merge {{ duplicates.exact_total }} identical sets, keeping the first job collected in each? This cannot be undone from this page.">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <button class="button">Merge all {{ duplicates.exact_total }} identical sets</button>
+  <span class="muted">Keeps the first job collected in each set. Anything below 100% is left for you.</span>
+</form>
+{% endif %}
+<div class="duplicate-list">
+  {% for cluster in duplicates.clusters %}
+  <section class="duplicate-set">
+    <header>
+      <div>
+        <h2>{{ cluster.shared.title or 'Different titles' }}</h2>
+        <p class="muted">{{ cluster.shared.company or 'different companies' }}{% if cluster.shared.location %} · {{ cluster.shared.location }}{% endif %} · {{ cluster.jobs|length }} copies</p>
+      </div>
+      <span class="status {{ 'status-eligible' if cluster.similarity >= 0.999 else 'status-unknown' }}">{{ 'identical' if cluster.similarity >= 0.999 else (cluster.similarity * 100)|round|int ~ '% alike' }}</span>
+    </header>
+    <ul class="duplicate-copies">
+      {% for job in cluster.jobs %}
+      <li>
+        <div>
+          {% if not cluster.shared.title %}<a href="/jobs/{{ job.id }}"><strong>{{ job.title }}</strong></a>{% endif %}
+          {% if not cluster.shared.company or not cluster.shared.location %}<span>{{ job.company }}{% if job.location %} · {{ job.location }}{% endif %}</span>{% endif %}
+          <span class="duplicate-origin">{{ job.primary_source_id or 'unknown source' }} · first seen {{ job.first_seen_at|time_ago }}{% if job.status != 'new' %} · {{ job.status|replace('_', ' ') }}{% endif %}{% if job.artifact_count %} · has generated documents{% endif %}</span>
+          <a class="duplicate-url" href="{{ job.canonical_url }}" target="_blank" rel="noopener">{{ job.canonical_url }}</a>
+        </div>
+        <div class="duplicate-actions">
+          <a class="button button-quiet" href="/jobs/{{ job.id }}">Open</a>
+          <form method="post" action="/api/duplicates/merge">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="candidate_ids" value="{{ cluster.candidate_ids|join(',') }}">
+            <input type="hidden" name="return" value="/duplicates?page={{ page }}">
+            <button class="button button-primary" name="keep_job_id" value="{{ job.id }}">Keep this one</button>
+          </form>
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
+    <form class="inline-form" method="post" action="/api/duplicates/dismiss">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="candidate_ids" value="{{ cluster.candidate_ids|join(',') }}">
+      <input type="hidden" name="return" value="/duplicates?page={{ page }}">
+      <button class="button">Keep separate</button>
+    </form>
+  </section>
+  {% endfor %}
+</div>
+{% if pages > 1 %}
+<nav class="pager" aria-label="Duplicate sets">
+  {% if page > 1 %}<a class="button" href="/duplicates?page={{ page - 1 }}">← Previous</a>{% endif %}
+  <span class="muted">Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a class="button" href="/duplicates?page={{ page + 1 }}">Next →</a>{% endif %}
+</nav>
+{% endif %}
 {% else %}<div class="empty-state"><h2>No duplicates to review</h2><p>Probable cross-source matches will appear here.</p></div>{% endif %}
 {% endblock %}

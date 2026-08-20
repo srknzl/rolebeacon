@@ -318,10 +318,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     @app.get("/duplicates", response_class=HTMLResponse)
-    async def duplicates_page(request: Request) -> HTMLResponse:
+    async def duplicates_page(request: Request, page: int = 1) -> HTMLResponse:
+        page = max(1, page)
+        duplicates = database.list_duplicate_clusters(limit=DUPLICATES_PER_PAGE, offset=(page - 1) * DUPLICATES_PER_PAGE)
         return templates.TemplateResponse(
             request, "duplicates.html",
-            page_context(request, candidates=database.list_duplicate_candidates()),
+            page_context(
+                request,
+                duplicates=duplicates,
+                page=page,
+                pages=max(1, -(-duplicates["total"] // DUPLICATES_PER_PAGE)),
+            ),
         )
 
     @app.get("/imports", response_class=HTMLResponse)
@@ -761,6 +768,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return RedirectResponse("/duplicates", status_code=303)
         return JSONResponse({"candidate_id": candidate_id, "status": "dismissed"})
 
+    @app.post("/api/duplicates/merge")
+    async def merge_duplicate_cluster(request: Request) -> Response:
+        """Decide a whole set of copies at once, keeping the job the reader picked.
+
+        merge_duplicate() dismisses a pair whose jobs have already been merged away, so the
+        pairs inside the set can just be replayed in order.
+        """
+        payload = await _payload(request)
+        keep_job_id = _integer(payload.get("keep_job_id"), "keep_job_id")
+        merged = 0
+        for candidate_id in _integer_list(payload.get("candidate_ids"), "candidate_ids"):
+            try:
+                database.merge_duplicate(candidate_id, keep_job_id)
+                merged += 1
+            except (LookupError, ValueError):
+                continue
+        if _wants_html(request):
+            return RedirectResponse(_same_site_path(str(payload.get("return", ""))) or "/duplicates", status_code=303)
+        return JSONResponse({"job_id": keep_job_id, "merged": merged})
+
+    @app.post("/api/duplicates/dismiss")
+    async def dismiss_duplicate_cluster(request: Request) -> Response:
+        payload = await _payload(request)
+        candidate_ids = _integer_list(payload.get("candidate_ids"), "candidate_ids")
+        for candidate_id in candidate_ids:
+            database.dismiss_duplicate(candidate_id)
+        if _wants_html(request):
+            return RedirectResponse(_same_site_path(str(payload.get("return", ""))) or "/duplicates", status_code=303)
+        return JSONResponse({"dismissed": len(candidate_ids)})
+
     @app.post("/api/duplicates/merge-exact")
     async def merge_exact_duplicates(request: Request) -> Response:
         result = database.merge_all_exact_duplicates()
@@ -771,10 +808,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/duplicates/{candidate_id}/merge")
     async def merge_duplicate(candidate_id: int, request: Request) -> Response:
         payload = await _payload(request)
-        try:
-            keep_job_id = int(payload["keep_job_id"]) if payload.get("keep_job_id") is not None else None
-        except (TypeError, ValueError) as error:
-            raise HTTPException(status_code=422, detail="keep_job_id must be an integer") from error
+        keep_job_id = _integer(payload.get("keep_job_id"), "keep_job_id")
         try:
             winner = database.merge_duplicate(candidate_id, keep_job_id)
         except LookupError as error:
@@ -873,6 +907,10 @@ FILTER_CHIP_LABELS: dict[str, str] = {
     "has_salary": "Has stated salary",
     "hide_unmet_experience": "Hiding unmet experience requirements",
 }
+
+# One screen of decisions at a time. 366 sets of copies is not a page anyone works through in
+# one sitting, and rendering them all is 366 forms the browser lays out before the first one.
+DUPLICATES_PER_PAGE = 50
 
 # The "Scored by" dropdown names engines, not endpoints, so its chip must too. A bookmarked
 # URL naming one stored provider still filters, and falls back to showing that raw value.
@@ -1091,6 +1129,21 @@ def _active_filter_chips(
             }
         )
     return chips
+
+
+def _integer(value: Any, field: str) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError) as error:
+        raise HTTPException(status_code=422, detail=f"{field} must be an integer") from error
+
+
+def _integer_list(value: Any, field: str) -> list[int]:
+    """A comma-separated string from a form, or a list from JSON - one decision covers a whole set."""
+    items = value if isinstance(value, list) else str(value or "").split(",")
+    return [number for item in items if (number := _integer(str(item).strip(), field)) is not None]
 
 
 async def _payload(request: Request) -> dict[str, Any]:

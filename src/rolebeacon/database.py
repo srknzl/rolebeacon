@@ -1398,6 +1398,78 @@ class Database:
                 (status,),
             ).fetchall()]
 
+    def list_duplicate_clusters(self, status: str = "open", limit: int = 50, offset: int = 0) -> dict[str, Any]:
+        """Open candidates grouped into one decision per set of jobs that are the same posting.
+
+        Four copies of one Amazon posting produce six pair rows, and a reviewer answering them
+        one at a time answers the same question six times. The question is which copy to keep,
+        asked once per set, so the pairs are joined back into the set they came from.
+        """
+        candidates = self.list_duplicate_candidates(status)
+        parent: dict[int, int] = {}
+
+        def root(job_id: int) -> int:
+            parent.setdefault(job_id, job_id)
+            while parent[job_id] != job_id:
+                parent[job_id] = parent[parent[job_id]]
+                job_id = parent[job_id]
+            return job_id
+
+        for item in candidates:
+            first, second = root(int(item["job_id"])), root(int(item["candidate_job_id"]))
+            if first != second:
+                parent[first] = second
+        grouped: dict[int, list[dict[str, Any]]] = {}
+        for item in candidates:
+            grouped.setdefault(root(int(item["job_id"])), []).append(item)
+        clusters: list[dict[str, Any]] = [
+            {
+                "candidate_ids": sorted(int(item["id"]) for item in members),
+                "job_ids": sorted({int(item[key]) for item in members for key in ("job_id", "candidate_job_id")}),
+                "similarity": min(float(item["similarity"]) for item in members),
+            }
+            for members in grouped.values()
+        ]
+        clusters.sort(key=lambda cluster: (-cluster["similarity"], cluster["candidate_ids"][0]))
+        page = clusters[offset : offset + limit]
+        jobs = self._duplicate_cluster_jobs([job_id for cluster in page for job_id in cluster["job_ids"]])
+        for cluster in page:
+            members = [jobs[job_id] for job_id in cluster["job_ids"] if job_id in jobs]
+            cluster["jobs"] = members
+            # Repeating the fields every copy agrees on is what made the old table unreadable:
+            # they belong to the set, and only the fields that differ belong to a row.
+            cluster["shared"] = {
+                field: members[0][field] if members and len({item[field] for item in members}) == 1 else ""
+                for field in ("title", "company", "location")
+            }
+        return {
+            "clusters": [cluster for cluster in page if cluster["jobs"]],
+            "total": len(clusters),
+            "exact_total": sum(1 for cluster in clusters if cluster["similarity"] >= 0.999),
+        }
+
+    def _duplicate_cluster_jobs(self, job_ids: list[int]) -> dict[int, dict[str, Any]]:
+        """What actually distinguishes one copy from another: where it came from, when it arrived,
+        and whether the reader has already put work into it."""
+        if not job_ids:
+            return {}
+        placeholders = ",".join("?" for _ in job_ids)
+        with self.connect() as connection:
+            return {
+                int(row["id"]): dict(row)
+                for row in connection.execute(
+                    f"""
+                    SELECT j.id, j.title, j.company, j.location, j.canonical_url, j.primary_source_id,
+                           j.first_seen_at, j.status, j.active,
+                           (SELECT COUNT(*) FROM applications a
+                             WHERE a.job_id = j.id AND (a.resume_path != '' OR a.packet_path != '' OR a.cover_letter_path != '')
+                           ) AS artifact_count
+                    FROM jobs j WHERE j.id IN ({placeholders})
+                    """,
+                    job_ids,
+                ).fetchall()
+            }
+
     def dismiss_duplicate(self, candidate_id: int) -> None:
         with self.connect() as connection:
             connection.execute(
