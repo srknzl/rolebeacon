@@ -9,7 +9,7 @@ from typing import Any
 from .domain import EligibilityResult, EligibilityStatus, ScoreResult
 from .profile import CONTINENT_COUNTRY_CODES, DEFAULT_SCORE_WEIGHTS, country_names_by_code
 
-SCORING_PROMPT_VERSION = "job-fit-v20"
+SCORING_PROMPT_VERSION = "job-fit-v21"
 
 # Ineligibility is a hard gate: no combination of fit signals may push a total above this cap.
 # LLM scoring is only ever invoked for eligible jobs (see sync.py), so every ineligible job's
@@ -270,9 +270,17 @@ NO_SPONSOR_PATTERNS = (
     r"(?:citizens|permanent residents) only",
 )
 SPONSOR_PATTERNS = (
-    r"visa sponsorship (?:is |are )?(?:available|provided|offered)",
-    r"we (?:can|will) sponsor",
-    r"sponsorship available",
+    # The employer as subject ("we sponsor"), mirroring "we do not sponsor" on the negative list.
+    # ponytail: the object exclusion covers the perk-section phrasings we have seen; extend it if a
+    # posting sponsors something else entirely.
+    r"we (?:can |will |do |are able to |are happy to |are willing to )?sponsor\b"
+    r"(?! (?:conferences?|meetups?|events?|hackathons?|open[- ]source))",
+    # Sponsorship as the object of the verb. Negated verbs mostly match NO_SPONSOR_PATTERNS first,
+    # but "cannot offer sponsorship" and its contractions do not, so exclude them here too.
+    r"(?<!not )(?<!n't )(?<!never )(?:offer|provide|support)s? (?:visa |work[- ]visa |work permit )?sponsorship",
+    r"sponsorship (?:is |are )?(?:available|provided|offered)",
+    # Only the adjectival form: "not eligible for visa sponsorship" must not read as positive.
+    r"(?:is|are) (?:visa |work[- ]visa )?sponsorship[- ]eligible",
     r"blue card",
 )
 RELOCATION_PATTERNS = (

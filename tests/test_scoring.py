@@ -858,3 +858,36 @@ def test_score_distribution_requires_all_dimensions() -> None:
 
     with pytest.raises(ValueError, match="exactly the supported"):
         SearchPreferencesV1.model_validate(invalid)
+
+
+@pytest.mark.parametrize(
+    ("description", "expected"),
+    [
+        ("We sponsor work visas for this role.", "available"),
+        ("We sponsor visas.", "available"),
+        ("We offer visa sponsorship.", "available"),
+        ("We provide visa sponsorship.", "available"),
+        ("Sponsorship is offered for this position.", "available"),
+        ("This role is visa sponsorship eligible.", "available"),
+        ("We are happy to sponsor the right candidate.", "available"),
+        ("Visa sponsorship is available.", "available"),
+        ("Visa sponsorship provided.", "available"),
+        ("Work visa sponsorship available.", "available"),
+        ("We can sponsor a work permit.", "available"),
+        ("We support a Blue Card application.", "available"),
+        ("We do not sponsor employment visas.", "unavailable"),
+        ("No visa sponsorship is offered for this role.", "unavailable"),
+        ("We are unable to provide visa sponsorship.", "unavailable"),
+        ("You must already be legally authorized to work in Germany.", "unavailable"),
+        ("We cannot offer visa sponsorship.", "unknown"),
+        ("We don't offer sponsorship for this position.", "unknown"),
+        ("Sponsorship is not available for this role.", "unknown"),
+        ("This role is not eligible for visa sponsorship.", "unknown"),
+        ("We sponsor conferences and meetups you want to attend.", "unknown"),
+        ("Build backend systems with Java and Go.", "unknown"),
+    ],
+)
+def test_sponsorship_wording_families(description: str, expected: str) -> None:
+    result = evaluate(job(location="Berlin, Germany", remote_scope="", description=description))
+
+    assert result.sponsorship == expected
