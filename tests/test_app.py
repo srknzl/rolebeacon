@@ -1920,3 +1920,25 @@ def test_preference_lists_are_chips_and_the_country_is_one_picker(tmp_path) -> N
     assert 'select.append(new Option(`${name || code} (${code})`, code))' in page.text
     # What is still typed into grows with its content instead of clipping at four lines.
     assert 'document.querySelectorAll("textarea:not(.country-value):not([data-token-list])")' in page.text
+
+
+def test_the_dark_palette_covers_every_colour_the_stylesheet_uses(tmp_path) -> None:
+    """Colours live in two token blocks and nowhere else, so a dark page needs no other edit.
+
+    A rule that hardcodes a colour keeps its light value on a dark background; a light token added
+    without a dark counterpart does the same. Both are invisible until someone looks at the app in
+    dark mode, which is exactly when nobody is looking.
+    """
+    css = (configured_settings(tmp_path).resource_dir / "static" / "style.css").read_text()
+    literal = re.compile(r"#[0-9a-fA-F]{3,8}\b|\brgba?\(")
+    declaration = re.compile(r"^\s*(--[a-z-]+):\s*([^;]+);", re.M)
+
+    dark_start = css.index("@media (prefers-color-scheme: dark)")
+    dark_end = css.index("\n  }\n}", dark_start) + len("\n  }\n}")
+    light, dark = css[: css.index("\n}\n", css.index(":root {"))], css[dark_start:dark_end]
+    elsewhere = css[dark_end:]
+
+    coloured = {name for name, value in declaration.findall(light) if literal.search(value)}
+    assert coloured == {name for name, _ in declaration.findall(dark)}
+    assert "color-scheme: light dark;" in light
+    assert not literal.findall(elsewhere), "colours belong in the token blocks, not in a rule"

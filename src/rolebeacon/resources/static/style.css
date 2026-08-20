@@ -8,6 +8,13 @@
   --muted: #5a6472;
   --line: #dde2e8;
   --line-soft: #e9ecf0;
+  --line-strong: #b7bfc9;
+  /* Translucent layers over the page: the topbar, the floating save bar, the sticky tab strip. */
+  --veil: rgba(255, 255, 255, .92);
+  --veil-soft: rgba(238, 241, 244, .94);
+  /* Text on a brand-filled surface. White reads on the light palette's blue, not on the dark
+     palette's brighter one, which has to stay light enough to be link text on a dark page. */
+  --on-brand: #ffffff;
 
   --brand: #2952a3;
   --brand-strong: #1f3f80;
@@ -49,6 +56,49 @@
   --radius-md: 10px;
   --radius-lg: 14px;
   --radius-full: 999px;
+
+  color-scheme: light dark;
+}
+
+/* The same tokens for a dark page. A tool that stays open all day beside an editor should not be
+   the one white rectangle on the screen. Only the palette changes: every rule above reads it.
+   `color-scheme` is what makes the native controls, scrollbars, and form widgets follow. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1319;
+    --paper: #181d25;
+    --ink: #e7ecf3;
+    --muted: #9aa6b6;
+    --line: #2b323d;
+    --line-soft: #232a34;
+    --line-strong: #3b4552;
+    --veil: rgba(24, 29, 37, .92);
+    --veil-soft: rgba(15, 19, 25, .94);
+
+    --brand: #7aa5f0;
+    --brand-strong: #9dbcf6;
+    --brand-soft: #1d2942;
+    --on-brand: #0f1319;
+
+    --success: #4fc98b;
+    --success-bg: #12301f;
+    --success-text: #86e2b0;
+
+    --warning: #e0a63a;
+    --warning-bg: #33270f;
+    --warning-text: #f0c675;
+
+    --danger: #e5796a;
+    --danger-bg: #351916;
+    --danger-text: #f4a094;
+
+    --info: #7aa5f0;
+    --info-bg: #1d2942;
+    --info-text: #9dbcf6;
+
+    --shadow-sm: 0 2px 8px rgba(0, 0, 0, .45);
+    --shadow-md: 0 16px 45px rgba(0, 0, 0, .55);
+  }
 }
 
 /* ============================================================
@@ -98,7 +148,7 @@ code {
   align-items: center;
   gap: 28px;
   padding: 0 max(24px, calc((100vw - 1240px) / 2));
-  background: rgba(255, 255, 255, .92);
+  background: var(--veil);
   border-bottom: 1px solid var(--line);
   position: sticky;
   top: 0;
@@ -212,9 +262,9 @@ code {
   justify-content: center;
   align-items: center;
 }
-.button:hover { border-color: #b7bfc9; }
+.button:hover { border-color: var(--line-strong); }
 .button:disabled { opacity: .5; cursor: wait; }
-.button-primary { background: var(--brand); color: white; border-color: var(--brand); }
+.button-primary { background: var(--brand); color: var(--on-brand); border-color: var(--brand); }
 .button-primary:hover { background: var(--brand-strong); border-color: var(--brand-strong); }
 .button-quiet { background: transparent; }
 .wide { width: 100%; margin-top: 9px; }
@@ -222,7 +272,7 @@ code {
 input, select, textarea {
   font: inherit;
   color: var(--ink);
-  background: white;
+  background: var(--paper);
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   padding: 10px;
@@ -255,7 +305,7 @@ textarea { resize: vertical; }
 .wizard-progress button { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 7px; min-width: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--muted); padding: 8px; font: 700 12px var(--font-sans); text-align: left; cursor: pointer; }
 .wizard-progress button span { display: grid; width: 24px; height: 24px; place-items: center; border-radius: 50%; background: var(--line-soft); color: var(--muted); }
 .wizard-progress button[aria-current="step"] { background: var(--brand-soft); color: var(--brand-strong); }
-.wizard-progress button[aria-current="step"] span { background: var(--brand); color: white; }
+.wizard-progress button[aria-current="step"] span { background: var(--brand); color: var(--on-brand); }
 .wizard-progress button:disabled { cursor: default; opacity: .45; }
 .wizard-start > p { max-width: 850px; }
 .wizard-path-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 20px; }
@@ -275,7 +325,7 @@ textarea { resize: vertical; }
 .wizard-review-row { display: grid; grid-template-columns: minmax(140px, .35fr) 1fr; gap: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper); }
 .wizard-review-row.is-ready { border-left: 4px solid var(--success); }
 .wizard-review-row.is-warning { border-left: 4px solid var(--warning); background: var(--warning-bg); }
-.wizard-controls { position: sticky; bottom: 12px; z-index: 10; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 16px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-md); background: rgba(255, 255, 255, .96); box-shadow: var(--shadow-md); }
+.wizard-controls { position: sticky; bottom: 12px; z-index: 10; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 16px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--veil); box-shadow: var(--shadow-md); }
 .wizard-controls span { color: var(--muted); font-size: 13px; text-align: center; }
 /* The wizard hides steps with the hidden attribute, so every panel that sets its own display
    value must opt back out - otherwise .setup-actions (display: flex) keeps the final
@@ -377,7 +427,7 @@ label:has(> .help-tip):has(> .required-mark):not(:has(> input[type=checkbox])) >
   font-size: 11px;
   letter-spacing: .08em;
   background: var(--ink);
-  color: white;
+  color: var(--paper);
   border-radius: 5px;
   padding: 5px 8px;
 }
@@ -578,7 +628,7 @@ a.stat:hover, a.stat:focus-visible { background: var(--brand-soft); }
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   background: var(--paper);
-  box-shadow: 0 12px 28px rgba(0, 0, 0, .14);
+  box-shadow: var(--shadow-md);
 }
 .facet-menu-wide { min-width: 320px; }
 .facet-hint { margin: 0 0 2px; font-size: 11px; line-height: 1.45; color: var(--muted); }
@@ -667,7 +717,7 @@ a.stat:hover, a.stat:focus-visible { background: var(--brand-soft); }
   border-radius: 8px;
   background: var(--ink);
   box-shadow: var(--shadow-md);
-  color: white;
+  color: var(--paper);
   font-size: 12px;
   font-weight: 500;
   line-height: 1.4;
@@ -890,7 +940,7 @@ td small { display: block; color: var(--muted); }
   align-items: center;
   gap: 18px;
   padding: 13px 16px;
-  background: rgba(255, 255, 255, .96);
+  background: var(--veil);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-md);
@@ -913,7 +963,7 @@ td small { display: block; color: var(--muted); }
   top: 78px;
   z-index: 15;
   padding: 8px;
-  background: rgba(238, 241, 244, .94);
+  background: var(--veil-soft);
   border-radius: var(--radius-md);
   backdrop-filter: blur(10px);
 }
@@ -1008,7 +1058,7 @@ textarea[data-token-list] { display: none; }
   padding: 12px;
   border-radius: var(--radius-sm);
   background: var(--ink);
-  color: #e7ecf3;
+  color: var(--paper);
   font: 12px/1.5 var(--font-mono);
   white-space: pre-wrap;
 }
