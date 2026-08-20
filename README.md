@@ -32,7 +32,9 @@ OpenAI-compatible model is an optional quality layer for evidence-rich scoring a
 ## Screenshots
 
 All screenshots use synthetic candidate, company, source, and job data in an isolated local database.
-No external source was contacted to produce them.
+No external source was contacted to produce them. `uv run python tools/screenshots.py` regenerates the
+whole set: it seeds that database in a temporary directory, scores it with the real pipeline, serves it
+in-process, and reshoots every image.
 
 <p align="center">
   <img src="docs/screenshots/dashboard.png" alt="RoleBeacon dashboard opening on collection counts and the ranked shortlist" width="49%">
@@ -493,6 +495,13 @@ uv run python -m build
 ```
 
 `AGENTS.md` and `CLAUDE.md` are intentionally byte-for-byte identical and must be updated together.
+
+A change to the interface makes the README screenshots stale. Reshoot them in one command, review the
+diff, and commit the images with the change that caused it:
+
+```bash
+uv run python tools/screenshots.py
+```
 
 ## Remaining roadmap
 
