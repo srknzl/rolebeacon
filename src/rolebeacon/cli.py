@@ -524,7 +524,12 @@ def _run_jobs_command(
         "status": status,
     }
     try:
-        result = export_jobs(database, args.output_dir, sync=sync)
+        result = export_jobs(
+            database,
+            args.output_dir,
+            sync=sync,
+            source_names={source.id: source.name for source in settings.load_sources()},
+        )
     except Exception as error:
         print(f"Export failed: {type(error).__name__}: {error}", file=sys.stderr)
         return 1

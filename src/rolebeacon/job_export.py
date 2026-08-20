@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -28,7 +29,7 @@ def _is_recommended(job: dict[str, Any]) -> bool:
 
 
 def _project_job(
-    job: dict[str, Any], sources: list[dict[str, Any]], *, recommended: bool
+    job: dict[str, Any], sources: list[dict[str, Any]], *, recommended: bool, source_name: str = ""
 ) -> dict[str, Any]:
     posting_url = str(job.get("canonical_url") or "")
     application_url = str(job.get("apply_url") or posting_url)
@@ -55,6 +56,9 @@ def _project_job(
         "pipeline_status": str(job.get("status") or "new"),
         "scoring_status": str(job.get("score_status") or "pending"),
         "primary_source_id": str(job.get("primary_source_id") or ""),
+        # The id is what a machine joins on; the name is what the person reading the export knows
+        # the source by, and `linkedin-t-rkiye` is not a name.
+        "primary_source_name": source_name or str(job.get("primary_source_id") or ""),
         "sources": sources,
         "metadata": job.get("metadata") or {},
         "requirements": job.get("requirements") or [],
@@ -118,6 +122,8 @@ def _markdown(envelope: dict[str, Any]) -> str:
     kind = "Recommended jobs" if envelope["kind"] == "recommended" else "All jobs"
     selection = envelope["selection"]
     criteria = "Job-fit score ≥65 and eligibility is not ineligible." if envelope["kind"] == "recommended" else "All active, unmerged jobs."
+    # Every row of the recommended export is recommended, so the column would say "yes" 2,893 times.
+    show_recommended = envelope["kind"] != "recommended"
     lines = [
         f"# {kind}",
         "",
@@ -125,8 +131,10 @@ def _markdown(envelope: dict[str, Any]) -> str:
         f"Count: {envelope['count']}",
         f"Selection: {criteria} Sorted by `{selection['sort']}`.",
         "",
-        "| Rank | Recommended | Job fit | Eligibility | Title | Company | Location | Posted | Source | Link |",
-        "| ---: | :---: | ---: | --- | --- | --- | --- | --- | --- | --- |",
+        "| Rank |" + (" Recommended |" if show_recommended else "")
+        + " Job fit | Eligibility | Title | Company | Location | Posted | Source | Link |",
+        "| ---: |" + (" :---: |" if show_recommended else "")
+        + " ---: | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for rank, job in enumerate(envelope["jobs"], start=1):
         url = _markdown_cell(job["application_url"] or job["posting_url"])
@@ -136,14 +144,14 @@ def _markdown(envelope: dict[str, Any]) -> str:
             + " | ".join(
                 (
                     str(rank),
-                    "yes" if job["recommended"] else "",
+                    *(("yes" if job["recommended"] else "",) if show_recommended else ()),
                     _markdown_cell(job["scoring"]["job_fit"]),
                     _markdown_cell(job["eligibility"]["status"]),
                     _markdown_cell(job["title"]),
                     _markdown_cell(job["company"]),
                     _markdown_cell(job["location"]),
                     _markdown_cell(str(job["published_at"] or job["first_seen_at"] or "")[:10]),
-                    _markdown_cell(job["primary_source_id"]),
+                    _markdown_cell(job["primary_source_name"]),
                     link,
                 )
             )
@@ -178,13 +186,20 @@ def export_jobs(
     *,
     sync: dict[str, Any],
     generated_at: datetime | None = None,
+    source_names: Mapping[str, str] | None = None,
 ) -> JobExportResult:
     generated = generated_at or datetime.now(UTC)
     generated_iso = generated.astimezone(UTC).isoformat()
     rows = database.list_jobs(sort="decision_ready", limit=None)
     sources = database.list_job_sources([int(row["id"]) for row in rows])
+    names = source_names or {}
     projected = [
-        _project_job(row, sources.get(int(row["id"]), []), recommended=_is_recommended(row))
+        _project_job(
+            row,
+            sources.get(int(row["id"]), []),
+            recommended=_is_recommended(row),
+            source_name=names.get(str(row.get("primary_source_id") or ""), ""),
+        )
         for row in rows
     ]
     recommended = [job for job in projected if job["recommended"]]

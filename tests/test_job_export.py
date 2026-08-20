@@ -203,3 +203,29 @@ def test_interrupted_staging_directories_are_gitignored() -> None:
 
     assert "rolebeacon-jobs-*/" in ignore
     assert ".rolebeacon-jobs-*/" in ignore
+
+
+def test_markdown_names_the_source_and_drops_a_column_that_is_always_yes(tmp_path) -> None:
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    _add_scored_job(database, "linkedin-t-rkiye", 90, EligibilityStatus.ELIGIBLE)
+
+    result = export_jobs(
+        database,
+        tmp_path / "exports",
+        sync={"requested": False, "performed": False, "status": None},
+        source_names={"source-linkedin-t-rkiye": "LinkedIn — Türkiye"},
+    )
+
+    recommended = (result.directory / "recommended-jobs.md").read_text(encoding="utf-8")
+    every_job = (result.directory / "all-jobs.md").read_text(encoding="utf-8")
+    # The export is the artifact a person keeps, so it says what the UI says.
+    assert "| LinkedIn — Türkiye |" in recommended
+    assert "| source-linkedin-t-rkiye |" not in recommended
+    # Every row of the recommended export is recommended; the column only varies in all-jobs.
+    assert "| Recommended |" not in recommended
+    assert "| Recommended |" in every_job
+    # The id a machine joins on stays in the JSON.
+    exported = json.loads((result.directory / "recommended-jobs.json").read_text(encoding="utf-8"))
+    assert exported["jobs"][0]["primary_source_id"] == "source-linkedin-t-rkiye"
+    assert exported["jobs"][0]["primary_source_name"] == "LinkedIn — Türkiye"
