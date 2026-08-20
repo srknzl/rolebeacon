@@ -1274,7 +1274,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.116,<1" },
     { name = "httpx", specifier = ">=0.28,<1" },
     { name = "jinja2", specifier = ">=3.1,<4" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.17,<2" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.17,<3" },
     { name = "pip-audit", marker = "extra == 'dev'", specifier = ">=2.9,<3" },
     { name = "platformdirs", specifier = ">=4.3,<5" },
     { name = "playwright", specifier = ">=1.54,<2" },
