@@ -1564,3 +1564,23 @@ def test_a_job_card_badges_only_what_could_have_been_otherwise(tmp_path) -> None
     # A decision the reader actually made is still worth a badge.
     assert bookmarked.status_code == 200
     assert ">bookmarked<" in re.search(r'<div class="job-card-badges">(.*?)</div>', after.text, re.S).group(1)
+
+
+def test_a_help_tip_never_steals_its_field_s_label(tmp_path) -> None:
+    # An implicit <label> binds to its first labelable descendant. The tip sits before the field,
+    # so a labelable tip left the field itself unlabelled - eleven of them on the Jobs page alone.
+    settings = replace(configured_settings(tmp_path), auto_sync=False)
+    app = create_app(settings)
+
+    with TestClient(app) as client:
+        pages = {path: client.get(path) for path in ("/jobs", "/imports", "/setup", "/sources")}
+
+    labelable = re.compile(r"<(button|input|select|textarea)\b", re.I)
+    for path, page in pages.items():
+        assert page.status_code == 200, path
+        for block in re.findall(r"<label\b[^>]*>(.*?)</label>", page.text, re.S):
+            if "help-tip" not in block:
+                continue
+            first = labelable.search(block)
+            # Whatever the label binds to, it must be the field - never the tip.
+            assert first is not None and first.group(1).lower() != "button", f"{path}: {block[:120]}"

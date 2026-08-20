@@ -1,3 +1,6 @@
+{# A <button> is a labelable element, so a tip written before the field inside an implicit
+   <label> swallowed the label: the field itself was left unlabelled in ~40 places. A span is
+   not labelable, and the tip needs no click - it opens on hover and on keyboard focus. #}
 {% macro tip(text) -%}
-<button class="help-tip" type="button" aria-label="{{ text }}" data-tooltip="{{ text }}">?</button>
+<span class="help-tip" role="note" tabindex="0" aria-label="{{ text }}" data-tooltip="{{ text }}">?</span>
 {%- endmacro %}
