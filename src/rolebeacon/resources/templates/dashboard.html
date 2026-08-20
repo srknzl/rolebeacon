@@ -1,25 +1,19 @@
 {% extends "base.html" %}
 {% block title %}Dashboard · RoleBeacon{% endblock %}
 {% block content %}
-<section class="hero">
-  <div>
-    <p class="eyebrow">LOCAL JOB INTELLIGENCE</p>
-    <h1>Your strongest opportunities, without the job-board treadmill.</h1>
-    <p class="lede">New postings are collected incrementally, checked for authorization and relocation constraints, then ranked against your verified profile.</p>
-    <p class="muted">RoleBeacon only sees jobs from your enabled sources — it cannot guarantee catching every posting. <a href="/sources">See Sources for exact coverage</a>.</p>
-  </div>
-</section>
-
 <section class="stats-grid">
-  <div class="stat" title="Jobs first collected in the last 24 hours."><strong>{{ stats.new_today }}</strong><span>new today</span></div>
-  <div class="stat" title="Collected jobs that are not rejected or closed."><strong>{{ stats.total }}</strong><span>active jobs</span></div>
-  <div class="stat" title="Jobs you bookmarked."><strong>{{ stats.shortlisted }}</strong><span>bookmarked</span></div>
+  <a class="stat" href="/jobs?sort=newest" title="Jobs first collected in the last 24 hours. Opens all jobs, newest first."><strong>{{ stats.new_today }}</strong><span>new today</span></a>
+  <a class="stat" href="/jobs" title="Collected jobs that are not rejected or closed."><strong>{{ stats.total }}</strong><span>active jobs</span></a>
+  <a class="stat" href="/jobs?job_status=bookmarked" title="Jobs you bookmarked."><strong>{{ stats.shortlisted }}</strong><span>bookmarked</span></a>
   <div class="stat" title="Jobs collected successfully while LLM scoring is waiting or unavailable."><strong>{{ stats.pending_llm }}</strong><span>waiting for model</span></div>
-  <div class="stat {% if stats.source_errors %}stat-warning{% endif %}" title="Sources whose latest collection attempt failed. Other sources continue independently."><strong>{{ stats.source_errors }}</strong><span>source errors</span></div>
+  <a class="stat{% if stats.source_errors %} stat-warning{% endif %}" href="/sources" title="Sources whose latest collection attempt failed. Other sources continue independently."><strong>{{ stats.source_errors }}</strong><span>source errors</span></a>
 </section>
 
 <section class="section-heading">
-  <div><p class="eyebrow">SHORTLIST</p><h2>Recommended now</h2></div>
+  <div>
+    <h1>Recommended now</h1>
+    <p class="muted">Eligible jobs scoring 65 or higher, from your enabled sources only — <a href="/sources">see exact coverage</a>.</p>
+  </div>
   <a href="/jobs?min_score=65">View all →</a>
 </section>
 <div class="job-list">
@@ -27,4 +21,9 @@
   <div class="empty-state"><h3>No recommended jobs yet</h3>{% if stats.total %}<p>RoleBeacon shows only eligible jobs scoring 65 or higher here. Review all collected jobs to see lower-scoring or ineligible results.</p>{% else %}<p>Run the first sync to collect jobs. Collection continues even if the LAN model is offline.</p>{% endif %}</div>
   {% endfor %}
 </div>
+{% if jobs|length >= review_limit %}
+<p class="list-end">That is your daily review limit of {{ review_limit }}. <a href="/jobs?min_score=65">View all recommended jobs →</a></p>
+{% elif jobs %}
+<p class="list-end">That is every recommended job right now. <a href="/jobs">Browse all collected jobs →</a></p>
+{% endif %}
 {% endblock %}

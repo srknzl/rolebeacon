@@ -169,8 +169,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 stats=database.dashboard_stats(),
                 jobs=database.list_jobs(
                     JobFilters(min_score=65, exclude_ineligible=True),
-                    limit=int(app_settings.load_search_profile().get("daily_review_limit", 15)),
+                    limit=(review_limit := int(app_settings.load_search_profile().get("daily_review_limit", 15))),
                 ),
+                review_limit=review_limit,
                 sources=database.list_sources(),
             ),
         )

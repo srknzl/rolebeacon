@@ -573,7 +573,13 @@ def test_dashboard_jobs_api_and_feedback(tmp_path) -> None:
     # rather than in the empty state.
     assert "Backend Engineer" in dashboard.text
     assert "No recommended jobs yet" not in dashboard.text
-    assert "only sees jobs from your enabled sources" in dashboard.text
+    assert "from your enabled sources only" in dashboard.text
+    # The page opens on the numbers and the shortlist, not on a pitch for the tool already installed.
+    assert dashboard.text.index("stats-grid") < dashboard.text.index("Recommended now")
+    assert '<a class="stat" href="/jobs?job_status=bookmarked"' in dashboard.text
+    assert '<a class="stat" href="/sources"' in dashboard.text
+    # A list that stops must say why it stopped, rather than reading as "these are all of them".
+    assert "That is every recommended job right now." in dashboard.text
     assert jobs.json()["jobs"][0]["title"] == "Backend Engineer"
     assert feedback.json()["status"] == "bookmarked"
     assert database.get_job(job_id)["status"] == "bookmarked"
