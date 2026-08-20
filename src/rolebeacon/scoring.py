@@ -9,7 +9,7 @@ from typing import Any
 from .domain import EligibilityResult, EligibilityStatus, ScoreResult
 from .profile import CONTINENT_COUNTRY_CODES, DEFAULT_SCORE_WEIGHTS, country_names_by_code
 
-SCORING_PROMPT_VERSION = "job-fit-v21"
+SCORING_PROMPT_VERSION = "job-fit-v22"
 
 # Ineligibility is a hard gate: no combination of fit signals may push a total above this cap.
 # LLM scoring is only ever invoked for eligible jobs (see sync.py), so every ineligible job's
@@ -263,10 +263,15 @@ GENERIC_ROLE_WORDS = frozenset(
 
 NO_SPONSOR_PATTERNS = (
     r"no (?:visa )?sponsorship",
-    r"(?:unable|not able) to (?:provide|offer) (?:visa )?sponsorship",
+    # One negated-verb pattern for "we cannot sponsor", "we do not sponsor" and "we don't offer
+    # visa sponsorship" alike. The noun is required, so "we do not offer relocation" is not a
+    # sponsorship statement, and "you will not need sponsorship" keeps a verb we do not negate.
+    r"(?:can(?:['\u2019]t| ?not)|will not|won['\u2019]t|do(?:es)? not|do(?:es)?n['\u2019]t|unable to"
+    r"|not able to|never) (?:(?:provide|offer|support)\w* )?(?:visa |work[- ]visa |work permit )?sponsor\w*",
+    r"sponsorship (?:is |are )?not (?:available|provided|offered)",
+    r"not eligible for (?:visa |work[- ]visa )?sponsorship",
     r"must (?:already )?be (?:legally )?authorized to work",
     r"without (?:current or future )?sponsorship",
-    r"we do not sponsor",
     r"(?:citizens|permanent residents) only",
 )
 SPONSOR_PATTERNS = (
@@ -275,8 +280,8 @@ SPONSOR_PATTERNS = (
     # posting sponsors something else entirely.
     r"we (?:can |will |do |are able to |are happy to |are willing to )?sponsor\b"
     r"(?! (?:conferences?|meetups?|events?|hackathons?|open[- ]source))",
-    # Sponsorship as the object of the verb. Negated verbs mostly match NO_SPONSOR_PATTERNS first,
-    # but "cannot offer sponsorship" and its contractions do not, so exclude them here too.
+    # Sponsorship as the object of the verb. NO_SPONSOR_PATTERNS is checked first and wins, but the
+    # negated verb is excluded here as well so this list does not read a refusal as an offer alone.
     r"(?<!not )(?<!n't )(?<!never )(?:offer|provide|support)s? (?:visa |work[- ]visa |work permit )?sponsorship",
     r"sponsorship (?:is |are )?(?:available|provided|offered)",
     # Only the adjectival form: "not eligible for visa sponsorship" must not read as positive.
