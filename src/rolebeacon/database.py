@@ -93,7 +93,9 @@ ARTIFACT_STAGES = ("saved", "preparing", "ready")
 # Kanban columns on the pipeline board, in display order. The board is driven directly by
 # jobs.status now, not by applications-table membership; "new" is the collector default and
 # is never a column of its own.
-PIPELINE_COLUMNS = ("not_interested", "bookmarked", "applied", "rejected", "offer")
+# Left to right in the direction work actually flows, so the board reads as a pipeline:
+# what is queued, what is out, what came back. Closed outcomes sit at the end.
+PIPELINE_COLUMNS = ("bookmarked", "applied", "offer", "rejected", "not_interested")
 
 # Sort keys are a fixed allow-list because they are interpolated into ORDER BY.
 JOB_SORTS: dict[str, str] = {

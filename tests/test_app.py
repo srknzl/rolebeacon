@@ -1459,3 +1459,32 @@ def test_a_review_decision_returns_to_the_queue_and_refuses_an_off_site_return(t
     assert recorded == "applied"
     # A "return" that leaves this origin is dropped rather than followed.
     assert elsewhere.headers["location"] == f"/jobs/{job_id}"
+
+
+def test_the_board_reads_as_a_pipeline_and_a_card_can_be_moved_without_a_mouse(tmp_path) -> None:
+    app = create_app(configured_settings(tmp_path))
+    job_id, _ = app.state.database.upsert_job(
+        CollectedJob(
+            source="manual", source_job_id="board", title="Backend Engineer", company="Example",
+            location="Remote", description="Build backend systems.", url="https://example.test/board",
+        )
+    )
+
+    with TestClient(app) as client:
+        client.post(f"/api/jobs/{job_id}/feedback", json={"status": "bookmarked"})
+        board = client.get("/applications")
+
+    headings = re.findall(r'<section class="kanban-column" data-status="([^"]+)"', board.text)
+    # Left to right in the order work moves, not alphabetically or by internal enum order.
+    assert headings == ["bookmarked", "applied", "offer", "rejected", "not_interested"]
+    # Dragging is not the only way to change a status.
+    assert f'data-move-job="{job_id}"' in board.text
+    assert '<option value="applied">Applied</option>' in board.text
+    assert '<option value="new">Off the board</option>' in board.text
+    # Every column is offered, so a card moved on the client still has a complete menu.
+    assert '<option value="bookmarked">' in board.text
+    # Route ids are labelled the same way they are everywhere else in the UI.
+    card = re.search(r"<small>(.*?)</small>", board.text, re.S)
+    assert card is not None
+    labels = {str(item["label"]) for item in app.state.settings.load_strategies()} | {"Unclassified"}
+    assert card.group(1).split(" · ")[1] in labels

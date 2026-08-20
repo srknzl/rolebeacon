@@ -757,32 +757,18 @@ label:has(> .help-tip):not(:has(> input[type=checkbox])) > :not(.help-tip) { gri
 /* ============================================================
    Kanban (job tracking)
    ============================================================ */
-.kanban { display: grid; grid-template-columns: repeat(5, minmax(210px, 1fr)); gap: 12px; overflow-x: auto; padding-bottom: 20px; }
-.kanban-column { background: var(--line-soft); border-radius: var(--radius-md); padding: 12px; min-height: 300px; transition: background .12s ease, outline-color .12s ease; }
+.kanban { display: grid; grid-template-columns: repeat(5, minmax(210px, 1fr)); gap: 12px; overflow-x: auto; padding-bottom: 20px; align-items: start; }
+/* Each column scrolls on its own so one long column cannot push every other column - and the
+   headers naming them - off the bottom of a 16,000px page. */
+.kanban-column { display: flex; flex-direction: column; background: var(--line-soft); border-radius: var(--radius-md); padding: 12px; min-height: 300px; max-height: calc(100vh - 210px); transition: background .12s ease, outline-color .12s ease; }
+.kanban-cards { overflow-y: auto; flex: 1; margin: 0 -12px; padding: 2px 12px 0; }
 .kanban-column.is-drag-over { outline: 2px dashed var(--brand); outline-offset: -2px; background: var(--brand-soft); }
-.kanban-column h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; display: flex; justify-content: space-between; font-weight: 750; }
+.kanban-column h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; display: flex; justify-content: space-between; font-weight: 750; padding-bottom: 10px; }
+.card-move { width: 100%; margin-top: 4px; font-size: 12px; padding: 3px 6px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper); color: var(--muted); }
 .application-card { position: relative; display: grid; gap: 4px; background: var(--paper); padding: 13px; border: 1px solid var(--line); border-radius: var(--radius-sm); margin-bottom: 9px; }
-.application-card a { text-decoration: none; color: inherit; padding-right: 20px; }
+.application-card a { text-decoration: none; color: inherit; }
 .application-card span, .application-card small, .column-empty { color: var(--muted); }
-.card-remove {
-  position: absolute;
-  top: 9px;
-  right: 9px;
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  border: 1px solid var(--line);
-  border-radius: 50%;
-  background: var(--paper);
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1;
-  cursor: pointer;
-  display: grid;
-  place-items: center;
-}
-.card-remove:hover { background: var(--danger-bg); color: var(--danger); border-color: var(--danger); }
-.column-empty { font-size: 12px; text-align: center; margin-top: 40px; }
+.column-empty { font-size: 12px; text-align: center; margin: 40px 0 0; }
 
 @media (max-width: 900px) {
   .kanban { grid-template-columns: repeat(5, 240px); }

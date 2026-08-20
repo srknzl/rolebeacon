@@ -1,42 +1,61 @@
 {% extends "base.html" %}
 {% block title %}Job tracking · RoleBeacon{% endblock %}
 {% block content %}
-<section class="page-heading"><div><p class="eyebrow">PIPELINE</p><h1>Job tracking</h1><p>Drag a card into another column to update its status, or use × to take it off the board.</p></div></section>
+<section class="page-heading"><div><p class="eyebrow">PIPELINE</p><h1>Job tracking</h1><p>Drag a card into another column, or use its menu, to update a status. Columns read left to right in the order work moves.</p></div></section>
 <div class="kanban">
   {% for status, items in columns.items() %}
   <section class="kanban-column" data-status="{{ status }}"><h2>{{ status.replace('_', ' ')|capitalize }} <span>{{ items|length }}</span></h2>
-    {% for item in items %}<div class="application-card" draggable="true" data-job-id="{{ item.id }}"><button type="button" class="card-remove" data-remove-job="{{ item.id }}" title="Remove from job tracking (does not delete the posting)" aria-label="Remove from job tracking">×</button><a href="/jobs/{{ item.id }}"><strong>{{ item.title }}</strong></a><span>{{ item.company }}</span><small>{{ item.score or '—' }} · {{ item.route or 'unclassified' }}{% if item.resume_ready %} · resume ready{% endif %}</small></div>{% else %}<p class="column-empty">No jobs here yet</p>{% endfor %}
+    <div class="kanban-cards">
+    {% for item in items %}<div class="application-card" draggable="true" data-job-id="{{ item.id }}"><a href="/jobs/{{ item.id }}"><strong>{{ item.title }}</strong></a><span>{{ item.company }}</span><small>{{ item.score or '—' }} · {{ route_labels.get(item.route, item.route) or 'Unclassified' }}{% if item.resume_ready %} · résumé ready{% endif %}</small>
+      {# The keyboard-reachable equivalent of dragging the card, and the only affordance that
+         also takes it off the board. A native select needs no widget code and no ARIA. #}
+      <select class="card-move" data-move-job="{{ item.id }}" aria-label="Move {{ item.title }} at {{ item.company }} to another column">
+        <option value="" selected>Move to…</option>
+        {# Every column, including this one: a card moved on the client keeps its original menu,
+           so omitting the current column would leave a stale list behind after one move. #}
+        {% for target in columns %}<option value="{{ target }}">{{ target.replace('_', ' ')|capitalize }}</option>{% endfor %}
+        <option value="new">Off the board</option>
+      </select>
+    </div>{% endfor %}
+    </div>
+    <p class="column-empty"{% if items %} hidden{% endif %}>No jobs here yet</p>
   </section>
   {% endfor %}
 </div>
 <script>
+  const countLabel = column => column.querySelector("h2 span");
+  const cardsOf = column => column.querySelector(".kanban-cards");
+  const retally = column => {
+    countLabel(column).textContent = String(cardsOf(column).children.length);
+    column.querySelector(".column-empty").hidden = cardsOf(column).children.length > 0;
+  };
+  // One path for every way a status can change - drag, or the card's own menu. "new" is not a
+  // column: it takes the job off the board while leaving the posting browsable on /jobs.
+  const move = async (card, status) => {
+    const from = card.closest(".kanban-column");
+    const into = document.querySelector(`.kanban-column[data-status="${status}"]`);
+    if (from === into) return;
+    const response = await fetch(`/api/jobs/${card.dataset.jobId}/feedback`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({status}),
+    });
+    if (!response.ok) return window.location.reload();
+    if (into) cardsOf(into).appendChild(card); else card.remove();
+    retally(from);
+    if (into) retally(into);
+  };
   document.querySelectorAll(".application-card").forEach(card => {
     card.addEventListener("dragstart", event => {
       event.dataTransfer.setData("text/plain", card.dataset.jobId);
       event.dataTransfer.effectAllowed = "move";
     });
   });
-  const countLabel = column => column.querySelector("h2 span");
-  document.querySelectorAll(".card-remove").forEach(button => button.addEventListener("click", async event => {
-    event.preventDefault();
-    const card = button.closest(".application-card");
-    const column = card.closest(".kanban-column");
-    // "Delete" here just takes the job off the board (status back to new) - it stays browsable
-    // on /jobs and can be re-bookmarked, matching the non-destructive note on the job page.
-    const response = await fetch(`/api/jobs/${button.dataset.removeJob}/feedback`, {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({status: "new"}),
-    });
-    if (!response.ok) return;
-    card.remove();
-    countLabel(column).textContent = String(Number(countLabel(column).textContent) - 1);
-    if (!column.querySelector(".application-card")) {
-      const empty = document.createElement("p");
-      empty.className = "column-empty";
-      empty.textContent = "No jobs here yet";
-      column.appendChild(empty);
-    }
+  document.querySelectorAll("[data-move-job]").forEach(select => select.addEventListener("change", async event => {
+    const card = select.closest(".application-card");
+    const status = select.value;
+    select.value = "";
+    if (status) await move(card, status);
   }));
   document.querySelectorAll(".kanban-column").forEach(column => {
     column.addEventListener("dragover", event => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; });
@@ -45,20 +64,8 @@
     column.addEventListener("drop", async event => {
       event.preventDefault();
       column.classList.remove("is-drag-over");
-      const jobId = event.dataTransfer.getData("text/plain");
-      const card = document.querySelector(`.application-card[data-job-id="${jobId}"]`);
-      const from = card?.closest(".kanban-column");
-      if (!card || from === column) return;
-      column.querySelector(".column-empty")?.remove();
-      column.appendChild(card);
-      countLabel(from).textContent = String(Number(countLabel(from).textContent) - 1);
-      countLabel(column).textContent = String(Number(countLabel(column).textContent) + 1);
-      const response = await fetch(`/api/jobs/${jobId}/feedback`, {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({status: column.dataset.status}),
-      });
-      if (!response.ok) window.location.reload();
+      const card = document.querySelector(`.application-card[data-job-id="${event.dataTransfer.getData("text/plain")}"]`);
+      if (card) await move(card, column.dataset.status);
     });
   });
 </script>
