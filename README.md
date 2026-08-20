@@ -26,6 +26,7 @@ OpenAI-compatible model is an optional quality layer for evidence-rich scoring a
 - Provenance-backed company research and a separate company-fit score.
 - Selective, factual, on-demand cover letters.
 - Human-approved browser preparation that cannot submit an application.
+- Light and dark interface, following the operating system's colour scheme.
 
 ## Screenshots
 
@@ -33,22 +34,22 @@ All screenshots use synthetic candidate, company, source, and job data in an iso
 No external source was contacted to produce them.
 
 <p align="center">
-  <img src="docs/screenshots/dashboard.png" alt="RoleBeacon dashboard with recommended opportunities" width="49%">
-  <img src="docs/screenshots/jobs.png" alt="RoleBeacon job discovery showing visible and hidden result counts and a removable default filter" width="49%">
+  <img src="docs/screenshots/dashboard.png" alt="RoleBeacon dashboard opening on collection counts and the ranked shortlist" width="49%">
+  <img src="docs/screenshots/jobs.png" alt="RoleBeacon job discovery with the match count and one row of faceted filters" width="49%">
 </p>
 <p align="center">
-  <img src="docs/screenshots/job-detail.png" alt="RoleBeacon evidence-based job detail and application controls" width="49%">
-  <img src="docs/screenshots/score-factors.png" alt="RoleBeacon expanded accessible score-factor explanation" width="49%">
+  <img src="docs/screenshots/job-detail.png" alt="RoleBeacon job detail leading with the opportunity score and why it matches" width="49%">
+  <img src="docs/screenshots/score-factors.png" alt="RoleBeacon score breakdown with one factor expanded, beside the application kit" width="49%">
 </p>
 <p align="center">
   <img src="docs/screenshots/company-detail.png" alt="RoleBeacon provenance-backed company assessment and fact coverage" width="49%">
-  <img src="docs/screenshots/job-tracking.png" alt="RoleBeacon human-owned application tracking board" width="49%">
+  <img src="docs/screenshots/job-tracking.png" alt="RoleBeacon human-owned application tracking board across its five columns" width="49%">
 </p>
 <p align="center">
   <img src="docs/screenshots/sources.png" alt="RoleBeacon curated source packs and explicit enablement controls" width="49%">
-  <img src="docs/screenshots/source-health.png" alt="RoleBeacon per-source metrics and anomalous snapshot preservation warning" width="49%">
+  <img src="docs/screenshots/source-health.png" alt="RoleBeacon source health opening on the sources that need attention, including a preserved anomalous snapshot" width="49%">
 </p>
-<p align="center"><img src="docs/screenshots/setup-import.png" alt="RoleBeacon first-run setup with separate job-search and CV-and-applications sections" width="75%"></p>
+<p align="center"><img src="docs/screenshots/setup-import.png" alt="RoleBeacon first-run setup offering a guided path or a strict LLM prompt, with no source contacted yet" width="75%"></p>
 
 ## Requirements
 
@@ -134,8 +135,10 @@ current directory.
 It writes `recommended-jobs.json`, `recommended-jobs.md`, `all-jobs.json`, and `all-jobs.md`, then prints
 their absolute paths. JSON contains the complete job, eligibility, scoring, and source-provenance fields;
 Markdown is a scannable summary. The all-jobs export contains every active, unmerged job in decision-ready
-order without a row limit. The recommended export matches the dashboard rule: job-fit score 65 or higher
-and eligibility not `ineligible`, so an unresolved eligibility result stays visibly marked `unknown`.
+order without a row limit. The recommended export selects job-fit score 65 or higher with eligibility not
+`ineligible`, so an unresolved eligibility result stays visibly marked `unknown`. Note that the dashboard's
+own shortlist applies the same threshold to the *opportunity* score (job fit blended with company fit), so
+the two selections are close but not identical.
 
 Use existing local data without contacting sources or a model, choose another parent directory, or explicitly
 start an already-installed Ollama before refreshing:
@@ -263,8 +266,8 @@ Setup generates strategies from the user's actual configuration:
 - an explicit fallback strategy.
 
 The Jobs page hides titles from a clearly different role family by default, but this active default is
-never silent: the page shows the visible-versus-total count, the number hidden, and a removable filter
-chip that reveals those postings without changing the saved profile.
+never silent: the match count reads "N matching jobs · M hidden as different roles — show", and the link
+reveals those postings without changing the saved profile.
 
 The deterministic score totals 100 points:
 
