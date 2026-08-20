@@ -190,7 +190,7 @@ code {
 
 @media (max-width: 540px) {
   .topbar { height: auto; min-height: 64px; flex-wrap: wrap; padding-block: 8px; }
-  .topbar > #sync-button { order: 3; width: 100%; margin-top: -2px; }
+  .topbar > #sync-button { order: 3; margin-left: auto; background: var(--paper); color: var(--ink); border: 1px solid var(--line); }
   .sync-strip { top: 104px; }
 }
 
@@ -446,6 +446,10 @@ label:has(> .help-tip):not(:has(> input[type=checkbox])) > :not(.help-tip) { gri
 .section-heading a { font-weight: 700; color: var(--brand); text-decoration: none; }
 .page-heading h1 { font-size: clamp(24px, 3vw, 30px); }
 
+@media (max-width: 640px) {
+  .page-heading, .section-heading { flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 32px; }
+}
+
 @media (max-width: 900px) {
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
   .stat { border-bottom: 1px solid var(--line); }
@@ -485,8 +489,11 @@ label:has(> .help-tip):not(:has(> input[type=checkbox])) > :not(.help-tip) { gri
 .empty-state p, .muted { color: var(--muted); }
 
 @media (max-width: 540px) {
-  .job-card { grid-template-columns: 1fr; }
+  .job-card { grid-template-columns: 42px 1fr; gap: 12px; padding: 14px; }
+  .score { width: 42px; height: 42px; border-width: 3px; font-size: 15px; }
+  .job-card-heading { flex-direction: column; gap: 6px; }
   .job-card-badges { justify-content: flex-start; }
+  .meta-row { gap: 10px; margin-top: 8px; }
 }
 
 /* ============================================================
@@ -511,7 +518,9 @@ label:has(> .help-tip):not(:has(> input[type=checkbox])) > :not(.help-tip) { gri
 .explorer-facets { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
 .explorer-spacer { flex: 1 1 auto; }
 
-.facet { position: relative; }
+/* A facet is a <details>, but its summary already draws the pill: the generic details box
+   would put a second border and 12px of padding around every one of them. */
+.facet { position: relative; border: 0; padding: 0; }
 .facet > summary {
   display: inline-flex;
   align-items: center;
@@ -587,10 +596,20 @@ label:has(> .help-tip):not(:has(> input[type=checkbox])) > :not(.help-tip) { gri
 
 .pagination { display: flex; gap: 16px; align-items: center; justify-content: center; margin-top: 26px; font-size: 13px; color: var(--muted); }
 
+.filter-toggle { display: none; }
+
 @media (max-width: 640px) {
   .explorer-spacer { display: none; }
   .facet-menu { min-width: 200px; }
   .facet-menu-wide { min-width: 240px; }
+  .filter-toggle { display: inline-flex; gap: 6px; width: 100%; justify-content: center; margin-top: 10px; }
+  .explorer-facets { display: none; }
+  .explorer-facets.is-open { display: flex; }
+  /* An absolutely positioned menu has nowhere to go inside a full-width column, so on a phone
+     each facet opens in place instead of floating over the one below it. */
+  .facet { width: 100%; }
+  .facet > summary { width: 100%; justify-content: space-between; }
+  .facet-menu { position: static; min-width: 0; box-shadow: none; }
 }
 
 /* ============================================================

@@ -1584,3 +1584,24 @@ def test_a_help_tip_never_steals_its_field_s_label(tmp_path) -> None:
             first = labelable.search(block)
             # Whatever the label binds to, it must be the field - never the tip.
             assert first is not None and first.group(1).lower() != "button", f"{path}: {block[:120]}"
+
+
+def test_the_jobs_page_offers_one_filter_control_that_counts_what_is_set(tmp_path) -> None:
+    # On a phone the twelve facet pills are 370px of chrome before the first job, so they
+    # collapse behind a single button. It has to say how many filters are actually applied,
+    # since collapsed chrome that hides an active filter is worse than visible chrome.
+    settings = replace(configured_settings(tmp_path), auto_sync=False)
+    app = create_app(settings)
+
+    with TestClient(app) as client:
+        unfiltered = client.get("/jobs?show_mismatched_titles=1")
+        filtered = client.get("/jobs?show_mismatched_titles=1&work_model=remote&eligibility=eligible")
+
+    for page in (unfiltered, filtered):
+        assert 'aria-controls="explorer-facets"' in page.text
+        assert 'aria-expanded="false"' in page.text
+    toggle = re.search(r'id="filter-toggle".*?</button>', filtered.text, re.S)
+    assert toggle is not None and '<span class="facet-count">2</span>' in toggle.group(0)
+    assert '<span class="facet-count">' not in re.search(
+        r'id="filter-toggle".*?</button>', unfiltered.text, re.S
+    ).group(0)

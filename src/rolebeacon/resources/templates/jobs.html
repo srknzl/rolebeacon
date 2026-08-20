@@ -35,7 +35,10 @@
     <button class="button button-primary" type="submit">Search</button>
   </div>
 
-  <div class="explorer-facets">
+  {# On a phone the twelve facets are 370px of chrome before the first job, so they collapse
+     behind one button that says how many are actually set. Wide viewports never see it. #}
+  <button class="button filter-toggle" id="filter-toggle" type="button" aria-expanded="false" aria-controls="explorer-facets">Filters{% if active_chips %} <span class="facet-count">{{ active_chips|length }}</span>{% endif %}</button>
+  <div class="explorer-facets" id="explorer-facets">
     {{ facet("eligibility", "Eligibility", [("eligible", "Eligible"), ("unknown", "Unknown"), ("ineligible", "Ineligible")], "Whether you can actually take the job. Checked before fit, and a high score can never override it.") }}
     {{ facet("work_model", "Work model", [("remote_worldwide", "Remote worldwide"), ("remote", "Any remote"), ("onsite", "On-site or hybrid")], "Derived from the posting's own location wording. Country-scoped remote counts as regional, never worldwide.") }}
     {{ facet("seniority", "Seniority", facet_options.seniority, "Read from wording in the job title, matched as a whole word so Lead does not catch \"Team Leadership\". Postings that state no level are excluded when you pick one.") }}
@@ -102,6 +105,12 @@
 </nav>
 {% endif %}
 <script>
+  const filterToggle = document.getElementById("filter-toggle");
+  filterToggle?.addEventListener("click", () => {
+    const open = document.getElementById("explorer-facets").classList.toggle("is-open");
+    filterToggle.setAttribute("aria-expanded", String(open));
+  });
+
   const filterForm = document.getElementById("job-filters");
   // Ticking a box applies it, the way a log explorer does. Debounced so ticking three boxes in a
   // row is one reload, and never fired from the text inputs - those wait for Enter or Search.
