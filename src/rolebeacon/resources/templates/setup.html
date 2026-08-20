@@ -37,27 +37,25 @@
   </section>
   {% endif %}
   {% if editing %}
-  <nav class="settings-tabs" aria-label="Preference sections">
-    <button class="button settings-tab" type="button" data-settings-tab="search" aria-selected="true">Job search</button>
-    <button class="button settings-tab" type="button" data-settings-tab="application" aria-selected="false">CV & applications</button>
-  </nav>
-  <nav class="settings-quicknav settings-tab-panel" data-settings-panel="search" aria-label="Job search sections">
-    <a href="#panel-profile">Profile</a>
-    <a href="#panel-mobility">Mobility &amp; search</a>
-    <a href="#panel-sources">Sources</a>
-    <a href="#panel-scoring">Scoring</a>
-    <a href="#panel-company-research">Company research</a>
+  {# One tab bar, one pane. Two stacked navigations that looked nothing alike used to sit above
+     a 4,359px form, and neither of them said whether it switched panes or scrolled. #}
+  <nav class="settings-tabs" role="tablist" aria-label="Preference sections">
+    {% for value, label in [("profile", "Profile"), ("mobility", "Mobility & search"), ("sources", "Sources"), ("scoring", "Scoring"), ("company-research", "Company research"), ("application", "CV & applications")] %}
+    <button class="settings-tab" type="button" role="tab" data-settings-tab="{{ value }}" aria-controls="panel-{{ value }}" aria-selected="{{ 'true' if loop.first else 'false' }}">{{ label }}</button>
+    {% endfor %}
   </nav>
   {% endif %}
-  <section class="panel settings-tab-panel wizard-panel" data-settings-panel="search" data-wizard-step="profile" id="panel-profile">
+  <section class="panel settings-tab-panel wizard-panel" data-settings-panel="profile" data-wizard-step="profile" id="panel-profile">
     <h2>Search profile</h2>
     <p class="muted">Only information that affects discovery, eligibility, and job matching belongs here.</p>
     {% if not editing %}<div class="wizard-guidance"><strong>Important:</strong> full name and current country are required. A factual headline, summary, and specific skills substantially improve matching. Do not list a technology as experience if it is only an interest.</div>{% endif %}
     <div class="form-grid">
       <label>Full name {{ tip("Identifies the locally stored profile. It is also reused in application materials.") }}<input id="name" required></label>
       <label>Headline {{ tip("A concise professional title used to describe your target profile.") }}<input id="headline" placeholder="Backend and distributed-systems engineer"></label>
-      <label>Country code {{ tip("Your current country as a two-letter ISO 3166-1 code. Use TR for Türkiye.") }}<input id="country-code" value="TR" maxlength="2" required></label>
-      <label>Country name {{ tip("Human-readable name for your current country. It is displayed as Türkiye for TR.") }}<input id="country-name" value="Türkiye" required></label>
+      {# One picker fills both the code and the display name, which used to be two free-text
+         boxes the reader had to keep consistent by hand. #}
+      <label>Current country {{ tip("Where you live now. It decides which remote wording makes you eligible, so it is stored as an ISO 3166-1 code and its display name together.") }}<select id="country-code" required>{% for country in countries %}<option value="{{ country.code }}" data-country-name="{{ country.name }}" {{ 'selected' if country.code == 'TR' }}>{{ country.name }} ({{ country.code }})</option>{% endfor %}</select></label>
+      <input id="country-name" type="hidden" value="Türkiye">
     </div>
     <label>Summary {{ tip("A factual professional summary used only for matching and generated materials.") }}<textarea id="summary" rows="4"></textarea></label>
     <div class="country-field"><span class="field-label">Skills, grouped into categories {{ tip("Each line becomes a matching signal. Group skills the way they should appear on your résumé and cover letters, e.g. \"Languages\", \"Backend & Distributed\", \"Cloud & Infra\" - a category name is required, everything under an empty one is dropped on save.") }}</span>
@@ -66,20 +64,20 @@
     </div>
   </section>
 
-  <section class="panel settings-tab-panel wizard-panel" data-settings-panel="search" data-wizard-step="eligibility" id="panel-mobility">
+  <section class="panel settings-tab-panel wizard-panel" data-settings-panel="mobility" data-wizard-step="eligibility" id="panel-mobility" {{ 'hidden' if editing }}>
     <h2>Mobility and search</h2>
     {% if not editing %}<div class="wizard-guidance wizard-guidance-critical"><strong>Eligibility-critical:</strong> add only countries where you can legally work today under Authorized countries. Put places that require a visa under Relocation targets and keep sponsorship required. Target roles are required because they drive discovery.</div>{% endif %}
     <div class="form-grid">
-      <label>Target roles, one per line {{ tip("Job titles you actively want. These create search strategies and influence ranking.") }}<textarea id="target-roles" rows="5" required></textarea></label>
-      <label>Preferred skills {{ tip("Skills that should increase a job's score. Put one skill or phrase on each line.") }}<textarea id="preferred-skills" rows="5"></textarea></label>
-      <label>Preferred domains {{ tip("Problem domains you enjoy, such as distributed systems, developer tools, or fintech.") }}<textarea id="preferred-domains" rows="5"></textarea></label>
+      <label>Target roles {{ tip("Job titles you actively want. These create search strategies and influence ranking.") }}<textarea id="target-roles" data-token-list="target role" rows="5"></textarea></label>
+      <label>Preferred skills {{ tip("Skills that should increase a job's score. Add one skill or phrase at a time.") }}<textarea id="preferred-skills" data-token-list="skill" rows="5"></textarea></label>
+      <label>Preferred domains {{ tip("Problem domains you enjoy, such as distributed systems, developer tools, or fintech.") }}<textarea id="preferred-domains" data-token-list="domain" rows="5"></textarea></label>
       <div class="country-field"><span class="field-label">Preferred seniority {{ tip("Levels you want to see. Matched against the level a job's own title names, so only these exact levels can ever match.") }}</span><div class="checkbox-grid">{% for level in seniority_levels %}<label class="checkbox"><input type="checkbox" class="seniority-option" value="{{ level.code }}">{{ level.label }}</label>{% endfor %}</div></div>
       <div class="country-field"><span class="field-label">Authorized countries {{ tip("Countries where you can work now without employer sponsorship. Do not add Germany or the United States unless you already have that work right.") }}</span><div class="country-picker" data-country-field="authorizations" data-country-kind="authorization"><input class="country-search" type="search" placeholder="Search countries or ISO codes" autocomplete="off" aria-label="Search authorized countries"><div class="country-chips" aria-live="polite"></div><div class="country-options" role="listbox" hidden>{% for country in countries %}<button type="button" role="option" class="country-option" data-country-code="{{ country.code }}" data-country-name="{{ country.name }}"><span>{{ country.name }}</span><code>{{ country.code }}</code></button>{% endfor %}</div><textarea id="authorizations" class="country-value" rows="1">TR</textarea></div></div>
       <div class="country-field"><span class="field-label">Relocation targets {{ tip("Countries, or an entire continent, where you are willing to move if the employer supports the required visa or relocation. Choosing a continent adds each of its countries individually. Selecting a target never claims existing work authorization.") }}</span><div class="country-picker" data-country-field="relocation-targets" data-country-kind="relocation"><input class="country-search" type="search" placeholder="Type to filter countries, or choose a continent" autocomplete="off" aria-label="Search relocation targets"><div class="country-chips" aria-live="polite"></div><div class="country-options" role="listbox" hidden>{% for region in region_options %}<button type="button" role="option" class="country-option country-region-option" data-country-code="{{ region.code }}" data-country-name="{{ region.name }}" data-region-codes="{{ region.codes }}"><span>{{ region.name }}</span><code>REGION</code></button>{% endfor %}{% for country in countries %}<button type="button" role="option" class="country-option" data-country-code="{{ country.code }}" data-country-name="{{ country.name }}"><span>{{ country.name }}</span><code>{{ country.code }}</code></button>{% endfor %}<p class="country-empty" hidden>No country or region matches this search.</p></div><textarea id="relocation-targets" class="country-value" rows="1"></textarea></div></div>
-      <label>Priority companies {{ tip("Companies that deserve a dedicated search strategy even when stack fit is imperfect.") }}<textarea id="priority-companies" rows="5"></textarea></label>
-      <label>Company watchlist {{ tip("Companies to surface more prominently without creating a dedicated strategy.") }}<textarea id="company-watchlist" rows="5"></textarea></label>
-      <label>Company blocklist {{ tip("Companies whose roles should be excluded from recommendations.") }}<textarea id="company-blocklist" rows="5"></textarea></label>
-      <label>Excluded phrases {{ tip("Phrases that should reject a job, such as a clearance requirement you cannot meet.") }}<textarea id="exclude-phrases" rows="5"></textarea></label>
+      <label>Priority companies {{ tip("Companies that deserve a dedicated search strategy even when stack fit is imperfect.") }}<textarea id="priority-companies" data-token-list="company" rows="5"></textarea></label>
+      <label>Company watchlist {{ tip("Companies to surface more prominently without creating a dedicated strategy.") }}<textarea id="company-watchlist" data-token-list="company" rows="5"></textarea></label>
+      <label>Company blocklist {{ tip("Companies whose roles should be excluded from recommendations.") }}<textarea id="company-blocklist" data-token-list="company" rows="5"></textarea></label>
+      <label>Excluded phrases {{ tip("Phrases that should reject a job, such as a clearance requirement you cannot meet.") }}<textarea id="exclude-phrases" data-token-list="phrase" rows="5"></textarea></label>
       <label>Minimum salary {{ tip("A hard minimum rejects only postings with a comparable stated currency and amount. Missing or different-currency pay remains unknown.") }}<input id="salary-minimum" type="number" min="0" step="1000"></label>
       <label>Salary currency {{ tip("ISO-style currency code used only for like-for-like comparisons, such as EUR or USD.") }}<input id="salary-currency" maxlength="3" placeholder="EUR"></label>
       <label>Daily review limit {{ tip("Maximum number of ranked opportunities shown on the dashboard.") }}<input id="daily-review-limit" type="number" min="1" max="100" value="15"></label>
@@ -104,7 +102,7 @@
     </details>{% endif %}
   </section>
 
-  <section class="panel settings-tab-panel wizard-panel" data-settings-panel="search" data-wizard-step="sources" id="panel-sources">
+  <section class="panel settings-tab-panel wizard-panel" data-settings-panel="sources" data-wizard-step="sources" id="panel-sources" {{ 'hidden' if editing }}>
     <h2>Job sources</h2>
     <p>Selected sources are saved now and contacted only after activation.</p>
     {% if not editing %}
@@ -141,7 +139,7 @@
     </div>
   </section>
 
-  <section class="panel settings-tab-panel wizard-panel" data-settings-panel="search" data-wizard-step="advanced" id="panel-scoring">
+  <section class="panel settings-tab-panel wizard-panel" data-settings-panel="scoring" data-wizard-step="advanced" id="panel-scoring" {{ 'hidden' if editing }}>
     <h2>Scoring engine</h2>
     {% if not editing %}<div class="wizard-guidance"><strong>Optional:</strong> the default 100-point distribution and rules-only mode are production-ready. Change them only when you understand the tradeoff; eligibility remains a separate hard gate.</div>{% endif %}
     <fieldset>
@@ -190,7 +188,7 @@
     </div>
   </section>
 
-  <section class="panel settings-tab-panel wizard-panel" data-settings-panel="search" data-wizard-step="advanced" id="panel-company-research">
+  <section class="panel settings-tab-panel wizard-panel" data-settings-panel="company-research" data-wizard-step="advanced" id="panel-company-research" {{ 'hidden' if editing }}>
     <h2>Company research</h2>
     <p>RoleBeacon includes {{ company_search.registry_count if company_search else 'a built-in' }} seeded company entries and uses Wikidata plus official company pages without an API key. A Brave Search key improves official-page discovery for unfamiliar companies.</p>
     <div class="model-health {{ 'model-health-success' if company_search and company_search.configured else 'model-health-rules' }}" id="company-search-status">
@@ -204,7 +202,7 @@
     </details>
   </section>
 
-  <section class="panel settings-tab-panel wizard-panel" data-settings-panel="application" data-wizard-step="advanced" hidden>
+  <section class="panel settings-tab-panel wizard-panel" data-settings-panel="application" data-wizard-step="advanced" id="panel-application" hidden>
     <h2>CV & application profile</h2>
     <p class="muted">Collection uses source choices and target-role queries, not contact details. Eligibility uses mobility and explicit posting restrictions. Rules-only fit uses headline, summary, skills, and verified experience/project/education vocabulary. LLM fit may use summary, location, experience, projects, skills, education, and search preferences. Generated résumés and cover letters use the fuller verified profile. Email, phone, website, GitHub, and LinkedIn are application-only and are excluded from scoring prompts.</p>
     <div class="form-grid">
@@ -434,15 +432,92 @@
       document.getElementById("headline").value = imported.headline || "";
       document.getElementById("email").value = imported.contact?.email || "";
       document.getElementById("phone").value = imported.contact?.phone || "";
-      document.getElementById("country-code").value = imported.location?.country_code || "";
-      document.getElementById("country-name").value = imported.location?.country_name || "";
+      const code = imported.location?.country_code || "";
+      const name = imported.location?.country_name || "";
+      const select = document.getElementById("country-code");
+      if (code && !select.querySelector(`option[value="${code}"]`)) {
+        select.append(new Option(`${name || code} (${code})`, code));
+        select.lastElementChild.dataset.countryName = name;
+      }
+      select.value = code;
+      document.getElementById("country-name").value = name;
       document.getElementById("city").value = imported.location?.city || "";
       document.getElementById("website").value = imported.contact?.website || "";
       document.getElementById("summary").value = imported.summary || "";
       loadSkillBuckets(imported.skills);
       return imported;
   };
-  const setLines = (id, values = []) => { document.getElementById(id).value = values.join("\n"); };
+  // A list of five entries was edited by scrolling inside a four-line box. The textarea stays as
+  // the value - serialization, validation and hydration are untouched - and a chip row edits it.
+  const tokenValues = field => field.value.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+  const renderTokens = field => {
+    const box = field.previousElementSibling;
+    if (!box?.classList.contains("token-box")) return;
+    const entry = box.querySelector(".token-entry");
+    box.querySelectorAll(".token-chip").forEach(chip => chip.remove());
+    tokenValues(field).forEach((value, index) => {
+      const chip = document.createElement("span");
+      chip.className = "token-chip";
+      chip.textContent = value;
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.textContent = "×";
+      remove.title = `Remove ${value}`;
+      remove.addEventListener("click", () => {
+        field.value = tokenValues(field).filter((_, position) => position !== index).join("\n");
+        renderTokens(field);
+      });
+      chip.append(remove);
+      box.insertBefore(chip, entry);
+    });
+  };
+  document.querySelectorAll("textarea[data-token-list]").forEach(field => {
+    const box = document.createElement("div");
+    box.className = "token-box";
+    const entry = document.createElement("input");
+    entry.type = "text";
+    entry.className = "token-entry";
+    entry.placeholder = `Add a ${field.dataset.tokenList} and press Enter`;
+    entry.setAttribute("aria-label", `Add a ${field.dataset.tokenList}`);
+    box.append(entry);
+    field.parentElement.insertBefore(box, field);
+    const commit = () => {
+      const value = entry.value.trim();
+      if (!value) return;
+      const present = tokenValues(field).some(item => item.toLowerCase() === value.toLowerCase());
+      field.value = (present ? tokenValues(field) : [...tokenValues(field), value]).join("\n");
+      entry.value = "";
+      renderTokens(field);
+    };
+    entry.addEventListener("keydown", event => {
+      if (event.key === "Enter" || event.key === ",") { event.preventDefault(); commit(); }
+      if (event.key === "Backspace" && !entry.value) {
+        field.value = tokenValues(field).slice(0, -1).join("\n");
+        renderTokens(field);
+      }
+    });
+    entry.addEventListener("blur", commit);
+    box.addEventListener("click", () => entry.focus());
+    renderTokens(field);
+  });
+  // Every textarea that is still typed into grows with its content rather than clipping at four
+  // lines with a scrollbar of its own inside a scrolling page.
+  const autoGrow = field => { field.style.height = "auto"; field.style.height = `${field.scrollHeight + 2}px`; };
+  document.querySelectorAll("textarea:not(.country-value):not([data-token-list])").forEach(field => {
+    field.addEventListener("input", () => autoGrow(field));
+  });
+  const setLines = (id, values = []) => {
+    const field = document.getElementById(id);
+    field.value = values.join("\n");
+    renderTokens(field);
+  };
+  // The picker carries the display name the code belongs to, so the two can never disagree.
+  const countrySelect = document.getElementById("country-code");
+  const syncCountryName = () => {
+    const selected = countrySelect.selectedOptions[0];
+    if (selected) document.getElementById("country-name").value = selected.dataset.countryName || "";
+  };
+  countrySelect.addEventListener("change", syncCountryName);
   const hydrateSetup = setup => {
     setupClearancePolicy = setup.mobility.clearance_policy || {};
     document.getElementById("candidate-json").value = JSON.stringify(setup.candidate, null, 2);

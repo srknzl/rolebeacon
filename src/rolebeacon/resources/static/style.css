@@ -883,7 +883,8 @@ td small { display: block; color: var(--muted); }
 
 .settings-tabs {
   display: flex;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 4px;
   position: sticky;
   top: 78px;
   z-index: 15;
@@ -892,21 +893,23 @@ td small { display: block; color: var(--muted); }
   border-radius: var(--radius-md);
   backdrop-filter: blur(10px);
 }
-.settings-tab[aria-selected="true"] { background: var(--ink); border-color: var(--ink); color: white; }
+/* Tabs that look like tabs: one row, one selected, one pane below it. */
+.settings-tab {
+  appearance: none;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  border-radius: 0;
+  padding: 8px 10px;
+  background: transparent;
+  color: var(--muted);
+  font: 650 13px var(--font-sans);
+  cursor: pointer;
+}
+.settings-tab:hover { color: var(--ink); }
+.settings-tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--brand); }
 .settings-tab-panel[hidden], .model-details[hidden] { display: none; }
 .settings-tab-panel { scroll-margin-top: 130px; }
 .source-choice-note { display: block; margin-left: 23px; color: var(--muted); font-size: 11px; font-weight: 500; }
-
-/* Quick-nav for the long "Job search" tab: five anchors to its five panels. */
-.settings-quicknav {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 16px;
-  padding: 10px 4px 18px;
-  font-size: 12px;
-}
-.settings-quicknav a { color: var(--brand); text-decoration: none; font-weight: 650; }
-.settings-quicknav a:hover { color: var(--brand-strong); text-decoration: underline; }
 
 .country-field { display: grid; gap: 5px; font-size: 12px; font-weight: 700; color: var(--muted); }
 .field-label { display: block; }
@@ -963,6 +966,15 @@ td small { display: block; color: var(--muted); }
 .country-option:hover, .country-option[aria-selected="true"] { background: var(--brand-soft); }
 .country-option code { color: var(--muted); font-size: 11px; }
 .country-value { display: none; }
+textarea[data-token-list] { display: none; }
+
+/* One chip per entry, edited in place, instead of a four-line box with its own scrollbar. */
+.token-box { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 7px; background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius-sm); cursor: text; }
+.token-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px 4px 10px; border-radius: var(--radius-full); background: var(--line-soft); font-size: 12px; font-weight: 600; color: var(--ink); }
+.token-chip button { appearance: none; border: 0; background: transparent; color: var(--muted); font-size: 15px; line-height: 1; cursor: pointer; padding: 0; }
+.token-entry { flex: 1; min-width: 140px; border: 0; padding: 4px; background: transparent; font-weight: 400; }
+.token-entry:focus { outline: none; }
+.token-box:focus-within { border-color: var(--brand); }
 .country-empty { margin: 6px 8px; color: var(--muted); font-size: 13px; }
 
 .json-preview {

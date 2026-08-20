@@ -795,8 +795,11 @@ def test_preferences_separate_search_from_application_and_hide_rules_details(tmp
         page = client.get("/settings")
 
     assert page.status_code == 200
-    assert 'data-settings-tab="search"' in page.text
-    assert 'data-settings-tab="application"' in page.text
+    # One tab per pane, and each tab points at the pane it shows.
+    tabs = re.findall(r'data-settings-tab="([^"]+)" aria-controls="panel-([^"]+)"', page.text)
+    assert [tab for tab, _ in tabs] == ["profile", "mobility", "sources", "scoring", "company-research", "application"]
+    assert all(tab == panel for tab, panel in tabs)
+    assert all(f'data-settings-panel="{tab}"' in page.text for tab, _ in tabs)
     assert "LLM fit may use summary, location, experience, projects, skills, education" in page.text
     assert "contact details are excluded" in page.text
     assert 'id="model-details"' in page.text
@@ -1787,3 +1790,28 @@ def test_a_fully_enabled_source_pack_says_so_instead_of_offering_to_enable_it(tm
     assert "source-pack-progress" not in card(after.text)
     # The bare number in the corner now says what it counts.
     assert "</strong> boards" in card(after.text)
+
+
+def test_preference_lists_are_chips_and_the_country_is_one_picker(tmp_path) -> None:
+    # Skills, roles, domains and companies were edited by scrolling inside five-line textareas,
+    # and the current country was two free-text boxes the reader had to keep consistent by hand.
+    settings = replace(configured_settings(tmp_path), auto_sync=False)
+    app = create_app(settings)
+
+    with TestClient(app) as client:
+        page = client.get("/settings")
+
+    for field in ("target-roles", "preferred-skills", "preferred-domains", "priority-companies",
+                  "company-watchlist", "company-blocklist", "exclude-phrases"):
+        assert f'id="{field}" data-token-list=' in page.text, field
+    # The textarea stays as the value store, so serialization and validation are untouched.
+    assert "textarea[data-token-list] { display: none; }" in (settings.resource_dir / "static" / "style.css").read_text()
+    assert 'lines("target-roles")' in page.text
+    # One control carries the code and the display name together.
+    assert '<select id="country-code"' in page.text
+    assert '<option value="TR" data-country-name="Türkiye"' in page.text
+    assert '<input id="country-name" type="hidden"' in page.text
+    # A stored country the option list does not carry is added rather than silently replaced.
+    assert 'select.append(new Option(`${name || code} (${code})`, code))' in page.text
+    # What is still typed into grows with its content instead of clipping at four lines.
+    assert 'document.querySelectorAll("textarea:not(.country-value):not([data-token-list])")' in page.text
