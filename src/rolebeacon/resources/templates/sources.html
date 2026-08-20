@@ -114,9 +114,11 @@
 {# One card per collection method. Enabling a method flips every row it generated, because the
    choice is "public search or my own session", not "Europe but not Türkiye". #}
 {% macro method_rows(method, kind, verb) %}
-<p class="linkedin-rows">{{ method.enabled }} of {{ method.total }} searches enabled: {{ method.names|join(' · ') }}</p>
+{% set partial = method.enabled > 0 and method.enabled < method.total %}
+<p class="linkedin-rows">{% if not method.enabled %}Off{% elif partial %}<strong>Partly on</strong> — {{ method.enabled }} of {{ method.total }} searches enabled{% else %}<strong>On</strong> — all {{ method.total }} searches enabled{% endif %}: {{ method.names|join(' · ') }}</p>
 <div class="linkedin-actions">
-  <button class="button button-primary linkedin-method" type="button" data-method="{{ kind }}" data-enable="true" data-ids="{{ method.ids|join(',') }}" {% if method.enabled == method.total %}disabled{% endif %}>{{ verb }}</button>
+  {# Only a method that is entirely off offers turning it on as the primary action. #}
+  <button class="button {% if not method.enabled %}button-primary {% endif %}linkedin-method" type="button" data-method="{{ kind }}" data-enable="true" data-ids="{{ method.ids|join(',') }}" {% if method.enabled == method.total %}disabled{% endif %}>{{ 'Turn on the rest' if partial else verb }}</button>
   <button class="button linkedin-method" type="button" data-method="{{ kind }}" data-enable="false" data-ids="{{ method.ids|join(',') }}" {% if not method.enabled %}disabled{% endif %}>Turn off</button>
 </div>
 {% endmacro %}
@@ -127,6 +129,9 @@
     <span>Job searches and job postings only — never profiles, connections, messages, or the feed.</span>
   </div>
   <p class="muted">LinkedIn publishes no job API, so RoleBeacon reads it two ways. Both walk the same searches — one per target role, in each of your locations — and a posting collected either way deduplicates onto the same job. Pick one — running both only reads everything twice.</p>
+  {% if linkedin_methods.get("linkedin", {}).get("enabled") and linkedin_methods.get("linkedin_browser", {}).get("enabled") %}
+  <p class="warning-note">Both methods are on — every posting is being read twice. Turn one off.</p>
+  {% endif %}
   <div class="linkedin-methods">
     {% set public = linkedin_methods.get("linkedin") %}
     {% if public %}

@@ -707,6 +707,29 @@ def test_each_linkedin_method_is_switched_as_a_whole_rather_than_row_by_row() ->
     assert (methods["linkedin_browser"]["enabled"], methods["linkedin_browser"]["total"]) == (0, 1)
 
 
+def test_the_linkedin_panel_says_when_both_methods_are_reading_the_same_postings(tmp_path) -> None:
+    # No startup sync: enabling a LinkedIn row would otherwise send this test to LinkedIn.
+    settings = replace(configured_settings(tmp_path), auto_sync=False)
+    sources = settings.load_sources()
+    first = {}
+    for source in sources:
+        if source.kind in {"linkedin", "linkedin_browser"}:
+            first.setdefault(source.kind, source.id)
+    settings.save_sources([replace(source, enabled=source.id in set(first.values())) for source in sources])
+    app = create_app(settings)
+
+    with TestClient(app) as client:
+        page = client.get("/sources")
+
+    # "Pick one" is only advice until the page says the user is not currently picking one.
+    assert "Both methods are on — every posting is being read twice." in page.text
+    # A half-enabled method reads as half-enabled, and stops offering as the primary action the
+    # one it has already partly taken.
+    assert page.text.count("<strong>Partly on</strong> — 1 of") == 2
+    assert "Turn on the rest" in page.text
+    assert "button-primary linkedin-method" not in page.text
+
+
 def test_a_profile_with_no_generated_linkedin_rows_gets_no_linkedin_panel() -> None:
     from rolebeacon.app import _linkedin_methods
 
