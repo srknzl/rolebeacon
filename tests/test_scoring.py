@@ -896,3 +896,48 @@ def test_sponsorship_wording_families(description: str, expected: str) -> None:
     result = evaluate(job(location="Berlin, Germany", remote_scope="", description=description))
 
     assert result.sponsorship == expected
+
+
+@pytest.mark.parametrize(
+    ("description", "expected"),
+    [
+        ("We offer relocation assistance for this role.", "available"),
+        ("Relocation support is available for international hires.", "available"),
+        ("Relocation assistance provided.", "available"),
+        ("We support your relocation to Berlin.", "available"),
+        # The Greenhouse boilerplate that made a US-only Pinterest role read as relocation offered.
+        ("Relocation Statement: This position is not eligible for relocation assistance.", "unavailable"),
+        ("No relocation package is provided.", "unavailable"),
+        ("Relocation assistance is not available for this position.", "unavailable"),
+        ("We cannot offer relocation.", "unavailable"),
+        ("We don't provide relocation assistance.", "unavailable"),
+        ("We don\u2019t provide relocation assistance.", "unavailable"),
+        ("This role is not eligible for relocation or visa sponsorship.", "unavailable"),
+        # The noun is required on both lists, so a sponsorship refusal is not a relocation fact.
+        ("We do not offer visa sponsorship.", "unknown"),
+        ("Build backend systems with Java and Go.", "unknown"),
+    ],
+)
+def test_relocation_wording_families(description: str, expected: str) -> None:
+    result = evaluate(job(location="Berlin, Germany", remote_scope="", description=description))
+
+    assert result.relocation == expected
+
+
+def test_a_refused_relocation_statement_cannot_make_a_country_scoped_role_eligible() -> None:
+    """A posting that rules relocation out must not satisfy the relocation eligibility branch."""
+    posting = job(
+        location="San Francisco, CA, US; Remote, US",
+        remote_scope="",
+        description=(
+            "This role can be situated anywhere in the country. Relocation Statement: This "
+            "position is not eligible for relocation assistance. US based applicants only."
+        ),
+    )
+
+    result = evaluate(posting)
+
+    assert result.relocation == "unavailable"
+    assert result.status is not EligibilityStatus.ELIGIBLE
+    assert not result.location_fit.startswith("relocation:")
+    assert "The posting explicitly rules out relocation support" in result.risks

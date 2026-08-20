@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -312,6 +313,74 @@ async def test_llm_response_rejected_falls_back_to_rules_for_just_that_job(tmp_p
     assert result.phase == "complete"
     assert result.rule_fallback_jobs == 1
     assert database.get_job(job_id)["provider"] == "rules"
+
+
+async def test_rescore_reevaluates_collected_jobs_without_contacting_any_source(tmp_path, monkeypatch) -> None:
+    """collect=False must score the stale backlog and leave every enabled source untouched."""
+    payload = {
+        "candidate": {"schema_version": "1.0", "name": "Candidate", "location": {"country_code": "TR", "country_name": "Türkiye"}, "skills": {}},
+        "mobility": {"schema_version": "1.0", "current_country_code": "TR", "work_authorizations": ["TR"]},
+        "preferences": {"schema_version": "1.0", "target_roles": ["Backend Engineer"]},
+        "enabled_source_ids": ["arbeitnow"],
+        "llm": {"mode": "rules", "base_url": "http://127.0.0.1:11434/v1", "model": "qwen3:8b"},
+        "activate": True,
+    }
+    settings = SetupService(Settings.load(tmp_path)).complete(payload)
+    database = Database(settings.database_path)
+    database.initialize()
+    job_id, _ = database.upsert_job(
+        CollectedJob(
+            source="fixture", source_job_id="1", title="Backend Engineer", company="Example",
+            location="Remote Worldwide", description="Build backend systems", url="https://example.com/jobs/1",
+        )
+    )
+    service = SyncService(settings, database, LlmClient(settings))
+
+    async def collected(*_args, **_kwargs) -> None:
+        raise AssertionError("a rescore must not contact a source")
+
+    monkeypatch.setattr(service, "_sync_one_source", collected)
+    result = await service.run(collect=False)
+
+    assert result.phase == "complete"
+    assert result.sources_total == 0
+    assert result.jobs_seen == 0
+    assert result.jobs_scored == 1
+    assert database.get_job(job_id)["score_status"] == "scored"
+
+
+async def test_a_rescore_cannot_start_while_a_refresh_is_running(tmp_path, monkeypatch) -> None:
+    """One pipeline, one lock: the second request returns the running status and does no work."""
+    payload = {
+        "candidate": {"schema_version": "1.0", "name": "Candidate", "location": {"country_code": "TR", "country_name": "Türkiye"}, "skills": {}},
+        "mobility": {"schema_version": "1.0", "current_country_code": "TR", "work_authorizations": ["TR"]},
+        "preferences": {"schema_version": "1.0", "target_roles": ["Backend Engineer"]},
+        "enabled_source_ids": ["arbeitnow"],
+        "llm": {"mode": "rules", "base_url": "http://127.0.0.1:11434/v1", "model": "qwen3:8b"},
+        "activate": True,
+    }
+    settings = SetupService(Settings.load(tmp_path)).complete(payload)
+    database = Database(settings.database_path)
+    database.initialize()
+    service = SyncService(settings, database, LlmClient(settings))
+    collecting = asyncio.Event()
+    finish = asyncio.Event()
+
+    async def blocking(*_args, **_kwargs) -> None:
+        collecting.set()
+        await finish.wait()
+
+    monkeypatch.setattr(service, "_sync_one_source", blocking)
+    refresh = asyncio.create_task(service.run())
+    await collecting.wait()
+
+    rejected = await service.run(collect=False)
+
+    assert rejected.kind == "refresh"
+    assert rejected.running is True
+    assert rejected.phase == "collecting"
+    finish.set()
+    assert (await refresh).kind == "refresh"
 
 
 async def test_empty_complete_snapshot_preserves_previously_active_posting(tmp_path, monkeypatch) -> None:

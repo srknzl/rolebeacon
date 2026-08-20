@@ -145,6 +145,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "sync": sync_service.status.to_dict(),
             "routes": app_settings.load_strategies(),
             "setup_complete": app_settings.setup_complete,
+            "activated": app_settings.activated,
             # Every page states which engine produced what it shows, because the two modes
             # differ in what they can produce and whether a repeat run gives the same answer.
             "llm_enabled": app_settings.llm_enabled,
@@ -194,13 +195,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             jobs = database.list_jobs(filters, sort=sort, limit=page_size, offset=(page - 1) * page_size)
             total = database.count_jobs(filters)
-            all_matches_total = database.count_jobs(replace(filters, hide_mismatched_titles=False))
+            # Each hidden-count is "how many more you would see if you flipped this one default",
+            # so each is counted with only its own default lifted.
+            hidden_title_count = max(0, database.count_jobs(replace(filters, hide_mismatched_titles=False)) - total)
+            hidden_triaged_count = max(0, database.count_jobs(replace(filters, hide_triaged=False)) - total)
+            all_matches_total = database.count_jobs(
+                replace(filters, hide_mismatched_titles=False, hide_triaged=False)
+            )
         except Exception as error:
             jobs, total, all_matches_total = [], 0, 0
+            hidden_title_count = hidden_triaged_count = 0
             query_error = str(error)
         else:
             query_error = ""
-        hidden_title_count = max(0, all_matches_total - total)
         source_names = {item.id: item.name for item in sources}
         for job in jobs:
             job["source_name"] = source_names.get(job.get("primary_source_id") or "", "")
@@ -217,6 +224,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 total=total,
                 all_matches_total=all_matches_total,
                 hidden_title_count=hidden_title_count,
+                hidden_triaged_count=hidden_triaged_count,
                 page=page,
                 page_size=page_size,
                 page_count=max(1, -(-total // page_size)),
@@ -516,12 +524,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"completed": True, "activated": app_settings.activated, "redirect": redirect}
 
     @app.post("/api/sync", status_code=status.HTTP_202_ACCEPTED)
-    async def trigger_sync(background_tasks: BackgroundTasks) -> dict[str, Any]:
+    async def trigger_sync(background_tasks: BackgroundTasks, collect: bool = True) -> dict[str, Any]:
+        """Refresh, or with collect=false re-evaluate collected jobs without contacting a source."""
         if not app_settings.setup_complete or not app_settings.activated:
             raise HTTPException(status_code=409, detail="Complete and activate setup before syncing")
         if sync_service.status.running:
             return {"accepted": False, "reason": "already_running", "status": sync_service.status.to_dict()}
-        background_tasks.add_task(sync_service.run, False, True)
+        background_tasks.add_task(sync_service.run, False, True, collect)
         return {"accepted": True}
 
     @app.get("/api/sync/status")
@@ -1085,12 +1094,13 @@ def _job_filters_from_query(
     if company_list in {"priority", "watchlist"} and preferences is not None:
         names = preferences.get("priority_companies" if company_list == "priority" else "company_watchlist", [])
         company_in = tuple(company_key(str(name)) for name in names)
+    chosen_status = _selected(params, "job_status")
     return JobFilters(
         query=values.get("q", "").strip(),
         title=values.get("title", "").strip(),
         technologies=technologies,
         route=_selected(params, "route"),
-        status=_selected(params, "job_status"),
+        status=chosen_status,
         source_ids=source_ids,
         company=values.get("company", "").strip(),
         company_in=company_in,
@@ -1111,6 +1121,10 @@ def _job_filters_from_query(
         # Inverted default: absent from the query (a fresh page load, or an explicit uncheck -
         # HTML forms omit an unchecked box either way) means hide, which is the requested default.
         hide_mismatched_titles=values.get("show_mismatched_titles", "") not in {"1", "true", "on"},
+        # Same inverted default for jobs already decided on. Picking statuses explicitly is the
+        # stronger signal, so an explicit Status facet choice switches this off by itself - a
+        # tick on "Bookmarked" must not be cancelled out by the default that hides bookmarks.
+        hide_triaged=not chosen_status and values.get("show_triaged", "") not in {"1", "true", "on"},
     )
 
 

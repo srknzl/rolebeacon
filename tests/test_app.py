@@ -79,6 +79,44 @@ def test_idle_refresh_panel_stays_hidden_until_user_starts_refresh(tmp_path) -> 
     assert "syncPanel.hidden = true" in page.text
 
 
+def test_rescore_button_starts_a_run_that_collects_nothing(tmp_path) -> None:
+    """The Rescore control must reach the pipeline with collection switched off."""
+    app = create_app(configured_settings(tmp_path))
+    calls: list[tuple[bool, bool, bool]] = []
+
+    async def run(force: bool = False, manual: bool = False, collect: bool = True):
+        calls.append((force, manual, collect))
+        return app.state.sync_service.status
+
+    app.state.sync_service.run = run  # type: ignore[method-assign]
+    with TestClient(app) as client:
+        page = client.get("/jobs").text
+        response = client.post("/api/sync?collect=false")
+
+    assert response.status_code == 202
+    # The scheduler's own start-up run is in here too; only the rescore carries collect=False.
+    assert (False, True, False) in calls
+    assert [call for call in calls if call[2] is False] == [(False, True, False)]
+    assert 'id="rescore-button"' in page
+    assert '"/api/sync?collect=false"' in page
+
+
+def test_hiding_the_refresh_panel_survives_polling_and_stays_reopenable(tmp_path) -> None:
+    """Hide must outlast the one-second poll, and leave a control that opens the panel again."""
+    app = create_app(configured_settings(tmp_path))
+
+    with TestClient(app) as client:
+        page = client.get("/jobs").text
+
+    assert 'setSyncDismissedRun(syncCurrentRun); syncPanel.hidden = true;' in page
+    assert "if (state.running && !syncDismissed) syncPanel.hidden = false;" in page
+    assert 'function showSyncPanel() { setSyncDismissedRun(""); syncPanel.hidden = false; }' in page
+    # The panel is chrome on every page, so the dismissal has to outlive this page's variables.
+    assert 'syncStore?.getItem("rolebeacon.sync-dismissed-run")' in page
+    assert 'syncButton.disabled = Boolean(state.running) && !syncDismissed;' in page
+    assert 'syncButton.textContent = syncDismissed ? (rescoring ? "Show rescore status" : "Show refresh status") : "Refresh now";' in page
+
+
 def test_setup_exposes_validated_accessible_score_distribution(tmp_path) -> None:
     app = create_app(Settings.load(tmp_path))
 
@@ -108,6 +146,34 @@ def test_manual_refresh_requires_explicit_activation(tmp_path, monkeypatch) -> N
 
     assert response.status_code == 409
     assert calls == []
+
+
+def test_refresh_control_points_at_activation_instead_of_failing(tmp_path) -> None:
+    """A completed but unactivated install must not offer a refresh the API always rejects."""
+    payload = setup_payload()
+    payload["activate"] = False
+    inactive = create_app(SetupService(Settings.load(tmp_path / "inactive")).complete(payload))
+    active = create_app(configured_settings(tmp_path / "active"))
+
+    with TestClient(inactive) as client:
+        inactive_page = client.get("/jobs").text
+    with TestClient(active) as client:
+        active_page = client.get("/jobs").text
+
+    assert 'id="sync-button"' not in inactive_page
+    assert 'href="/settings"' in inactive_page and "Activate collection" in inactive_page
+    assert 'id="sync-button"' in active_page
+
+
+def test_a_generated_or_imported_setup_draft_cannot_switch_off_activation(tmp_path) -> None:
+    """Drafts always carry activate=false; hydrating one must not deactivate a live install."""
+    app = create_app(configured_settings(tmp_path))
+
+    with TestClient(app) as client:
+        page = client.get("/settings").text
+
+    assert "setup.activate" not in page
+    assert 'document.getElementById("activate").checked = true;' in page
 
 
 def test_setup_schema_validation_and_completion(tmp_path) -> None:
@@ -899,7 +965,9 @@ def test_preferences_separate_search_from_application_and_hide_rules_details(tmp
     assert page.status_code == 200
     # One tab per pane, and each tab points at the pane it shows.
     tabs = re.findall(r'data-settings-tab="([^"]+)" aria-controls="panel-([^"]+)"', page.text)
-    assert [tab for tab, _ in tabs] == ["profile", "mobility", "sources", "scoring", "company-research", "application"]
+    assert [tab for tab, _ in tabs] == [
+        "profile", "mobility", "sources", "scoring", "company-research", "application", "appearance",
+    ]
     assert all(tab == panel for tab, panel in tabs)
     assert all(f'data-settings-panel="{tab}"' in page.text for tab, _ in tabs)
     assert "LLM fit may use summary, location, experience, projects, skills, education" in page.text
@@ -1673,7 +1741,9 @@ def test_a_job_card_badges_only_what_could_have_been_otherwise(tmp_path) -> None
     with TestClient(app) as client:
         default_list = client.get("/jobs")
         bookmarked = client.post(f"/api/jobs/{job_id}/feedback", json={"status": "bookmarked"})
-        after = client.get("/jobs")
+        # The default list is the undecided queue, so a bookmarked job needs show_triaged to
+        # appear at all - the badge itself is what this test is about.
+        after = client.get("/jobs?show_triaged=1")
 
     badges = re.search(r'<div class="job-card-badges">(.*?)</div>', default_list.text, re.S)
     assert badges is not None
@@ -1683,6 +1753,85 @@ def test_a_job_card_badges_only_what_could_have_been_otherwise(tmp_path) -> None
     # A decision the reader actually made is still worth a badge.
     assert bookmarked.status_code == 200
     assert ">bookmarked<" in re.search(r'<div class="job-card-badges">(.*?)</div>', after.text, re.S).group(1)
+
+
+def test_the_jobs_list_defaults_to_undecided_jobs_and_can_be_opened_up(tmp_path) -> None:
+    """Jobs already decided on are hidden by default, counted, and one click away."""
+    app = create_app(configured_settings(tmp_path))
+    database = app.state.database
+    kept, _ = database.upsert_job(CollectedJob(
+        source="fixture", source_job_id="keep", title="Backend Engineer", company="Acme",
+        location="Remote Worldwide", description="Build backend systems", url="https://example.test/keep",
+    ))
+    decided, _ = database.upsert_job(CollectedJob(
+        source="fixture", source_job_id="decided", title="Backend Engineer", company="Acme",
+        location="Remote Worldwide", description="Build backend systems", url="https://example.test/decided",
+    ))
+    database.save_feedback(decided, JobStatus.BOOKMARKED)
+
+    with TestClient(app) as client:
+        default_list = client.get("/jobs").text
+        opened_up = client.get("/jobs?show_triaged=1").text
+        # An explicit Status choice is the stronger signal and must survive the default.
+        by_status = client.get("/jobs?job_status=bookmarked").text
+
+    assert f'/jobs/{kept}' in default_list
+    assert f'/jobs/{decided}' not in default_list
+    assert "1 hidden as already decided — show" in default_list
+    assert f'/jobs/{decided}' in opened_up
+    assert f'/jobs/{decided}' in by_status
+    assert f'/jobs/{kept}' not in by_status
+
+
+def test_the_search_box_stops_advertising_its_syntax_as_the_expected_input(tmp_path) -> None:
+    """The placeholder read as what to type. The operators are stated once, below the box."""
+    app = create_app(configured_settings(tmp_path))
+
+    with TestClient(app) as client:
+        page = client.get("/jobs").text
+
+    assert "java AND (kafka OR kubernetes)" not in page
+    assert 'placeholder="Search jobs"' in page
+    assert "explorer-syntax" in page
+    for operator in ("<code>AND</code>", "<code>OR</code>", "<code>NOT</code>"):
+        assert operator in page
+
+
+def test_a_wide_window_puts_the_facets_in_a_scrolling_rail_beside_the_results(tmp_path) -> None:
+    """The rail is CSS over the existing markup, so both halves have to line up to work."""
+    settings = configured_settings(tmp_path)
+    css = (settings.resource_dir / "static" / "style.css").read_text()
+    app = create_app(settings)
+
+    with TestClient(app) as client:
+        page = client.get("/jobs").text
+
+    # The grid needs both columns to exist, and the form has to hand its children to the grid
+    # rather than box them - the search field and the facets sit in different columns.
+    assert 'class="jobs-layout"' in page and 'class="jobs-results"' in page
+    rail = css[css.index("@media (min-width: 901px)") : css.index("\n}\n", css.index("@media (min-width: 901px)"))]
+    assert ".explorer { display: contents; }" in rail
+    assert "grid-column: 1;" in rail and "grid-row: 1 / span 2;" in rail
+    # A rail taller than the window has to scroll on its own, not push the page down.
+    assert "overflow-y: auto;" in rail and "position: sticky;" in rail
+    # And a group opens in place, so more than one can be open while the list stays put.
+    assert "position: static;" in rail
+
+
+def test_appearance_is_a_browser_choice_and_never_reaches_the_saved_setup(tmp_path) -> None:
+    """A palette has no schema version and no round-trip: it must not ride along in the payload."""
+    app = create_app(configured_settings(tmp_path))
+
+    with TestClient(app) as client:
+        page = client.get("/settings").text
+        wizard = client.get("/setup").text
+
+    body, _, after_form = page.partition("</form>")
+    assert 'data-settings-panel="appearance"' in after_form, "the panel must sit outside the form"
+    assert 'name="theme"' not in body
+    assert [f'value="{choice}"' in after_form for choice in ("system", "light", "dark")] == [True] * 3
+    # First-run setup has enough to decide on already.
+    assert 'data-settings-panel="appearance"' not in wizard
 
 
 def test_a_help_tip_never_steals_its_field_s_label(tmp_path) -> None:
@@ -1933,14 +2082,17 @@ def test_the_dark_palette_covers_every_colour_the_stylesheet_uses(tmp_path) -> N
     literal = re.compile(r"#[0-9a-fA-F]{3,8}\b|\brgba?\(")
     declaration = re.compile(r"^\s*(--[a-z-]+):\s*([^;]+);", re.M)
 
-    dark_start = css.index("@media (prefers-color-scheme: dark)")
-    dark_end = css.index("\n  }\n}", dark_start) + len("\n  }\n}")
+    dark_start = css.index('[data-theme="dark"] {')
+    dark_end = css.index("\n}\n", dark_start)
     light, dark = css[: css.index("\n}\n", css.index(":root {"))], css[dark_start:dark_end]
     elsewhere = css[dark_end:]
 
     coloured = {name for name, value in declaration.findall(light) if literal.search(value)}
     assert coloured == {name for name, _ in declaration.findall(dark)}
-    assert "color-scheme: light dark;" in light
+    # The head script resolves "match system" to an explicit attribute, so the native controls
+    # have to be told which palette they are in - neither block may leave it to the system.
+    assert "color-scheme: light;" in light
+    assert "color-scheme: dark;" in dark
     assert not literal.findall(elsewhere), "colours belong in the token blocks, not in a rule"
 
 

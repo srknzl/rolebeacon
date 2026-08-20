@@ -9,7 +9,7 @@ from typing import Any
 from .domain import EligibilityResult, EligibilityStatus, ScoreResult
 from .profile import CONTINENT_COUNTRY_CODES, DEFAULT_SCORE_WEIGHTS, country_names_by_code
 
-SCORING_PROMPT_VERSION = "job-fit-v22"
+SCORING_PROMPT_VERSION = "job-fit-v23"
 
 # Ineligibility is a hard gate: no combination of fit signals may push a total above this cap.
 # LLM scoring is only ever invoked for eligible jobs (see sync.py), so every ineligible job's
@@ -288,6 +288,17 @@ SPONSOR_PATTERNS = (
     r"(?:is|are) (?:visa |work[- ]visa )?sponsorship[- ]eligible",
     r"blue card",
 )
+# Checked before RELOCATION_PATTERNS, whose first entry matches the bare noun phrase and so reads
+# the standard "Relocation Statement: This position is not eligible for relocation assistance."
+# boilerplate as an offer of relocation. Mirrors NO_SPONSOR_PATTERNS winning over SPONSOR_PATTERNS.
+NO_RELOCATION_PATTERNS = (
+    r"not eligible for relocation",
+    r"no relocation (?:assistance|package|support|benefits?|budget)",
+    r"relocation (?:assistance|package|support|benefits?) (?:is |are )?not (?:available|provided|offered)",
+    r"(?:can(?:['\u2019]t| ?not)|will not|won['\u2019]t|do(?:es)? not|do(?:es)?n['\u2019]t|unable to"
+    r"|not able to|never) (?:(?:provide|offer|support|cover)\w* )?(?:any )?relocation",
+    r"without relocation (?:assistance|package|support)",
+)
 RELOCATION_PATTERNS = (
     r"relocation (?:assistance|package|support)",
     r"relocation (?:is )?(?:available|provided|offered)",
@@ -518,7 +529,8 @@ def evaluate_eligibility(
     signals: dict[str, Any] = raw_signals if isinstance(raw_signals, dict) else {}
     no_sponsor = _contains(text, NO_SPONSOR_PATTERNS)
     sponsor = not no_sponsor and (_contains(text, SPONSOR_PATTERNS) or signals.get("visa_sponsorship") is True)
-    relocation = _contains(text, RELOCATION_PATTERNS) or signals.get("relocation") is True
+    no_relocation = _contains(text, NO_RELOCATION_PATTERNS)
+    relocation = not no_relocation and (_contains(text, RELOCATION_PATTERNS) or signals.get("relocation") is True)
     scoped_remote = _contains(text, SCOPED_REMOTE_PATTERNS)
     worldwide = (
         _contains_unbounded_worldwide_claim(text) or "worldwide" in location.casefold()
@@ -587,7 +599,7 @@ def evaluate_eligibility(
     risks: list[str] = []
     status = EligibilityStatus.UNKNOWN
     sponsorship = "available" if sponsor else "unavailable" if no_sponsor else "unknown"
-    relocation_value = "available" if relocation else "unknown"
+    relocation_value = "available" if relocation else "unavailable" if no_relocation else "unknown"
     location_fit = "unknown"
     if matched_clearance:
         reasons.append("A matching active clearance is recorded in the local mobility profile")
@@ -666,6 +678,8 @@ def evaluate_eligibility(
         reasons.append("Visa sponsorship is explicitly mentioned")
     if relocation:
         reasons.append("Relocation support is explicitly mentioned")
+    if no_relocation:
+        risks.append("The posting explicitly rules out relocation support")
     if priority:
         reasons.append(
             "Company is on the candidate watchlist"

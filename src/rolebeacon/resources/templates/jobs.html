@@ -35,13 +35,21 @@
       {% if total %}<strong>{{ total|thousands }} matching job{{ '' if total == 1 else 's' }}</strong>{% elif all_matches_total %}<strong>No visible matches</strong> of {{ all_matches_total|thousands }} jobs{% else %}<strong>No matches</strong>{% endif %}
       {%- if hidden_title_count %} · <a href="{{ request.url.include_query_params(show_mismatched_titles=1, page=1) }}">{{ hidden_title_count|thousands }} hidden as different role{{ '' if hidden_title_count == 1 else 's' }} — show</a>
       {%- elif selected.get('show_mismatched_titles') %} · <a href="{{ request.url.remove_query_params('show_mismatched_titles') }}">different-role titles included — hide</a>{% endif %}
+      {%- if hidden_triaged_count %} · <a href="{{ request.url.include_query_params(show_triaged=1, page=1) }}">{{ hidden_triaged_count|thousands }} hidden as already decided — show</a>
+      {%- elif selected.get('show_triaged') %} · <a href="{{ request.url.remove_query_params('show_triaged') }}">decided jobs included — hide</a>{% endif %}
     </p>
   </div>
 </section>
 
+<div class="jobs-layout">
 <form class="explorer" method="get" id="job-filters">
   <div class="explorer-search">
-    <input name="q" value="{{ selected.get('q', '') }}" placeholder="java AND (kafka OR kubernetes)" aria-label="Search jobs">
+    <div class="explorer-search-field">
+      <input name="q" value="{{ selected.get('q', '') }}" placeholder="Search jobs" aria-label="Search jobs">
+      {# The operators used to live in the placeholder, where they read as the input the box wanted
+         rather than as something it also accepts. Said once, below the box, out of the way. #}
+      <p class="explorer-syntax">Also accepts <code>AND</code> <code>OR</code> <code>NOT</code> and <code>"exact phrases"</code></p>
+    </div>
     {{ tip("Full-text search over the title, company, location, and description. Several words must all appear. Use quotes for an exact phrase (\"event driven\"), OR for alternatives (kafka OR pulsar), and NOT to exclude (java NOT android).") }}
     <button class="button button-primary" type="submit">Search</button>
   </div>
@@ -59,7 +67,7 @@
     {{ facet("tech", "Technology", facet_options.tech, "Each ticked technology must appear in the job title or description. Ticking several narrows to jobs mentioning all of them, not any of them.") }}
     {% endif %}
     {{ facet("sponsorship", "Sponsorship", [("available", "Stated available"), ("unavailable", "Stated unavailable"), ("unknown", "Not stated")], "What the posting itself says about visa sponsorship. When nothing is stated it stays unknown rather than being guessed.") }}
-    {{ facet("relocation", "Relocation", [("available", "Stated available"), ("unknown", "Not stated")], "What the posting itself says about relocation support.") }}
+    {{ facet("relocation", "Relocation", [("available", "Stated available"), ("unavailable", "Stated unavailable"), ("unknown", "Not stated")], "What the posting itself says about relocation support. A posting that rules relocation out is unavailable, not unknown.") }}
     {{ facet("route", "Strategy", facet_options.route, "The search strategy that surfaced this job. RoleBeacon generates one per target role, work-authorization country, relocation target, and remote preference.") }}
     {{ facet("provider", "Scored by", [("rules", "Rules only"), ("model", "Language model")], "Which engine produced the score. Rules-only scores are deterministic; model scores add written evidence.") }}
 
@@ -84,6 +92,7 @@
         <label class="facet-choice"><input type="checkbox" name="has_salary" value="1" {% if selected.get('has_salary') %}checked{% endif %}>Only jobs with a stated salary</label>
         <label class="facet-choice"><input type="checkbox" name="hide_unmet_experience" value="1" {% if selected.get('hide_unmet_experience') %}checked{% endif %}>Hide unmet experience requirements {{ tip("Hides jobs whose posting states a specific years-of-experience requirement (such as \"5+ years of Java\") that your profile does not show. Detected the same way regardless of whether the job was scored by rules or a language model.") }}</label>
         <label class="facet-choice"><input type="checkbox" name="show_mismatched_titles" value="1" {% if selected.get('show_mismatched_titles') %}checked{% endif %}>Show different-role titles {{ tip("A title that reads as a different job entirely, such as a Product Manager or Sales Engineer posting when you look for engineering roles. Hidden by default.") }}</label>
+        <label class="facet-choice"><input type="checkbox" name="show_triaged" value="1" {% if selected.get('show_triaged') %}checked{% endif %}>Show jobs you already decided on {{ tip("Bookmarked, applied, and set-aside jobs. Hidden by default so this page stays the undecided queue. Choosing any Status above shows exactly those statuses instead.") }}</label>
       </div>
     </details>
 
@@ -94,12 +103,13 @@
   </div>
 </form>
 
+<div class="jobs-results">
 {% if active_chips %}
 <div class="filter-chips">
   <span>Filtering by</span>
   {% for chip in active_chips %}<a class="filter-chip" href="{{ chip.href }}" title="Remove this filter">{{ chip.label }}: {{ chip.value }} <span aria-hidden="true">×</span></a>{% endfor %}
   {# Clears filters only. The different-role default is not a filter and survives this. #}
-  <a class="filter-chip filter-chip-clear" href="/jobs{% if selected.get('show_mismatched_titles') %}?show_mismatched_titles=1{% endif %}">Clear all</a>
+  <a class="filter-chip filter-chip-clear" href="/jobs{% if selected.get('show_mismatched_titles') or selected.get('show_triaged') %}?{% if selected.get('show_mismatched_titles') %}show_mismatched_titles=1{% endif %}{% if selected.get('show_mismatched_titles') and selected.get('show_triaged') %}&{% endif %}{% if selected.get('show_triaged') %}show_triaged=1{% endif %}{% endif %}">Clear all</a>
 </div>
 {% endif %}
 
@@ -116,6 +126,8 @@
   {% if page < page_count %}<a class="button" href="{{ request.url.include_query_params(page=page + 1) }}">Next →</a>{% endif %}
 </nav>
 {% endif %}
+</div>
+</div>
 <script>
   const filterToggle = document.getElementById("filter-toggle");
   filterToggle?.addEventListener("click", () => {
@@ -132,10 +144,27 @@
     clearTimeout(applyTimer);
     applyTimer = setTimeout(() => filterForm.requestSubmit(), 400);
   });
-  // One menu open at a time, and a click outside closes it.
+  // The rail (see the min-width:901px block in style.css) is a column, not a stack of popovers:
+  // groups expand in place, so several can be open and an outside click closes nothing.
+  const rail = window.matchMedia("(min-width: 901px)");
+  // One menu open at a time, and a click outside closes it - popover behaviour only.
   document.addEventListener("click", (event) => {
+    if (rail.matches) return;
     document.querySelectorAll("details.facet[open]").forEach((facet) => {
       if (!facet.contains(event.target)) facet.removeAttribute("open");
+    });
+  });
+
+  // Ticking a box reloads the page, which would slam every group shut on every change, so the
+  // rail remembers what was open. Per tab, and never restored into popover mode - reopening ten
+  // floating menus over the list on load is not the same gesture at all.
+  const OPEN_FACETS = "rolebeacon.facets.open";
+  const openFacets = new Set(JSON.parse(sessionStorage.getItem(OPEN_FACETS) || "[]"));
+  document.querySelectorAll("details.facet[data-facet]").forEach((facet) => {
+    if (rail.matches && openFacets.has(facet.dataset.facet)) facet.open = true;
+    facet.addEventListener("toggle", () => {
+      openFacets[facet.open ? "add" : "delete"](facet.dataset.facet);
+      sessionStorage.setItem(OPEN_FACETS, JSON.stringify([...openFacets]));
     });
   });
 

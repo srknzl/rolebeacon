@@ -47,7 +47,8 @@ FACET_VALUE_SQL: dict[str, dict[str, str]] = {
         value: f"COALESCE(e.sponsorship, 'unknown') = '{value}'" for value in ("available", "unavailable", "unknown")
     },
     "relocation": {
-        value: f"COALESCE(e.relocation, 'unknown') = '{value}'" for value in ("available", "unknown")
+        value: f"COALESCE(e.relocation, 'unknown') = '{value}'"
+        for value in ("available", "unavailable", "unknown")
     },
     "job_status": {
         value: f"j.status = '{value}'"
@@ -113,6 +114,7 @@ class JobFilters:
     exclude_ineligible: bool = False
     hide_unmet_experience: bool = False
     hide_mismatched_titles: bool = False
+    hide_triaged: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1013,6 +1015,11 @@ class Database:
                 for value in providers
             )))
             params.extend(value for value in providers if value != MODEL_SCORED_PROVIDER_FILTER)
+        if filters.hide_triaged:
+            # Everything the user has already made a decision about - bookmarked, applied, or set
+            # aside. Only ever set when no explicit status was chosen (see _job_filters_from_query),
+            # so ticking Bookmarked in the Status facet still shows bookmarks.
+            clauses.append("j.status = 'new'")
         if filters.hide_mismatched_titles:
             # role_domain <= 9 is "unrelated" in both rule-based scoring (_role_match returns 2 or
             # 6 for a different role family, never 10-21) and the LLM prompt's own documented

@@ -40,7 +40,7 @@
   {# One tab bar, one pane. Two stacked navigations that looked nothing alike used to sit above
      a 4,359px form, and neither of them said whether it switched panes or scrolled. #}
   <nav class="settings-tabs" role="tablist" aria-label="Preference sections">
-    {% for value, label in [("profile", "Profile"), ("mobility", "Mobility & search"), ("sources", "Sources"), ("scoring", "Scoring"), ("company-research", "Company research"), ("application", "CV & applications")] %}
+    {% for value, label in [("profile", "Profile"), ("mobility", "Mobility & search"), ("sources", "Sources"), ("scoring", "Scoring"), ("company-research", "Company research"), ("application", "CV & applications"), ("appearance", "Appearance")] %}
     <button class="settings-tab" type="button" role="tab" data-settings-tab="{{ value }}" aria-controls="panel-{{ value }}" aria-selected="{{ 'true' if loop.first else 'false' }}">{{ label }}</button>
     {% endfor %}
   </nav>
@@ -244,6 +244,25 @@
   </div>
   {% endif %}
 </form>
+
+{% if editing %}
+{# Deliberately outside the form and outside the setup payload: a palette is a property of this
+   browser, not of the profile, so it needs no save, no schema version, and no round-trip. #}
+<section class="panel settings-tab-panel" data-settings-panel="appearance" id="panel-appearance" hidden>
+  <h2>Appearance</h2>
+  <p class="muted">Stored in this browser only. Nothing here is part of your saved setup and nothing leaves the machine.</p>
+  <div class="theme-choices">
+    {% for value, label, hint in [
+      ("system", "Match system", "Follows the operating system, and changes with it while the page is open."),
+      ("light", "Light", "Always the light palette, whatever the system is set to."),
+      ("dark", "Dark", "Always the dark palette, whatever the system is set to."),
+    ] %}
+    <label class="facet-choice"><input type="radio" name="theme" value="{{ value }}"><span>{{ label }}</span> {{ tip(hint) }}</label>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
 <script>
   const lines = id => document.getElementById(id).value.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
   // The skills textarea is a single flat list, but a candidate can be re-imported (multiple
@@ -564,10 +583,12 @@
     document.getElementById("llm-api-key").value = setup.llm?.api_key || "";
     document.getElementById("llm-api-key").placeholder = setup.llm?.api_key_configured ? "Saved key configured — leave blank to keep it" : "Optional API key";
     removeLlmKey = false;
-    document.getElementById("activate").checked = Boolean(setup.activate);
     syncCountryPickers();
   };
-  {% if initial_setup %}hydrateSetup({{ initial_setup|tojson }});{% else %}syncCountryPickers();{% endif %}
+  {# Activation is the user's own choice, not part of a payload: a generated plan and an imported
+     setup JSON both carry activate=false, so hydrating one must not silently switch off collection
+     an activated install already has. Only the saved state seeds this checkbox. #}
+  {% if initial_setup %}hydrateSetup({{ initial_setup|tojson }});document.getElementById("activate").checked = {{ initial_setup.activate|tojson }};{% else %}syncCountryPickers();{% endif %}
   document.getElementById("candidate-json").addEventListener("input", event => {
     if (!event.target.value.trim()) return;
     try {
@@ -731,6 +752,14 @@
       selectedPackSourceIds.set(item.dataset.packId, result.source_ids);
     }
   };
+  document.querySelectorAll('input[name="theme"]').forEach(input => {
+    input.checked = input.value === (localStorage.getItem("rolebeacon.theme") || "system");
+    input.addEventListener("change", () => {
+      localStorage.setItem("rolebeacon.theme", input.value);
+      applyTheme();
+    });
+  });
+
   document.querySelectorAll(".settings-tab").forEach(tab => tab.addEventListener("click", () => {
     document.querySelectorAll(".settings-tab").forEach(item => item.setAttribute("aria-selected", String(item === tab)));
     document.querySelectorAll(".settings-tab-panel").forEach(panel => { panel.hidden = panel.dataset.settingsPanel !== tab.dataset.settingsTab; });

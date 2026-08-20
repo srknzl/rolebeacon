@@ -107,6 +107,9 @@ def _friendly_error_prefix(error: Exception) -> str:
 
 @dataclass(slots=True)
 class SyncStatus:
+    # "refresh" collects and then scores; "rescore" only scores. The panel reads this to name
+    # itself and to drop the collection step, which a rescore never runs.
+    kind: str = "refresh"
     running: bool = False
     started_at: str = ""
     finished_at: str = ""
@@ -143,22 +146,35 @@ class SyncService:
         self._lock = asyncio.Lock()
         self._manual = False
 
-    async def run(self, force: bool = False, manual: bool = False) -> SyncStatus:
+    async def run(self, force: bool = False, manual: bool = False, collect: bool = True) -> SyncStatus:
+        """Collect from every enabled source, then score what is stale.
+
+        collect=False skips collection and contacts no source at all, which is what a rescore
+        after a rules, weight, or profile change needs: those all move the scoring version, so
+        the same staleness query below already selects exactly the evaluations that must be
+        redone - once, as the version contract requires.
+        """
         if self._lock.locked():
             return self.status
         self._manual = manual
         async with self._lock:
             if not self.settings.setup_complete or not self.settings.activated:
-                self.status = SyncStatus(error="setup_required")
+                self.status = SyncStatus(kind="refresh" if collect else "rescore", error="setup_required")
                 return self.status
             process_lock = self._acquire_process_lock()
             if process_lock is None:
-                self.status = SyncStatus(error="sync_already_running", phase="failed", phase_message="Another process is refreshing")
+                self.status = SyncStatus(
+                    kind="refresh" if collect else "rescore",
+                    error="sync_already_running",
+                    phase="failed",
+                    phase_message="Another process is already running",
+                )
                 return self.status
             SYNC_ACTIVITY.clear()
             self.database.reset_stale_sync_runs()
-            sources = [source for source in self.settings.load_sources() if source.enabled]
+            sources = [source for source in self.settings.load_sources() if source.enabled] if collect else []
             self.status = SyncStatus(
+                kind="refresh" if collect else "rescore",
                 running=True,
                 started_at=datetime.now(UTC).isoformat(),
                 sources_total=len(sources),
@@ -166,7 +182,10 @@ class SyncService:
                 llm_endpoint=self.settings.llm_base_url if self.settings.llm_enabled else "",
                 llm_model=self.settings.llm_model if self.settings.llm_enabled else "",
                 phase="preparing",
-                phase_message="Preparing sources and scoring configuration",
+                phase_message=(
+                    "Preparing sources and scoring configuration" if collect
+                    else "Preparing scoring configuration; no source will be contacted"
+                ),
                 progress_percent=2,
             )
             changed_ids: set[int] = set()
@@ -188,19 +207,20 @@ class SyncService:
                         "Fix the model in Settings or explicitly choose Rules only, then refresh again."
                     )
                     return self.status
-                self.status.phase = "collecting"
-                self.status.phase_message = "Collecting job postings"
-                self.status.progress_percent = 10
-                async with default_http_client() as client:
-                    global_gate = asyncio.Semaphore(SOURCE_CONCURRENCY)
-                    kind_gates: dict[str, asyncio.Semaphore] = {}
+                if collect:
+                    self.status.phase = "collecting"
+                    self.status.phase_message = "Collecting job postings"
+                    self.status.progress_percent = 10
+                    async with default_http_client() as client:
+                        global_gate = asyncio.Semaphore(SOURCE_CONCURRENCY)
+                        kind_gates: dict[str, asyncio.Semaphore] = {}
 
-                    async def guarded(source: Any) -> None:
-                        gate = kind_gates.setdefault(source.kind, asyncio.Semaphore(PER_KIND_CONCURRENCY))
-                        async with global_gate, gate:
-                            await self._sync_one_source(source, client, search_profile, force, changed_ids)
+                        async def guarded(source: Any) -> None:
+                            gate = kind_gates.setdefault(source.kind, asyncio.Semaphore(PER_KIND_CONCURRENCY))
+                            async with global_gate, gate:
+                                await self._sync_one_source(source, client, search_profile, force, changed_ids)
 
-                    await asyncio.gather(*(guarded(source) for source in sources))
+                        await asyncio.gather(*(guarded(source) for source in sources))
 
                 scoring_version = (
                     f"{SCORING_PROMPT_VERSION}:{self.settings.llm_model}"
@@ -215,7 +235,9 @@ class SyncService:
                 pending = set(self.database.pending_job_ids(scoring_version, limit=score_limit)) | changed_ids
                 self.status.jobs_to_score = len(pending)
                 self.status.phase = "scoring"
-                self.status.phase_message = "Ranking eligible jobs"
+                self.status.phase_message = (
+                    "Ranking eligible jobs" if collect else "Rescoring collected jobs; no source is contacted"
+                )
                 self.status.progress_percent = 65
                 known_terms = candidate_terms(candidate_profile)
                 for job_id in pending:
@@ -267,7 +289,7 @@ class SyncService:
                 )
                 self.status.phase_message = self.status.error or (
                     f"Refresh completed with {self.status.source_errors} source error(s)"
-                    if self.status.source_errors else "Refresh complete"
+                    if self.status.source_errors else "Refresh complete" if collect else "Rescore complete"
                 )
                 self.status.progress_percent = 100
             return self.status
