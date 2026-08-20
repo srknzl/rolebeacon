@@ -740,6 +740,10 @@ label:has(> .help-tip):not(:has(> input[type=checkbox])) > :not(.help-tip) { gri
 .sticky-panel { position: sticky; top: 90px; }
 .decision-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .decision-grid button:last-child { grid-column: 1 / -1; }
+/* The pipeline field carries the label style the rest of the app's fields use. */
+label.field { font-size: 12px; font-weight: 700; color: var(--muted); display: grid; gap: 5px; }
+/* The browser-fill option belongs to the button above it, not to the rail. */
+[data-prepare-form] .checkbox { align-items: start; margin-top: 8px; font-size: 12px; color: var(--muted); }
 
 .recommendation { padding: 12px; margin: 13px 0; background: var(--line-soft); border-radius: var(--radius-sm); }
 .recommendation.recommended { background: var(--success-bg); }

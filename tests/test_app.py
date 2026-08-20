@@ -9,7 +9,7 @@ from time import sleep
 import pytest
 from fastapi.testclient import TestClient
 
-from rolebeacon.app import _source_filter_options, create_app
+from rolebeacon.app import JOB_STATUS_LABELS, _source_filter_options, create_app
 from rolebeacon.company import RULES_MODEL
 from rolebeacon.config import Settings
 from rolebeacon.database import Database
@@ -1125,7 +1125,8 @@ def test_job_detail_decisions_are_in_place_and_cover_letter_requires_llm(tmp_pat
     assert "data-decision-form" in page.text
     assert "event.preventDefault()" in page.text
     assert "The tailored résumé uses only your locally stored candidate profile" in page.text
-    assert "Cover letter requires an LLM" in page.text
+    # Rules-only mode cannot write a cover letter, so the control leads to the setting that can.
+    assert "Set up a model to write cover letters" in page.text
     assert decision.status_code == 200
     assert app.state.database.get_job(job_id)["status"] == "bookmarked"
 
@@ -1172,7 +1173,9 @@ def test_bookmarking_a_job_shows_it_on_the_pipeline_board_without_a_resume(tmp_p
     assert not app.state.database.list_applications()
 
 
-def test_job_detail_bookmark_button_toggles_between_bookmark_and_remove(tmp_path) -> None:
+def test_the_job_rail_states_the_pipeline_once_and_keeps_its_actions_together(tmp_path) -> None:
+    # Five buttons for one field showed no indication of which one was already true, and the
+    # rail then explained in prose where the primary action lived.
     app = create_app(configured_settings(tmp_path))
     job_id, _ = app.state.database.upsert_job(
         CollectedJob(
@@ -1186,12 +1189,19 @@ def test_job_detail_bookmark_button_toggles_between_bookmark_and_remove(tmp_path
         client.post(f"/api/jobs/{job_id}/feedback", json={"status": "bookmarked"})
         after = client.get(f"/jobs/{job_id}")
 
-    # Not bookmarked yet: the button offers to bookmark it.
-    assert 'data-toggle="bookmarked" value="bookmarked"' in before.text
-    assert ">Bookmark<" in before.text
-    # Already bookmarked: the same button now offers to undo it, not re-send "bookmarked" forever.
-    assert 'data-toggle="bookmarked" value="new"' in after.text
-    assert ">Remove bookmark<" in after.text
+    # One control for one value, and it shows the value the job actually holds.
+    for page, expected in ((before, "new"), (after, "bookmarked")):
+        options = re.findall(r'<option value="([^"]+)"([^>]*)>', page.text)
+        assert [value for value, _ in options] == list(JOB_STATUS_LABELS)
+        assert [value for value, attributes in options if "selected" in attributes] == [expected]
+    assert 'data-toggle="bookmarked"' not in after.text
+    # The primary action sits with the other actions instead of being described from a distance.
+    rail = after.text.split('<aside class="detail-sidebar">')[1]
+    assert "data-prepare-form" in rail
+    assert "open-browser-toggle" in rail
+    assert "at the top of the page" not in after.text
+    # An employer nobody has researched says so.
+    assert "company fit not researched" in after.text
 
 
 def test_removing_a_bookmarked_job_takes_it_off_the_pipeline_board(tmp_path) -> None:

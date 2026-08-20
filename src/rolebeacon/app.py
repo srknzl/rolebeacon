@@ -271,6 +271,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 cover_letter_text=cover_letter_text,
                 dimension_meta=dimension_metadata(app_settings.load_search_profile()),
                 open_browser=app_settings.open_browser,
+                status_labels=JOB_STATUS_LABELS,
             ),
         )
 
@@ -906,6 +907,18 @@ FILTER_CHIP_LABELS: dict[str, str] = {
     "salary_floor": "Salary at least",
     "has_salary": "Has stated salary",
     "hide_unmet_experience": "Hiding unmet experience requirements",
+}
+
+# The pipeline is one value, not five buttons, so the detail page names every state it can hold.
+# "new" is the absence of a decision rather than a stage, and "rejected" means the employer said
+# no after an application, which "Rejected" alone reads as the reader's own decision.
+JOB_STATUS_LABELS = {
+    "new": "No decision yet",
+    "bookmarked": "Bookmarked",
+    "not_interested": "Not interested",
+    "applied": "Applied",
+    "offer": "Offer received",
+    "rejected": "Rejected by employer",
 }
 
 # One screen of decisions at a time. 366 sets of copies is not a page anyone works through in

@@ -11,10 +11,8 @@
     <p class="safety-note">{{ (job.location_fit or '')|location_requirement }}</p>
   </div>
   <div class="detail-header-actions">
-    <div class="detail-score" title="Overall score from 0 to 100. It combines eligibility, role fit, skills, seniority, and work-model constraints."><strong>{{ job.opportunity_score or job.score or '—' }}</strong><span>opportunity score</span><small>job {{ job.score or '—' }} · company {{ job.company_score or '—' }}</small></div>
+    <div class="detail-score" title="Overall score from 0 to 100. It combines eligibility, role fit, skills, seniority, and work-model constraints."><strong>{{ job.opportunity_score or job.score or '—' }}</strong><span>opportunity score</span><small>job fit {{ job.score or 'not scored' }} · company fit {{ job.company_score or 'not researched' }}</small></div>
     {% if application and application.packet_path %}<a class="artifact-link" data-packet-link href="/artifacts/{{ job.id }}/application-packet.json" title="Open the prepared answers RoleBeacon assembled for this application.">Open prepared application packet</a>{% endif %}
-    <label class="checkbox" title="When on, Prepare application also opens a real browser window on the original posting and auto-fills the fields it can find (name, email, phone, website, GitHub, LinkedIn, résumé upload). Salary, relocation, legal questions, and final submission always stay manual."><input type="checkbox" id="open-browser-toggle" {{ 'checked' if open_browser }}> Open a browser and auto-fill supported fields</label>
-    <form action="/api/jobs/{{ job.id }}/prepare-application" method="post" data-prepare-form><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button-primary wide" title="Assemble your saved answers into a reviewable packet. RoleBeacon never submits an application.">Prepare application</button></form>
   </div>
 </section>
 
@@ -54,25 +52,29 @@
   <aside class="detail-sidebar">
     <div class="panel sticky-panel">
       <h2>Decision</h2>
-      <form action="/api/jobs/{{ job.id }}/feedback" method="post" class="decision-grid" data-decision-form>
+      {# Five buttons for one field never said which of them was already true. The pipeline is a
+         single value, so it is a single control, and it shows the value it holds. #}
+      <form action="/api/jobs/{{ job.id }}/feedback" method="post" data-decision-form>
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button name="status" data-toggle="bookmarked" value="{{ 'new' if job.status == 'bookmarked' else 'bookmarked' }}" class="button button-primary" title="Keep this job in your bookmarks for follow-up.">{{ 'Remove bookmark' if job.status == 'bookmarked' else 'Bookmark' }}</button>
-        <button name="status" data-toggle="not_interested" value="{{ 'new' if job.status == 'not_interested' else 'not_interested' }}" class="button button-quiet" title="Hide this job from recommendations. The original posting is not changed.">{{ 'Undo not interested' if job.status == 'not_interested' else 'Not interested' }}</button>
+        <label class="field">Where this stands
+          <select name="status" data-decision-select>
+            {% for value, label in status_labels.items() %}<option value="{{ value }}" {{ 'selected' if job.status == value }}>{{ label }}</option>{% endfor %}
+          </select>
+        </label>
+        <noscript><button class="button wide">Save</button></noscript>
       </form>
-      <p class="safety-note">Record where this application stands. RoleBeacon cannot see the employer's system, so these are your own notes.</p>
-      <form action="/api/jobs/{{ job.id }}/feedback" method="post" class="decision-grid" data-decision-form>
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button name="status" value="applied" class="button" title="You submitted this application yourself. It moves to Applied on the pipeline board.">I applied</button>
-        <button name="status" value="offer" class="button" title="You received an offer for this role.">Offer</button>
-        <button name="status" value="rejected" class="button button-quiet" title="The employer rejected this application.">Rejected</button>
-      </form>
+      <p class="safety-note">RoleBeacon cannot see the employer's system, so this is your own record of where the application stands. Not interested also hides the job from recommendations.</p>
       <hr>
       <h2>Application kit</h2>
       <p class="safety-note">The tailored résumé uses only your locally stored candidate profile and this job description. It works without an LLM and never invents experience.</p>
       {% if application and application.resume_path %}<a class="artifact-link" href="/artifacts/{{ job.id }}/resume.pdf" title="Open the locally generated resume PDF for review.">Open tailored resume</a>{% else %}<form action="/api/jobs/{{ job.id }}/resume" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button wide" title="Create a factual resume draft using only verified profile evidence.">Generate tailored resume</button></form>{% endif %}
       <div class="recommendation {% if cover_letter_recommended %}recommended{% endif %}"><strong>{{ 'Recommended' if cover_letter_recommended else 'Optional' }} cover letter</strong><p>{{ cover_letter_reason }}</p></div>
-      {% if application and application.cover_letter_path %}<a class="artifact-link" href="/artifacts/{{ job.id }}/cover-letter.txt" title="Open the locally generated cover letter for review.">Open cover letter</a>{% elif llm_enabled %}<form action="/api/jobs/{{ job.id }}/cover-letter" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button wide" title="Create an on-demand factual cover letter. You must review it before use.">Generate cover letter</button></form>{% else %}<button class="button wide" disabled title="Choose and test an LLM in Settings to generate a cover letter.">Cover letter requires an LLM</button>{% endif %}
-      <p class="safety-note">Prepare application and its browser-fill option are at the top of the page, next to the opportunity score.</p>
+      {% if application and application.cover_letter_path %}<a class="artifact-link" href="/artifacts/{{ job.id }}/cover-letter.txt" title="Open the locally generated cover letter for review.">Open cover letter</a>{% elif llm_enabled %}<form action="/api/jobs/{{ job.id }}/cover-letter" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button wide" title="Create an on-demand factual cover letter. You must review it before use.">Generate cover letter</button></form>{% else %}<a class="button wide" href="/settings" title="Cover letters are written by a local model. Choose and test one in Settings.">Set up a model to write cover letters</a>{% endif %}
+      <form action="/api/jobs/{{ job.id }}/prepare-application" method="post" data-prepare-form>
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button class="button button-primary wide" title="Assemble your saved answers into a reviewable packet. RoleBeacon never submits an application.">Prepare application</button>
+        <label class="checkbox" title="When on, Prepare application also opens a real browser window on the original posting and auto-fills the fields it can find (name, email, phone, website, GitHub, LinkedIn, résumé upload). Salary, relocation, legal questions, and final submission always stay manual."><input type="checkbox" id="open-browser-toggle" {{ 'checked' if open_browser }}> Also open a browser and fill in the fields it can</label>
+      </form>
       <a class="button button-quiet wide" href="{{ job.apply_url or job.canonical_url }}" target="_blank" rel="noopener" title="Open the original posting in a new tab for your review and final submission.">Open original posting ↗</a>
       <p class="trust-banner">RoleBeacon never submits the application. Review every answer and press Submit yourself.</p>
       <hr>
@@ -90,29 +92,14 @@
   const jobMessage = document.getElementById("job-message");
   const showJobMessage = (text, ok = true) => { jobMessage.textContent = text; jobMessage.className = ok ? "toast alert-success" : "toast"; jobMessage.hidden = false; setTimeout(() => { jobMessage.hidden = true; }, 6000); };
   const jobStatuses = ["new", "bookmarked", "not_interested", "applied", "offer", "rejected"];
-  // The bookmark/not-interested buttons are toggles: their value/label flip between the target
-  // status and "new" (off) depending on the job's current status, so a second click undoes the
-  // first instead of just re-sending the same status forever.
-  const toggleLabels = {
-    bookmarked: { on: "Remove bookmark", off: "Bookmark" },
-    not_interested: { on: "Undo not interested", off: "Not interested" },
-  };
-  const applyToggleState = currentStatus => document.querySelectorAll("[data-toggle]").forEach(button => {
-    const isActive = currentStatus === button.dataset.toggle;
-    button.value = isActive ? "new" : button.dataset.toggle;
-    button.textContent = isActive ? toggleLabels[button.dataset.toggle].on : toggleLabels[button.dataset.toggle].off;
-  });
-  document.querySelectorAll("[data-decision-form]").forEach(decisionForm => decisionForm.addEventListener("submit", async event => {
-    event.preventDefault();
-    const submitter = event.submitter;
-    if (!submitter) return;
-    const newStatus = submitter.value; // capture before applyToggleState mutates submitter.value
-    const response = await fetch(decisionForm.action, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({status: newStatus})});
+  const decisionSelect = document.querySelector("[data-decision-select]");
+  decisionSelect?.addEventListener("change", async event => {
+    const newStatus = decisionSelect.value;
+    const response = await fetch(decisionSelect.form.action, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({status: newStatus})});
     if (!response.ok) { showJobMessage("Could not save this decision.", false); return; }
-    document.querySelectorAll(".detail-header .status").forEach(item => { if (jobStatuses.some(value => item.classList.contains(`status-${value}`))) { item.className = `status status-${newStatus}`; item.textContent = newStatus; } });
-    applyToggleState(newStatus);
-    showJobMessage(`Marked as ${newStatus}.`);
-  }));
+    document.querySelectorAll(".detail-header .status").forEach(item => { if (jobStatuses.some(value => item.classList.contains(`status-${value}`))) { item.className = `status status-${newStatus}`; item.textContent = newStatus.replace("_", " "); } });
+    showJobMessage(`Saved: ${decisionSelect.selectedOptions[0].textContent}.`);
+  });
   const prepareForm = document.querySelector("[data-prepare-form]");
   const openBrowserToggle = document.getElementById("open-browser-toggle");
   prepareForm?.addEventListener("submit", async event => {
