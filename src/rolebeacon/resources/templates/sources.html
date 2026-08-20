@@ -169,25 +169,43 @@
 {% endif %}
 
 <section class="section-heading"><div><p class="eyebrow">SOURCE HEALTH</p><h2>Configured sources</h2></div></section>
+{# 262 rows is a haystack. The page opens on the sources that need a person to do something and
+   keeps the healthy ones one click away, and the table scrolls inside itself so no filter can
+   make the page 20,000px tall again. Filtering is client-side: every row is already here. #}
+<div class="source-filter">
+  <label class="source-filter-search"><span class="visually-hidden">Search configured sources</span>
+    <input id="source-health-search" type="search" placeholder="Search by name, id, or connector">
+  </label>
+  <div class="source-filter-chips" role="group" aria-label="Filter sources by state">
+    {% for value, label in [("attention", "Needs attention"), ("enabled", "Enabled"), ("disabled", "Disabled"), ("", "All")] %}
+    <button class="button button-quiet source-health-chip" type="button" data-source-state="{{ value }}">{{ label }} <span></span></button>
+    {% endfor %}
+  </div>
+</div>
 <div class="table-wrap source-table-wrap">
   <table>
-    <thead><tr><th>Source</th><th>Connector</th><th>Enabled</th><th>Status</th><th>Last success</th><th>Seen / new / changed</th><th>Requests / duration</th><th>Note</th><th></th></tr></thead>
+    <thead><tr><th>Source</th><th>Connector</th><th>State</th><th>Last success</th><th>Last run</th><th>Note</th><th></th></tr></thead>
     <tbody>
       {% for row in sources %}
-      <tr>
-        <td><strong>{{ row.config.name }}</strong><small>{{ row.config.company or row.config.id }}</small></td>
-        <td>{{ row.config.kind }}</td>
-        <td>{{ 'yes' if row.config.enabled else 'no' }}</td>
-        <td><span class="status status-{{ row.state.status or 'idle' }}">{{ row.state.status or 'not run' }}</span></td>
-        <td>{{ row.state.last_successful_sync_at or '—' }}</td>
-        <td>{{ row.state.jobs_seen or 0 }} / {{ row.state.last_jobs_new or 0 }} / {{ row.state.jobs_changed or 0 }}</td>
-        <td>{{ row.state.last_requests_made or 0 }} / {{ row.state.last_duration_ms or 0 }} ms</td>
-        <td class="{% if row.state.status == 'error' or row.state.last_truncated or row.state.last_snapshot_warning %}error-cell{% elif row.state.status == 'skipped' %}muted-cell{% endif %}">{% if row.state.last_snapshot_warning %}{{ row.state.last_snapshot_warning }}{% elif row.state.last_truncated %}Coverage was incomplete; this run was not used to close missing jobs.{% else %}{{ (row.state.last_error or row.state.last_skipped_reason or '')|replace('_', ' ') }}{% endif %}</td>
+      {% set failing = row.state.status == 'error' or row.state.last_truncated or row.state.last_snapshot_warning %}
+      {# A source that is switched off is not broken, so it gets its own chip rather than being
+         mixed in with the ones that ran and failed. #}
+      {% set attention = row.config.enabled and (failing or not row.state.last_successful_sync_at) %}
+      <tr data-source-row
+          data-state="{{ 'attention ' if attention }}{{ 'enabled' if row.config.enabled else 'disabled' }}"
+          data-search="{{ (row.config.name ~ ' ' ~ row.config.id ~ ' ' ~ (row.config.company or '') ~ ' ' ~ row.config.kind)|lower }}">
+        <td><strong>{{ row.config.name }}</strong>{% if row.config.id|lower != row.config.name|lower %}<small>{{ row.config.id }}</small>{% endif %}</td>
+        <td>{{ row.config.kind|replace('_', ' ') }}</td>
+        <td>{% if not row.config.enabled %}<span class="status">disabled</span>{% else %}<span class="status status-{{ row.state.status or 'idle' }}">{{ row.state.status or 'not run' }}</span>{% endif %}</td>
+        <td>{% if row.state.last_successful_sync_at %}<span title="{{ row.state.last_successful_sync_at }}">{{ row.state.last_successful_sync_at|time_ago }}</span>{% else %}never{% endif %}</td>
+        <td>{% if row.state.last_successful_sync_at %}{{ row.state.jobs_seen or 0 }} seen · {{ row.state.last_jobs_new or 0 }} new · {{ row.state.jobs_changed or 0 }} changed<small>{{ row.state.last_requests_made or 0 }} request{{ '' if row.state.last_requests_made == 1 else 's' }} · {% set ms = row.state.last_duration_ms or 0 %}{{ '%.1f s'|format(ms / 1000) if ms >= 1000 else ms ~ ' ms' }}</small>{% else %}—{% endif %}</td>
+        <td class="{% if failing %}error-cell{% elif row.state.status == 'skipped' %}muted-cell{% endif %}">{% if row.state.last_snapshot_warning %}{{ row.state.last_snapshot_warning }}{% elif row.state.last_truncated %}Coverage was incomplete; this run was not used to close missing jobs.{% else %}{{ (row.state.last_error or row.state.last_skipped_reason or '')|replace('_', ' ') }}{% endif %}</td>
         <td><button class="button button-quiet source-toggle" type="button" data-source-toggle="{{ row.config.id }}" data-enabled="{{ 'false' if row.config.enabled else 'true' }}">{{ 'Disable' if row.config.enabled else 'Enable' }}</button></td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
+  <p id="source-health-empty" class="muted source-health-empty" hidden></p>
 </div>
 
 <script>
@@ -342,6 +360,35 @@
     showSourceMessage(`${ids.length} LinkedIn searches ${enabled ? "enabled" : "disabled"}.`, true);
     setTimeout(() => window.location.reload(), 650);
   }));
+
+  const healthRows = [...document.querySelectorAll("[data-source-row]")];
+  const healthSearch = document.getElementById("source-health-search");
+  const healthEmpty = document.getElementById("source-health-empty");
+  const healthChips = [...document.querySelectorAll(".source-health-chip")];
+  const matchesState = (row, state) => !state || row.dataset.state.split(" ").includes(state);
+  let healthState = "attention";
+
+  const applyHealthFilter = () => {
+    const query = healthSearch.value.trim().toLowerCase();
+    let visible = 0;
+    healthRows.forEach(row => {
+      row.hidden = !(matchesState(row, healthState) && row.dataset.search.includes(query));
+      if (!row.hidden) visible += 1;
+    });
+    healthChips.forEach(chip => chip.classList.toggle("is-current", chip.dataset.sourceState === healthState));
+    healthEmpty.hidden = visible > 0;
+    healthEmpty.textContent = healthState === "attention" && !query
+      ? "No source needs attention right now."
+      : "No configured source matches this filter.";
+  };
+
+  healthChips.forEach(chip => {
+    // Each chip carries its own count, so "how many are broken" is answerable without clicking.
+    chip.querySelector("span").textContent = healthRows.filter(row => matchesState(row, chip.dataset.sourceState)).length;
+    chip.addEventListener("click", () => { healthState = chip.dataset.sourceState; applyHealthFilter(); });
+  });
+  healthSearch.addEventListener("input", applyHealthFilter);
+  applyHealthFilter();
 
   const sourceCatalogSearch = document.getElementById("source-catalog-search");
   sourceCatalogSearch.addEventListener("input", () => {

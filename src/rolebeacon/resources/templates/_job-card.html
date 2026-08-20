@@ -31,7 +31,7 @@
       {% if job.source_name %}<span>{{ job.source_name }}</span>{% endif %}
       {% if job.company_score %}<span>company fit {{ job.company_score }}</span>{% endif %}
       {% set age = job.published_at or job.first_seen_at %}
-      {% if age %}<span title="{{ 'Posted ' + age[:10] if job.published_at else 'First collected ' + age[:10] }}">{{ age|day_ago }}</span>{% endif %}
+      {% if age %}<span title="{{ 'Posted ' + age[:10] if job.published_at else 'First collected ' + age[:10] }}">{{ age|time_ago }}</span>{% endif %}
     </div>
     {% if job.risks %}<div class="risk">{{ job.risks[0] }}</div>{% endif %}
   </div>

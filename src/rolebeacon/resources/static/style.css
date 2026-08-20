@@ -1028,9 +1028,20 @@ td small { display: block; color: var(--muted); }
 .source-coverage-card.is-connected { border-color: var(--success); }
 .source-coverage-card div { display: grid; }
 .source-coverage-card span:not(.status) { font-size: 12px; color: var(--muted); }
+.source-table-wrap { max-height: 60vh; }
+.source-table-wrap thead th { position: sticky; top: 0; background: var(--paper); z-index: 1; }
 .source-table-wrap td:first-child { min-width: 170px; }
 .source-table-wrap td:last-child { white-space: nowrap; }
 .source-toggle { padding: 7px 10px; }
+.source-filter { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.source-filter-search { flex: 1 1 260px; }
+.source-filter-search input { width: 100%; }
+.source-filter-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.source-health-chip span { color: var(--muted); margin-left: 4px; }
+.source-health-chip.is-current { border-color: var(--brand); color: var(--brand); }
+.source-health-chip.is-current span { color: inherit; }
+.source-health-empty { padding: 18px; margin: 0; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 @media (max-width: 900px) {
   .source-discovery-form { grid-template-columns: 1fr 1fr; }

@@ -1488,3 +1488,40 @@ def test_the_board_reads_as_a_pipeline_and_a_card_can_be_moved_without_a_mouse(t
     assert card is not None
     labels = {str(item["label"]) for item in app.state.settings.load_strategies()} | {"Unclassified"}
     assert card.group(1).split(" · ")[1] in labels
+
+
+def test_the_source_table_opens_on_what_needs_attention_and_can_be_searched(tmp_path) -> None:
+    # 262 configured sources with no filter means finding the broken one costs 261 rows of
+    # scrolling. The table opens on the ones a person has to do something about.
+    # No startup refresh: the point of the test is the two outcomes recorded below, not whatever
+    # a background sync would write over them.
+    settings = replace(configured_settings(tmp_path), auto_sync=False)
+    healthy, broken = settings.load_sources()[:2]
+    for source in (healthy, broken):
+        settings.set_source_enabled(source.id, True)
+    app = create_app(settings)
+
+    app.state.database.start_source(healthy.id)
+    app.state.database.finish_source(healthy.id, seen=12, changed=1)
+    app.state.database.start_source(broken.id)
+    app.state.database.fail_source(broken.id, "connection refused")
+
+    with TestClient(app) as client:
+        page = client.get("/sources")
+
+    rows = {
+        search: state
+        for state, search in re.findall(
+            r'data-source-row\s+data-state="([^"]*)"\s+data-search="([^"]*)"', page.text
+        )
+    }
+    assert page.status_code == 200
+    # A source that ran and failed needs attention; one that ran cleanly does not.
+    assert [state for search, state in rows.items() if f" {broken.id} " in search] == ["attention enabled"]
+    assert [state for search, state in rows.items() if f" {healthy.id} " in search] == ["enabled"]
+    # The filter controls exist and default to the sources that need attention.
+    assert 'data-source-state="attention"' in page.text
+    assert 'id="source-health-search"' in page.text
+    assert 'let healthState = "attention"' in page.text
+    # Timestamps are relative, with the exact instant kept in the title.
+    assert ">2026-" not in page.text.split("SOURCE HEALTH")[1]

@@ -65,7 +65,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     templates.env.filters["description_blocks"] = description_blocks
     templates.env.filters["location_requirement"] = location_requirement
     templates.env.filters["location_requirement_label"] = location_requirement_label
-    templates.env.filters["day_ago"] = day_ago
+    templates.env.filters["time_ago"] = time_ago
     templates.env.filters["salary_range"] = salary_range
 
     @asynccontextmanager
@@ -873,11 +873,13 @@ _GROUPED_SOURCE_KINDS = {
 LINKEDIN_METHOD_KINDS = ("linkedin", "linkedin_browser")
 
 
-def day_ago(value: str) -> str:
-    """How old a posting is, in the words someone deciding whether to apply actually uses.
+def time_ago(value: str) -> str:
+    """How long ago something happened, in the words a reader actually uses.
 
-    An ISO date answers "which day"; a job seeker is asking "is this still open". The exact
-    timestamp stays in the element's title for anyone who wants the day back.
+    An ISO timestamp answers "which instant"; a job seeker is asking "is this still open" and
+    someone reading source health is asking "did this run recently". Below a day the answer is
+    hours or minutes, which is the difference between a source that just ran and one that has
+    been quiet all day. The exact timestamp stays in the element's title.
     """
     try:
         moment = datetime.fromisoformat(str(value))
@@ -885,9 +887,15 @@ def day_ago(value: str) -> str:
         return str(value)[:10]
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=UTC)
-    days = (datetime.now(UTC) - moment).days
-    if days <= 0:
-        return "today"
+    seconds = max(0, int((datetime.now(UTC) - moment).total_seconds()))
+    if seconds < 90:
+        return "just now"
+    if seconds < 3600:
+        return f"{seconds // 60} minutes ago"
+    if seconds < 86400:
+        hours = seconds // 3600
+        return f"{hours} hour{'s' if hours > 1 else ''} ago"
+    days = seconds // 86400
     if days == 1:
         return "yesterday"
     if days < 30:
