@@ -26,7 +26,8 @@ OpenAI-compatible model is an optional quality layer for evidence-rich scoring a
 - Provenance-backed company research and a separate company-fit score.
 - Selective, factual, on-demand cover letters.
 - Human-approved browser preparation that cannot submit an application.
-- Light and dark interface, following the operating system's colour scheme.
+- Rescore-only runs that re-evaluate the collected corpus without contacting a source.
+- Light and dark interface: follow the operating system, or pin either one in Settings.
 
 ## Screenshots
 
@@ -35,7 +36,7 @@ No external source was contacted to produce them.
 
 <p align="center">
   <img src="docs/screenshots/dashboard.png" alt="RoleBeacon dashboard opening on collection counts and the ranked shortlist" width="49%">
-  <img src="docs/screenshots/jobs.png" alt="RoleBeacon job discovery with the match count and one row of faceted filters" width="49%">
+  <img src="docs/screenshots/jobs.png" alt="RoleBeacon job discovery with the filter rail, the match count, and what each active default hid" width="49%">
 </p>
 <p align="center">
   <img src="docs/screenshots/job-detail.png" alt="RoleBeacon job detail leading with the opportunity score and why it matches" width="49%">
@@ -265,9 +266,11 @@ Setup generates strategies from the user's actual configuration:
 - remote work from the candidate's current country;
 - an explicit fallback strategy.
 
-The Jobs page hides titles from a clearly different role family by default, but this active default is
-never silent: the match count reads "N matching jobs · M hidden as different roles — show", and the link
-reveals those postings without changing the saved profile.
+The Jobs page opens on the undecided queue. Two defaults narrow it: titles from a clearly different
+role family, and jobs already bookmarked, applied to, or set aside. Neither default is silent — the
+match count reads "N matching jobs · M hidden as different roles — show · K hidden as already decided —
+show", and each link reveals those postings without changing the saved profile. Choosing a value in the
+Status facet overrides the second default, so ticking Bookmarked shows bookmarks.
 
 The deterministic score totals 100 points:
 
@@ -282,8 +285,11 @@ The deterministic score totals 100 points:
 
 These values are the defaults. Setup can redistribute the 100 points using non-negative whole-number
 weights, including zero for an advanced opt-out. A weight change produces a new stable scoring-behavior
-version, so stale evaluations are requeued once. Location and authorization points always come from the
-deterministic eligibility result, and eligibility remains a separate hard gate regardless of its weight.
+version, so stale evaluations are requeued once. **Rescore**, next to Refresh in the header, applies that
+requeue on demand: it re-evaluates the jobs already collected against the current rules, weights, and
+profile and contacts no source. Refresh and Rescore share one lock and never run at the same time.
+Location and authorization points always come from the deterministic eligibility result, and eligibility
+remains a separate hard gate regardless of its weight.
 
 Remote wording such as “EMEA” or “within your country of employment” is not treated as worldwide.
 Unknown eligibility remains visible as a risk. Explicit no-sponsorship, clearance, blocklist, and
