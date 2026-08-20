@@ -129,7 +129,8 @@ uv run rolebeacon jobs --from-json /path/to/setup-payload.json
 Refreshing requires the document to contain `"activate": true`; `--from-json ... --no-sync` may import an
 inactive setup because it contacts no external source.
 
-The command creates a timestamped `rolebeacon-jobs-<UTC timestamp>/` directory in the current directory.
+The command creates a timestamped `rolebeacon-jobs-YYYY-MM-DD-HHMM/` directory, named in local time, in the
+current directory.
 It writes `recommended-jobs.json`, `recommended-jobs.md`, `all-jobs.json`, and `all-jobs.md`, then prints
 their absolute paths. JSON contains the complete job, eligibility, scoring, and source-provenance fields;
 Markdown is a scannable summary. The all-jobs export contains every active, unmerged job in decision-ready

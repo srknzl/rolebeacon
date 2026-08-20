@@ -121,7 +121,7 @@ def _markdown(envelope: dict[str, Any]) -> str:
     lines = [
         f"# {kind}",
         "",
-        f"Generated: {envelope['generated_at']}",
+        f"Generated: {_local_stamp(envelope['generated_at'])}",
         f"Count: {envelope['count']}",
         f"Selection: {criteria} Sorted by `{selection['sort']}`.",
         "",
@@ -154,8 +154,16 @@ def _markdown(envelope: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _local_stamp(generated_at: str) -> str:
+    """The moment a person reads: local time, to the minute, with the zone named.
+
+    The machine-readable UTC instant stays in the JSON envelope's `generated_at`.
+    """
+    return datetime.fromisoformat(generated_at).astimezone().strftime("%Y-%m-%d %H:%M %Z")
+
+
 def _destination(base_directory: Path, generated_at: datetime) -> Path:
-    timestamp = generated_at.astimezone(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    timestamp = generated_at.astimezone().strftime("%Y-%m-%d-%H%M")
     candidate = base_directory / f"rolebeacon-jobs-{timestamp}"
     suffix = 2
     while candidate.exists():

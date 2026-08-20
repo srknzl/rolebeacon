@@ -114,7 +114,8 @@ def test_export_is_complete_versioned_and_dashboard_compatible(tmp_path) -> None
 
     assert result.all_jobs_count == 105
     assert result.recommended_jobs_count == 2
-    assert result.directory.name == "rolebeacon-jobs-20260817T123045123456Z"
+    # Named for the local minute a person can recognize, not a microsecond UTC instant.
+    assert result.directory.name == f"rolebeacon-jobs-{generated.astimezone():%Y-%m-%d-%H%M}"
     assert {path.name for path in result.paths} == {
         "recommended-jobs.json",
         "recommended-jobs.md",
@@ -153,7 +154,11 @@ def test_export_is_complete_versioned_and_dashboard_compatible(tmp_path) -> None
         "dimensions_json",
         "candidate",
     } & eligible.keys()
-    assert "Çağrı \\| Labs" in (result.directory / "all-jobs.md").read_text(encoding="utf-8")
+    markdown = (result.directory / "all-jobs.md").read_text(encoding="utf-8")
+    assert "Çağrı \\| Labs" in markdown
+    # The reader's own clock, to the minute; the exact UTC instant stays in the JSON envelope.
+    assert f"Generated: {generated.astimezone():%Y-%m-%d %H:%M}" in markdown
+    assert all_export["generated_at"] == generated.isoformat()
 
 
 def test_export_never_overwrites_a_run_with_the_same_timestamp(tmp_path) -> None:
@@ -165,8 +170,8 @@ def test_export_never_overwrites_a_run_with_the_same_timestamp(tmp_path) -> None
     first = export_jobs(database, tmp_path, sync=sync, generated_at=generated)
     second = export_jobs(database, tmp_path, sync=sync, generated_at=generated)
 
-    assert first.directory.name == "rolebeacon-jobs-20260817T000000000000Z"
-    assert second.directory.name == "rolebeacon-jobs-20260817T000000000000Z-2"
+    assert first.directory.name == f"rolebeacon-jobs-{generated.astimezone():%Y-%m-%d-%H%M}"
+    assert second.directory.name == f"rolebeacon-jobs-{generated.astimezone():%Y-%m-%d-%H%M}-2"
     assert (first.directory / "all-jobs.json").exists()
     assert (second.directory / "all-jobs.json").exists()
 
