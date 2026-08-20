@@ -225,3 +225,28 @@ def test_status_still_prints_json_when_stdout_is_not_a_terminal(tmp_path, monkey
     main()
 
     assert set(json.loads(capsys.readouterr().out)) == {"stats", "sources"}
+
+
+def test_every_command_reads_for_a_person_on_a_terminal_and_dumps_json_off_one(tmp_path, monkeypatch, capsys) -> None:
+    # Half the commands printed prose and half printed a raw dict, and neither was selectable.
+    _setup_without_syncing(tmp_path, monkeypatch)
+
+    def run(command: list[str], *, tty: bool) -> str:
+        monkeypatch.setattr(sys.stdout, "isatty", lambda: tty, raising=False)
+        monkeypatch.setattr(sys, "argv", ["rolebeacon", *command])
+        main()
+        return capsys.readouterr().out
+
+    verdicts = {
+        ("doctor",): "checks out",
+        ("sync",): "Refresh",
+        ("status",): "active jobs",
+    }
+    for command, expected in verdicts.items():
+        human = run(list(command), tty=True)
+        assert expected in human, command
+        # A person gets a verdict, not a dict.
+        assert not human.lstrip().startswith("{"), command
+        assert isinstance(json.loads(run(list(command), tty=False)), dict), command
+        # --json wins over a terminal.
+        assert isinstance(json.loads(run([*command, "--json"], tty=True)), dict), command

@@ -118,6 +118,80 @@ def _status_report(settings: Settings, database: Database) -> tuple[dict[str, An
     return {"stats": stats, "sources": list(states.values())}, lines
 
 
+def _evaluation_lines(report: dict[str, Any]) -> list[str]:
+    summary = report.get("summary", {})
+    failed = [name for name, ok in report.get("ranking_checks", {}).items() if not ok]
+    lines = [
+        f"{'PASS' if report.get('passed') else 'FAIL'} — "
+        f"{summary.get('cases_passed', 0)} of {summary.get('cases_total', 0)} cases",
+    ]
+    if summary.get("median_latency_seconds"):
+        lines.append(
+            f"{summary.get('model_calls', 0)} model calls · median "
+            f"{summary['median_latency_seconds']}s · max {summary.get('max_latency_seconds', 0)}s"
+        )
+    if failed:
+        lines += ["", "Failed ranking checks:"] + [f"  - {name.replace('_', ' ')}" for name in failed]
+    return lines
+
+
+def _flat_lines(payload: dict[str, Any]) -> list[str]:
+    """A dict as one "key: value" per line - a readable last resort, not a design.
+
+    Used for the model and migration commands, whose payloads are already a short list of
+    findings rather than a nested report.
+    """
+    lines = []
+    for key, value in payload.items():
+        if isinstance(value, list):
+            value = ", ".join(str(item) for item in value) or "none"
+        if isinstance(value, bool):
+            value = "yes" if value else "no"
+        lines.append(f"{str(key).replace('_', ' ').capitalize()}: {value}")
+    return lines
+
+
+def _sync_lines(status: dict[str, Any]) -> list[str]:
+    lines = [
+        f"Refresh {status.get('phase') or 'idle'}: {status.get('phase_message') or ''}".rstrip(": "),
+        f"{status.get('sources_completed') or 0} of {status.get('sources_total') or 0} sources · "
+        f"{status.get('jobs_seen') or 0} jobs seen · {status.get('jobs_changed') or 0} changed · "
+        f"{status.get('jobs_scored') or 0} scored",
+    ]
+    if status.get("source_errors"):
+        lines.append(f"{status['source_errors']} source(s) failed; `rolebeacon status` names them")
+    if status.get("rule_fallback_jobs"):
+        lines.append(f"{status['rule_fallback_jobs']} job(s) fell back to rules scoring")
+    if status.get("llm_error"):
+        lines.append(f"Scoring engine: {status['llm_error']}")
+    if status.get("error"):
+        lines.append(f"Failed: {status['error']}")
+    return lines
+
+
+def _doctor_lines(checks: dict[str, Any]) -> list[str]:
+    problems = []
+    if not checks["resources_present"]:
+        problems.append("packaged templates, static files, or config are missing from the installation")
+    if not checks["data_directory_writable"]:
+        problems.append(f"the data directory is not writable: {checks['data_directory']}")
+    if not checks["setup_complete"]:
+        problems.append("setup has not been completed; run `rolebeacon setup`")
+    elif not checks["activated"]:
+        problems.append("collection is not activated, so no source will be contacted")
+    if not checks["rules_only_ready"]:
+        problems.append("no saved candidate or search profile, so rules-only scoring cannot run")
+    lines = ["Everything checks out." if not problems else "Problems found:"]
+    lines += [f"  - {problem}" for problem in problems]
+    lines += [
+        "",
+        f"Data directory: {checks['data_directory']}",
+        f"Database: {checks['database']}",
+        f"Scoring mode: {checks['llm_mode']}",
+    ]
+    return lines
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="rolebeacon")
     # Accepted before or after the subcommand. SUPPRESS on the subparser copy stops an absent
@@ -130,7 +204,7 @@ def main() -> None:
     serve = subparsers.add_parser("serve", help="Run the local web application")
     serve.add_argument("--host")
     serve.add_argument("--port", type=int)
-    sync_command = subparsers.add_parser("sync", help="Run one incremental sync")
+    sync_command = subparsers.add_parser("sync", help="Run one incremental sync", parents=[json_flag])
     sync_command.add_argument(
         "--interactive",
         action="store_true",
@@ -145,14 +219,14 @@ def main() -> None:
         action="store_true",
         help="Run every enabled source now, ignoring its minimum interval",
     )
-    jobs = subparsers.add_parser("jobs", help="Refresh and export ranked job discovery results")
+    jobs = subparsers.add_parser("jobs", help="Refresh and export ranked job discovery results", parents=[json_flag])
     jobs.add_argument("--no-sync", action="store_true", help="Export the existing local database without refreshing")
     jobs.add_argument("--start-ollama", action="store_true", help="Start an installed Ollama before refreshing")
     jobs.add_argument("--from-json", type=Path, help="Import a complete SetupPayloadV1 before running")
     jobs.add_argument("--output-dir", type=Path, default=Path.cwd(), help="Parent directory for the timestamped export")
     subparsers.add_parser("status", help="Show source state and database statistics", parents=[json_flag])
-    subparsers.add_parser("doctor", help="Check setup, storage, database, and model readiness")
-    setup = subparsers.add_parser("setup", help="Run the interactive wizard, or import SetupPayloadV1 JSON")
+    subparsers.add_parser("doctor", help="Check setup, storage, database, and model readiness", parents=[json_flag])
+    setup = subparsers.add_parser("setup", help="Run the interactive wizard, or import SetupPayloadV1 JSON", parents=[json_flag])
     setup.add_argument("--from-json", type=Path, help="Import a SetupPayloadV1 document instead of asking questions")
     setup.add_argument("--activate", action="store_true", help="Explicitly activate collection after import")
     setup.add_argument(
@@ -160,29 +234,29 @@ def main() -> None:
         action="store_true",
         help="Refuse to start the interactive wizard; requires --from-json",
     )
-    migrate = subparsers.add_parser("migrate", help="Copy data from a legacy Job Radar installation")
+    migrate = subparsers.add_parser("migrate", help="Copy data from a legacy Job Radar installation", parents=[json_flag])
     migrate.add_argument("--from", dest="legacy_root", type=Path, required=True)
-    model = subparsers.add_parser("model", help="Manage an optional local model runtime")
+    model = subparsers.add_parser("model", help="Manage an optional local model runtime", parents=[json_flag])
     model_commands = model.add_subparsers(dest="model_command", required=True)
-    model_commands.add_parser("doctor", help="Detect Ollama and locally available models")
-    model_commands.add_parser("start", help="Start an installed Ollama service")
-    pull = model_commands.add_parser("pull", help="Explicitly download an Ollama model")
+    model_commands.add_parser("doctor", help="Detect Ollama and locally available models", parents=[json_flag])
+    model_commands.add_parser("start", help="Start an installed Ollama service", parents=[json_flag])
+    pull = model_commands.add_parser("pull", help="Explicitly download an Ollama model", parents=[json_flag])
     pull.add_argument("model", nargs="?", default="qwen3:8b")
-    test = model_commands.add_parser("test", help="Test an OpenAI-compatible endpoint")
+    test = model_commands.add_parser("test", help="Test an OpenAI-compatible endpoint", parents=[json_flag])
     test.add_argument("--base-url", default="http://127.0.0.1:11434/v1")
     test.add_argument("--model", default="qwen3:8b")
     test.add_argument("--api-key", default="")
-    evaluate = subparsers.add_parser("evaluate-model", help="Run the repeatable scoring-quality evaluation")
+    evaluate = subparsers.add_parser("evaluate-model", help="Run the repeatable scoring-quality evaluation", parents=[json_flag])
     evaluate.add_argument("--base-url", default="http://127.0.0.1:11434/v1")
     evaluate.add_argument("--model", default="qwen3:14b")
     evaluate.add_argument("--api-key", default="")
     evaluate.add_argument("--provider", choices=("ollama", "custom"), default="ollama")
     evaluate.add_argument("--runs", type=int, default=1)
     evaluate.add_argument("--output", type=Path)
-    evaluate_rules = subparsers.add_parser("evaluate-rules", help="Run the deterministic scoring-quality evaluation")
+    evaluate_rules = subparsers.add_parser("evaluate-rules", help="Run the deterministic scoring-quality evaluation", parents=[json_flag])
     evaluate_rules.add_argument("--runs", type=int, default=3)
     evaluate_rules.add_argument("--output", type=Path)
-    research = subparsers.add_parser("research-company", help="Refresh a provenance-backed company profile")
+    research = subparsers.add_parser("research-company", help="Refresh a provenance-backed company profile", parents=[json_flag])
     research.add_argument("company")
     args = parser.parse_args()
 
@@ -221,7 +295,8 @@ def main() -> None:
     as_json = bool(getattr(args, "as_json", False)) or not sys.stdout.isatty()
     settings.ensure_directories()
     if args.command == "migrate":
-        print(json.dumps(import_legacy(settings, args.legacy_root), indent=2))
+        migrated = import_legacy(settings, args.legacy_root)
+        _emit(as_json, migrated, _flat_lines(migrated))
         return
     if args.command == "setup":
         if args.from_json is None:
@@ -232,7 +307,7 @@ def main() -> None:
             summary = SetupWizard(settings).run()
             if summary is None:
                 raise SystemExit(1)
-            print(json.dumps(summary, indent=2))
+            _emit(as_json, summary, _flat_lines(summary))
             return
         payload = json.loads(args.from_json.read_text(encoding="utf-8"))
         if not isinstance(payload, dict):
@@ -243,16 +318,19 @@ def main() -> None:
         if not validation["valid"]:
             raise SystemExit(json.dumps({"errors": validation["errors"]}, indent=2, ensure_ascii=False))
         saved = service.complete(payload)
-        print(
-            json.dumps(
-                {
-                    "setup_complete": saved.setup_complete,
-                    "activated": saved.activated,
-                    "enabled_source_ids": [source.id for source in saved.load_sources() if source.enabled],
-                    "scoring_mode": saved.llm_mode,
-                },
-                indent=2,
-            )
+        enabled_ids = [source.id for source in saved.load_sources() if source.enabled]
+        _emit(
+            as_json,
+            {
+                "setup_complete": saved.setup_complete,
+                "activated": saved.activated,
+                "enabled_source_ids": enabled_ids,
+                "scoring_mode": saved.llm_mode,
+            },
+            [
+                f"Setup saved. Collection is {'activated' if saved.activated else 'not activated'}.",
+                f"{len(enabled_ids)} source(s) enabled · scoring mode: {saved.llm_mode}",
+            ],
         )
         return
     if args.command == "serve":
@@ -272,9 +350,9 @@ def main() -> None:
         if args.interactive:
             _report_interactive_sources(settings)
         sync_result = asyncio.run(sync_service.run(force=args.force, manual=args.interactive))
-        print(json.dumps(sync_result.to_dict(), indent=2))
+        _emit(as_json, sync_result.to_dict(), _sync_lines(sync_result.to_dict()))
     elif args.command == "jobs":
-        exit_code = _run_jobs_command(args, settings, database)
+        exit_code = _run_jobs_command(args, settings, database, as_json=as_json)
         if exit_code:
             raise SystemExit(exit_code)
     elif args.command == "status":
@@ -284,20 +362,27 @@ def main() -> None:
         research_service = CompanyResearchService(settings, database, LlmClient(settings))
         company_id = asyncio.run(research_service.research(args.company))
         company = database.get_company(company_id) or {}
-        print(
-            json.dumps(
-                {
-                    "id": company.get("id"),
-                    "name": company.get("name"),
-                    "score": company.get("score"),
-                    "confidence": company.get("confidence"),
-                    "remote_policy": company.get("remote_policy"),
-                    "sponsorship": company.get("sponsorship"),
-                    "relocation": company.get("relocation"),
-                    "evidence_count": len(company.get("evidence", [])),
-                },
-                indent=2,
-            )
+        researched = {
+            "id": company.get("id"),
+            "name": company.get("name"),
+            "score": company.get("score"),
+            "confidence": company.get("confidence"),
+            "remote_policy": company.get("remote_policy"),
+            "sponsorship": company.get("sponsorship"),
+            "relocation": company.get("relocation"),
+            "evidence_count": len(company.get("evidence", [])),
+        }
+        _emit(
+            as_json,
+            researched,
+            [
+                f"{researched['name'] or args.company}: company fit {researched['score'] or '—'} "
+                f"(confidence {researched['confidence'] or '—'}) from {researched['evidence_count']} "
+                "fetched official page(s)",
+                f"Remote policy: {researched['remote_policy'] or 'unknown'} · "
+                f"sponsorship: {researched['sponsorship'] or 'unknown'} · "
+                f"relocation: {researched['relocation'] or 'unknown'}",
+            ],
         )
     elif args.command == "doctor":
         checks = {
@@ -312,7 +397,7 @@ def main() -> None:
             "rules_only_ready": settings.candidate_profile_path.exists() and settings.search_profile_path.exists(),
             "llm_mode": settings.llm_mode,
         }
-        print(json.dumps(checks, indent=2))
+        _emit(as_json, checks, _doctor_lines(checks))
         if not checks["resources_present"] or not checks["data_directory_writable"]:
             raise SystemExit(1)
     elif args.command == "model":
@@ -327,7 +412,7 @@ def main() -> None:
             model_result = asyncio.run(
                 models.test_endpoint(base_url=args.base_url, model=args.model, api_key=args.api_key)
             )
-        print(json.dumps(model_result, indent=2))
+        _emit(as_json, model_result, _flat_lines(model_result))
     elif args.command == "evaluate-model":
         evaluation_settings = replace(
             settings,
@@ -338,18 +423,23 @@ def main() -> None:
             llm_api_key=args.api_key,
         )
         report = asyncio.run(run_model_evaluation(LlmClient(evaluation_settings), runs=max(1, args.runs)))
-        rendered_report = json.dumps({"model": args.model, "base_url": args.base_url, **report}, indent=2)
+        full_report = {"model": args.model, "base_url": args.base_url, **report}
         if args.output:
-            args.output.write_text(f"{rendered_report}\n", encoding="utf-8")
-        print(rendered_report)
+            # The file is always the complete report: it is the artifact the run exists to leave
+            # behind, whatever the terminal chose to show.
+            args.output.write_text(f"{json.dumps(full_report, indent=2)}\n", encoding="utf-8")
+        _emit(as_json, full_report, [f"{args.model} at {args.base_url}", *_evaluation_lines(report)])
         if not report["passed"]:
             raise SystemExit(1)
     elif args.command == "evaluate-rules":
         rules_report = run_rules_evaluation(runs=max(2, args.runs))
-        rendered_rules_report = json.dumps(rules_report, indent=2)
         if args.output:
-            args.output.write_text(f"{rendered_rules_report}\n", encoding="utf-8")
-        print(rendered_rules_report)
+            args.output.write_text(f"{json.dumps(rules_report, indent=2)}\n", encoding="utf-8")
+        _emit(
+            as_json,
+            rules_report,
+            [str(rules_report.get("engine", "rules")), *_evaluation_lines(rules_report)],
+        )
         if not rules_report["passed"]:
             raise SystemExit(1)
 
@@ -402,7 +492,9 @@ async def _ensure_ollama_ready(
         await asyncio.sleep(min(poll_interval_seconds, remaining))
 
 
-def _run_jobs_command(args: argparse.Namespace, settings: Settings, database: Database) -> int:
+def _run_jobs_command(
+    args: argparse.Namespace, settings: Settings, database: Database, *, as_json: bool = False
+) -> int:
     sync_requested = not args.no_sync
     sync_performed = False
     status: dict[str, Any] | None = None
@@ -438,12 +530,23 @@ def _run_jobs_command(args: argparse.Namespace, settings: Settings, database: Da
         return 1
 
     phase = "skipped" if not sync_requested else str((status or {}).get("phase") or "failed")
-    print(f"Sync: {phase}")
-    print(f"Recommended jobs: {result.recommended_jobs_count}")
-    print(f"All jobs: {result.all_jobs_count}")
-    print("Exports:")
-    for path in result.paths:
-        print(f"  {path}")
+    paths = [str(path) for path in result.paths]
+    _emit(
+        as_json,
+        {
+            "sync": {**sync, "phase": phase},
+            "recommended_jobs": result.recommended_jobs_count,
+            "all_jobs": result.all_jobs_count,
+            "exports": paths,
+        },
+        [
+            f"Sync: {phase}",
+            f"Recommended jobs: {result.recommended_jobs_count}",
+            f"All jobs: {result.all_jobs_count}",
+            "Exports:",
+            *(f"  {path}" for path in paths),
+        ],
+    )
 
     source_errors = int((status or {}).get("source_errors") or 0)
     if source_errors:

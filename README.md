@@ -80,6 +80,15 @@ Run a readiness check at any time:
 uv run rolebeacon doctor
 ```
 
+Every command prints a readable summary on a terminal and machine-readable JSON when its output is
+piped or redirected, so a person gets a verdict and a script gets a stable document. `--json`, before
+or after the subcommand, asks for the JSON explicitly.
+
+```bash
+uv run rolebeacon status
+uv run rolebeacon status --json
+```
+
 ### Setup without a browser
 
 `rolebeacon setup` runs the same six steps in the terminal, using the same schemas, source catalog,

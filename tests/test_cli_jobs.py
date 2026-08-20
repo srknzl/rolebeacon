@@ -67,12 +67,21 @@ def test_jobs_no_sync_uses_only_local_database_and_prints_paths(tmp_path, monkey
         ["rolebeacon", "jobs", "--no-sync", "--output-dir", str(tmp_path / "exports")],
     )
 
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True, raising=False)
     cli.main()
+    human = capsys.readouterr().out
 
-    captured = capsys.readouterr()
-    assert "Sync: skipped" in captured.out
-    assert "All jobs: 1" in captured.out
-    assert "all-jobs.json" in captured.out
+    # Piped, the same command is a machine dump, so a script never has to parse the prose.
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: False, raising=False)
+    cli.main()
+    machine = json.loads(capsys.readouterr().out)
+
+    assert "Sync: skipped" in human
+    assert "All jobs: 1" in human
+    assert "all-jobs.json" in human
+    assert machine["sync"]["phase"] == "skipped"
+    assert machine["all_jobs"] == 1
+    assert any(path.endswith("all-jobs.json") for path in machine["exports"])
     run_directories = list((tmp_path / "exports").glob("rolebeacon-jobs-*"))
     exported = json.loads((run_directories[0] / "all-jobs.json").read_text(encoding="utf-8"))
     assert exported["sync"] == {"requested": False, "performed": False, "status": None}
