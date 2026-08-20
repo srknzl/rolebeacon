@@ -534,6 +534,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def model_status() -> dict[str, Any]:
         return await llm.health()
 
+    @app.get("/api/jobs/facets")
+    async def job_facet_counts(request: Request) -> dict[str, Any]:
+        """Per-value match counts for the current query.
+
+        Fetched after the page renders rather than with it: counting six facets costs about as
+        much as the whole page does, and the menus are closed when it loads.
+        """
+        filters = _job_filters_from_query(
+            request.query_params,
+            sources=app_settings.load_sources(),
+            preferences=app_settings.load_search_profile(),
+        )
+        return {"counts": database.facet_counts(filters)}
+
     @app.get("/api/jobs")
     async def list_jobs_api(
         route: str = "",

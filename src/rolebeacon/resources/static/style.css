@@ -581,6 +581,13 @@ a.stat:hover, a.stat:focus-visible { background: var(--brand-soft); }
 .facet-menu-wide { min-width: 320px; }
 .facet-hint { margin: 0 0 2px; font-size: 11px; line-height: 1.45; color: var(--muted); }
 .facet-choice { display: flex; gap: 8px; align-items: center; font-size: 13px; font-weight: 500; cursor: pointer; }
+.facet-choice > span:first-of-type { flex: 1; }
+/* The count of what each value would leave, arriving after the page renders. */
+.facet-value-count { font: 600 12px var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.facet-choice-empty { color: var(--muted); }
+.facet-choice-empty .facet-value-count { opacity: .6; }
+/* The two menus that hold a form rather than a list of values read as a group of their own. */
+.facet-form { margin-left: 4px; padding-left: 10px; border-left: 1px solid var(--line); }
 .facet-field { display: grid; gap: 4px; font-size: 12px; font-weight: 650; color: var(--muted); }
 .facet-field input { padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper); color: var(--ink); font: inherit; font-size: 13px; }
 .facet-select { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; font-weight: 650; color: var(--muted); }

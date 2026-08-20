@@ -5,7 +5,13 @@ from datetime import UTC, datetime
 
 import pytest
 
-from rolebeacon.database import Database, JobFilters, canonicalize_url, company_key
+from rolebeacon.database import (
+    FACET_FILTER_FIELDS,
+    Database,
+    JobFilters,
+    canonicalize_url,
+    company_key,
+)
 from rolebeacon.domain import CollectedJob, EligibilityResult, EligibilityStatus, JobStatus, ScoreResult
 
 
@@ -973,3 +979,53 @@ def test_minimum_score_filters_on_the_opportunity_score(tmp_path) -> None:
     assert len(database.list_jobs(JobFilters(min_score=65))) == 1
     assert database.count_jobs(JobFilters(min_score=65)) == 1
     assert database.list_jobs(JobFilters(min_score=70)) == []
+
+
+def test_facet_counts_agree_with_the_filter_they_describe(tmp_path) -> None:
+    """A count in a menu is a promise about what ticking that value gives you."""
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    eligible_id, _ = database.upsert_job(sample_job())
+    database.save_evaluation(eligible_id, EligibilityResult(
+        status=EligibilityStatus.ELIGIBLE, route="citizen", sponsorship="available", relocation="unknown",
+        location_fit="worldwide", reasons=[], risks=[],
+    ), ScoreResult(
+        total=70, dimensions={"role_domain": 30}, confidence=1, verdict="review",
+        evidence=[], gaps=[], provider="rules", model="test",
+    ), "scored")
+    other = sample_job(source="source-b")
+    other.source_job_id, other.url = "job-2", "https://example.com/jobs/2"
+    other_id, _ = database.upsert_job(other)
+    database.save_evaluation(other_id, EligibilityResult(
+        status=EligibilityStatus.INELIGIBLE, route="citizen", sponsorship="unavailable", relocation="unknown",
+        location_fit="", reasons=[], risks=[],
+    ), ScoreResult(
+        total=70, dimensions={"role_domain": 30}, confidence=1, verdict="review",
+        evidence=[], gaps=[], provider="rules", model="test",
+    ), "scored")
+    database.save_feedback(eligible_id, JobStatus.BOOKMARKED)
+
+    counts = database.facet_counts()
+
+    assert counts["eligibility"] == {"eligible": 1, "unknown": 0, "ineligible": 1}
+    assert counts["job_status"]["bookmarked"] == 1
+    # Every value's count must equal the filter it stands for, or the menu is lying about what
+    # ticking it would do.
+    for facet, values in counts.items():
+        field = FACET_FILTER_FIELDS[facet]
+        for value, total in values.items():
+            assert total == database.count_jobs(JobFilters(**{field: (value,)})), (facet, value)
+
+
+def test_a_facet_is_counted_with_its_own_choices_dropped(tmp_path) -> None:
+    """Otherwise every unticked value in an active facet reads as zero."""
+    database = Database(tmp_path / "jobs.sqlite3")
+    database.initialize()
+    job_id, _ = database.upsert_job(sample_job())
+    database.save_feedback(job_id, JobStatus.BOOKMARKED)
+
+    counts = database.facet_counts(JobFilters(status=("applied",)))
+
+    assert counts["job_status"] == {
+        "new": 0, "bookmarked": 1, "applied": 0, "offer": 0, "rejected": 0, "not_interested": 0
+    }

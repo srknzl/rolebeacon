@@ -6,12 +6,15 @@
    several values are an OR within the facet and still an AND across facets. #}
 {% macro facet(name, label, choices, hint, multi=true) %}
 {% set picked = chosen.get(name, ()) if multi else ([selected.get(name, '')] if selected.get(name, '') else []) %}
+{# The summary names what is picked rather than how many are picked: "2" made you open the menu
+   to find out which two. #}
+{% set picked_labels = choices|selectattr('0', 'in', picked)|map(attribute='1')|list %}
 <details class="facet" data-facet="{{ name }}">
-  <summary>{{ label }}{% if picked %} <span class="facet-count">{{ picked|length }}</span>{% endif %}</summary>
+  <summary>{{ label }}{% if picked_labels %} <span class="facet-count">{{ picked_labels[0] }}{% if picked_labels|length > 1 %} +{{ picked_labels|length - 1 }}{% endif %}</span>{% endif %}</summary>
   <div class="facet-menu">
     <p class="facet-hint">{{ hint }}</p>
     {% for value, text in choices %}
-    <label class="facet-choice"><input type="{{ 'checkbox' if multi else 'radio' }}" name="{{ name }}" value="{{ value }}" {% if value in picked %}checked{% endif %}>{{ text }}</label>
+    <label class="facet-choice"><input type="{{ 'checkbox' if multi else 'radio' }}" name="{{ name }}" value="{{ value }}" {% if value in picked %}checked{% endif %}><span>{{ text }}</span></label>
     {% endfor %}
   </div>
 </details>
@@ -60,7 +63,7 @@
     {{ facet("route", "Strategy", facet_options.route, "The search strategy that surfaced this job. RoleBeacon generates one per target role, work-authorization country, relocation target, and remote preference.") }}
     {{ facet("provider", "Scored by", [("rules", "Rules only"), ("model", "Language model")], "Which engine produced the score. Rules-only scores are deterministic; model scores add written evidence.") }}
 
-    <details class="facet" data-facet="text">
+    <details class="facet facet-form" data-facet="text">
       <summary>Title, company, location{% if selected.get('title') or selected.get('company') or selected.get('location') %} <span class="facet-count">•</span>{% endif %}</summary>
       <div class="facet-menu facet-menu-wide">
         <label class="facet-field">Title contains {{ tip("Matches the job title only. Use this when a technology is mentioned once in the body but you want it to be the actual role.") }}<input name="title" value="{{ selected.get('title', '') }}" placeholder="backend"></label>
@@ -71,7 +74,7 @@
       </div>
     </details>
 
-    <details class="facet" data-facet="thresholds">
+    <details class="facet facet-form" data-facet="thresholds">
       <summary>Score and salary{% if selected.get('min_score') or selected.get('min_title_match') or selected.get('min_stack_match') or selected.get('salary_floor') or selected.get('has_salary') %} <span class="facet-count">•</span>{% endif %}</summary>
       <div class="facet-menu facet-menu-wide">
         <label class="facet-field">Minimum score {{ tip("Hides jobs whose opportunity score is below this value. The opportunity score runs from 0 to 100 and blends job fit (80%) with company fit (20%) after eligibility has been checked.") }}<input type="number" min="0" max="100" name="min_score" value="{{ selected.get('min_score', '') }}"></label>
@@ -135,6 +138,27 @@
       if (!facet.contains(event.target)) facet.removeAttribute("open");
     });
   });
+
+  // Counts are fetched, not rendered: six facet counts cost about as much as the whole page.
+  (async () => {
+    const response = await fetch(`/api/jobs/facets${window.location.search}`);
+    if (!response.ok) return;
+    const counts = (await response.json()).counts || {};
+    document.querySelectorAll("details.facet[data-facet]").forEach(facet => {
+      const values = counts[facet.dataset.facet];
+      if (!values) return;
+      facet.querySelectorAll(".facet-choice").forEach(choice => {
+        const input = choice.querySelector("input");
+        const total = values[input.value];
+        if (total === undefined) return;
+        const badge = document.createElement("span");
+        badge.className = "facet-value-count";
+        badge.textContent = total.toLocaleString();
+        choice.append(badge);
+        choice.classList.toggle("facet-choice-empty", total === 0 && !input.checked);
+      });
+    });
+  })();
 
   const companyInput = document.querySelector('input[name="company"]');
   const companyList = document.getElementById("company-suggestions");

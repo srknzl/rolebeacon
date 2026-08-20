@@ -7,7 +7,7 @@ import sqlite3
 import unicodedata
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -35,6 +35,43 @@ COMPANY_SCORE_JOINS = """LEFT JOIN companies c ON c.normalized_name = j.company_
 # The stored provider is "rules", "ollama", or "openai-compatible"; the UI offers engines, not
 # endpoints, so this stands in for the whole model family.
 MODEL_SCORED_PROVIDER_FILTER = "model"
+
+# One SQL test per facet value, mirroring the clause _job_filters builds for that same value.
+# test_database asserts every one of them agrees with count_jobs for the value on its own, which
+# is what keeps the two definitions from drifting apart.
+FACET_VALUE_SQL: dict[str, dict[str, str]] = {
+    "eligibility": {
+        value: f"COALESCE(e.status, 'unknown') = '{value}'" for value in ("eligible", "unknown", "ineligible")
+    },
+    "sponsorship": {
+        value: f"COALESCE(e.sponsorship, 'unknown') = '{value}'" for value in ("available", "unavailable", "unknown")
+    },
+    "relocation": {
+        value: f"COALESCE(e.relocation, 'unknown') = '{value}'" for value in ("available", "unknown")
+    },
+    "job_status": {
+        value: f"j.status = '{value}'"
+        for value in ("new", "bookmarked", "applied", "offer", "rejected", "not_interested")
+    },
+    "work_model": {
+        "remote_worldwide": "j.location_bucket = 'remote:worldwide'",
+        "remote": "j.location_bucket LIKE 'remote:%'",
+        "onsite": "j.location_bucket NOT LIKE 'remote:%'",
+    },
+    "provider": {
+        "rules": "COALESCE(ms.provider, '') = 'rules'",
+        MODEL_SCORED_PROVIDER_FILTER: "COALESCE(ms.provider, '') NOT IN ('', 'rules')",
+    },
+}
+# The JobFilters field each facet fills, so a facet can be counted with its own choices dropped.
+FACET_FILTER_FIELDS: dict[str, str] = {
+    "eligibility": "eligibility",
+    "sponsorship": "sponsorship",
+    "relocation": "relocation",
+    "job_status": "status",
+    "work_model": "work_model",
+    "provider": "provider",
+}
 
 Choice = str | tuple[str, ...]
 
@@ -990,6 +1027,47 @@ class Database:
                 clauses.append("jobs_fts MATCH ?")
                 params.append(literal_query)
         return clauses, params, join_fts
+
+    def facet_counts(self, filters: JobFilters | None = None) -> dict[str, dict[str, int]]:
+        """How many jobs each facet value would leave, given every other filter.
+
+        Narrowing a 13,000-row corpus is guesswork without this: the menu offers eight seniority
+        levels and no hint that one of them matches nothing. Each facet is counted with its own
+        selections dropped — standard drill-down semantics — so a count reads as "what ticking
+        this would give me", including for a facet that already has something ticked.
+
+        Only facets that count as one indexed comparison are here. Seniority runs a REGEXP per
+        row and technology a LIKE over every description; counting those costs seconds, so their
+        menus stay uncounted rather than making the page wait.
+        """
+        base = filters or JobFilters()
+        counts: dict[str, dict[str, int]] = {}
+        with self.connect() as connection:
+            for facet, values in FACET_VALUE_SQL.items():
+                dropped: dict[str, Any] = {FACET_FILTER_FIELDS[facet]: ()}
+                clauses, params, join_fts = self._job_filters(replace(base, **dropped))
+                selected = ", ".join(
+                    f"SUM(CASE WHEN {sql} THEN 1 ELSE 0 END) AS value_{index}"
+                    for index, sql in enumerate(values.values())
+                )
+                row = connection.execute(
+                    f"""
+                    SELECT {selected}
+                    FROM jobs j
+                    {join_fts}
+                    LEFT JOIN eligibility e ON e.job_id = j.id
+                    LEFT JOIN match_scores ms ON ms.id = (
+                        SELECT id FROM match_scores WHERE job_id = j.id ORDER BY created_at DESC, id DESC LIMIT 1
+                    )
+                    {COMPANY_SCORE_JOINS}
+                    WHERE {' AND '.join(clauses)}
+                    """,
+                    params,
+                ).fetchone()
+                counts[facet] = {
+                    value: int(row[f"value_{index}"] or 0) for index, value in enumerate(values)
+                }
+        return counts
 
     def count_jobs(self, filters: JobFilters | None = None) -> int:
         """Total matches ignoring limit/offset, so the UI can show a real count instead of a cap."""

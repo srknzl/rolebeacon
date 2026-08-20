@@ -13,7 +13,7 @@ from rolebeacon.app import JOB_STATUS_LABELS, _source_filter_options, create_app
 from rolebeacon.company import RULES_MODEL
 from rolebeacon.config import Settings
 from rolebeacon.database import Database
-from rolebeacon.domain import CollectedJob, EligibilityResult, EligibilityStatus, ScoreResult, SourceConfig
+from rolebeacon.domain import CollectedJob, EligibilityResult, EligibilityStatus, JobStatus, ScoreResult, SourceConfig
 from rolebeacon.llm import SCORING_RUBRIC, LlmClient
 from rolebeacon.scoring import seniority_level_options
 from rolebeacon.setup import SetupService
@@ -569,6 +569,29 @@ def test_the_import_page_keeps_a_trail_of_what_it_created(tmp_path) -> None:
     assert "Staff Backend Engineer" in page.text
     # Required fields say so before the request fails, rather than after.
     assert page.text.count('<span class="required-mark">required</span>') == 3
+
+
+def test_the_facet_endpoint_counts_what_each_value_would_leave(tmp_path) -> None:
+    settings = replace(configured_settings(tmp_path), auto_sync=False)
+    app = create_app(settings)
+    database = app.state.database
+    job_id, _ = database.upsert_job(
+        CollectedJob(
+            source="fixture", source_job_id="1", title="Backend Engineer", company="Example",
+            location="Remote Worldwide", description="Build Python distributed systems",
+            url="https://example.com/jobs/1", published_at=datetime.now(UTC),
+        )
+    )
+    database.save_feedback(job_id, JobStatus.BOOKMARKED)
+
+    with TestClient(app) as client:
+        counts = client.get("/api/jobs/facets?job_status=bookmarked").json()["counts"]
+
+    # Counted with the facet's own choice dropped, so the numbers answer "what would ticking this
+    # give me" rather than "what is already ticked".
+    assert counts["job_status"]["bookmarked"] == 1
+    assert counts["job_status"]["applied"] == 0
+    assert counts["work_model"]["remote_worldwide"] == 1
 
 
 def test_dashboard_jobs_api_and_feedback(tmp_path) -> None:
