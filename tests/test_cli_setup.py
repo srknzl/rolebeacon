@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from rolebeacon.cli import main
 from rolebeacon.config import Settings
+from rolebeacon.database import Database
 from rolebeacon.setup import LocalModelService, SetupService
 from rolebeacon.sync import SyncService, SyncStatus
 
@@ -179,3 +180,48 @@ def test_interactive_sync_says_so_when_no_signed_in_source_is_enabled(tmp_path, 
     main()
 
     assert "--interactive has no effect" in capsys.readouterr().err
+
+
+def test_status_summarizes_for_a_person_and_still_dumps_json_for_a_script(tmp_path, monkeypatch, capsys) -> None:
+    # `status` printed 5,140 lines of source rows, so "is anything broken?" needed jq to answer.
+    settings = _setup_without_syncing(tmp_path, monkeypatch)
+    healthy, broken = settings.load_sources()[:2]
+    for source in (healthy, broken):
+        settings.set_source_enabled(source.id, True)
+    database = Database(settings.database_path)
+    database.initialize()
+    database.start_source(healthy.id)
+    database.finish_source(healthy.id, seen=633, changed=0)
+    database.start_source(broken.id)
+    database.fail_source(broken.id, "connection refused")
+
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True, raising=False)
+    monkeypatch.setattr(sys, "argv", ["rolebeacon", "status"])
+    main()
+    human = capsys.readouterr().out
+
+    monkeypatch.setattr(sys, "argv", ["rolebeacon", "status", "--json"])
+    main()
+    machine = json.loads(capsys.readouterr().out)
+
+    assert len(human.splitlines()) < 12
+    assert "active jobs" in human
+    assert "633 seen" in human
+    assert "Needs attention:" in human
+    assert f"{broken.name}" in human and "connection refused" in human
+    # Only the source that actually failed; the one that ran cleanly is not listed.
+    attention = [line.strip() for line in human.split("Needs attention:")[1].splitlines() if line.strip()]
+    assert attention == [f"{broken.name}  error: connection refused"]
+    # The dump a script parses is unchanged, and reachable off a terminal.
+    assert set(machine) == {"stats", "sources"}
+    assert machine["stats"]["total"] == 0
+
+
+def test_status_still_prints_json_when_stdout_is_not_a_terminal(tmp_path, monkeypatch, capsys) -> None:
+    _setup_without_syncing(tmp_path, monkeypatch)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: False, raising=False)
+    monkeypatch.setattr(sys, "argv", ["rolebeacon", "status"])
+
+    main()
+
+    assert set(json.loads(capsys.readouterr().out)) == {"stats", "sources"}

@@ -27,7 +27,7 @@ from .database import (
     JobFilters,
     company_key,
 )
-from .domain import CollectedJob, JobStatus, SourceConfig
+from .domain import CollectedJob, JobStatus, SourceConfig, time_ago
 from .llm import LlmClient, LlmResponseRejected, LlmUnavailable
 from .profile import country_catalog, relocation_region_options
 from .scoring import (
@@ -871,38 +871,6 @@ _GROUPED_SOURCE_KINDS = {
 # Sources page switches a whole method on or off, because "public search or my own session" is the
 # real decision and "LinkedIn - Europe (signed in)" is just one row of whichever answer was given.
 LINKEDIN_METHOD_KINDS = ("linkedin", "linkedin_browser")
-
-
-def time_ago(value: str) -> str:
-    """How long ago something happened, in the words a reader actually uses.
-
-    An ISO timestamp answers "which instant"; a job seeker is asking "is this still open" and
-    someone reading source health is asking "did this run recently". Below a day the answer is
-    hours or minutes, which is the difference between a source that just ran and one that has
-    been quiet all day. The exact timestamp stays in the element's title.
-    """
-    try:
-        moment = datetime.fromisoformat(str(value))
-    except ValueError:
-        return str(value)[:10]
-    if moment.tzinfo is None:
-        moment = moment.replace(tzinfo=UTC)
-    seconds = max(0, int((datetime.now(UTC) - moment).total_seconds()))
-    if seconds < 90:
-        return "just now"
-    if seconds < 3600:
-        return f"{seconds // 60} minutes ago"
-    if seconds < 86400:
-        hours = seconds // 3600
-        return f"{hours} hour{'s' if hours > 1 else ''} ago"
-    days = seconds // 86400
-    if days == 1:
-        return "yesterday"
-    if days < 30:
-        return f"{days} days ago"
-    if days < 365:
-        return f"{days // 30} month{'s' if days // 30 > 1 else ''} ago"
-    return moment.date().isoformat()
 
 
 def salary_range(job: dict[str, Any]) -> str:

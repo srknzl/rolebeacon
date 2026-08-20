@@ -17,6 +17,7 @@ import uvicorn
 from .company import CompanyResearchService
 from .config import Settings
 from .database import Database
+from .domain import time_ago
 from .evaluation import run_model_evaluation, run_rules_evaluation
 from .job_export import export_jobs
 from .llm import LlmClient
@@ -67,8 +68,64 @@ def _report_interactive_sources(settings: Settings) -> None:
     print(INTERACTIVE_SOURCE_WARNING, file=sys.stderr)
 
 
+def _emit(as_json: bool, payload: Any, lines: list[str]) -> None:
+    """One command, two audiences: a person reads the lines, a script reads the JSON."""
+    print(json.dumps(payload, indent=2, ensure_ascii=False) if as_json else "\n".join(lines))
+
+
+def _status_report(settings: Settings, database: Database) -> tuple[dict[str, Any], list[str]]:
+    stats = database.dashboard_stats()
+    states = {row["source_id"]: row for row in database.list_sources()}
+    configured = settings.load_sources()
+    tally = {"ok": 0, "error": 0, "never run": 0, "disabled": 0}
+    attention: list[tuple[str, str]] = []
+    for source in configured:
+        state = states.get(source.id, {})
+        if not source.enabled:
+            tally["disabled"] += 1
+            continue
+        if state.get("status") == "error":
+            tally["error"] += 1
+            attention.append((source.name or source.id, f"error: {state.get('last_error') or 'unknown'}"))
+        elif not state.get("last_successful_sync_at"):
+            tally["never run"] += 1
+            attention.append((source.name or source.id, "never run"))
+        else:
+            tally["ok"] += 1
+
+    latest = max(
+        (state for state in states.values() if state.get("last_successful_sync_at")),
+        key=lambda state: str(state["last_successful_sync_at"]),
+        default=None,
+    )
+    lines = [
+        f"{stats['total']:,} active jobs · {stats['new_today']:,} new today · "
+        f"{stats['shortlisted']:,} bookmarked · {stats['pending_llm']:,} waiting for a model",
+        "",
+        f"{len(configured):,} sources: " + " · ".join(f"{count} {label}" for label, count in tally.items() if count),
+    ]
+    if latest is not None:
+        names = {source.id: source.name or source.id for source in configured}
+        source_id = str(latest["source_id"])
+        lines.append(
+            f"Last refresh: {time_ago(str(latest['last_successful_sync_at']))} — "
+            f"{names.get(source_id, source_id)} "
+            f"({latest.get('jobs_seen') or 0} seen, {latest.get('last_jobs_new') or 0} new)"
+        )
+    if attention:
+        width = max(len(name) for name, _ in attention)
+        lines += ["", "Needs attention:"] + [f"  {name:<{width}}  {note}" for name, note in attention]
+    return {"stats": stats, "sources": list(states.values())}, lines
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="rolebeacon")
+    # Accepted before or after the subcommand. SUPPRESS on the subparser copy stops an absent
+    # flag there from overwriting one given up front.
+    json_help = "Print machine-readable JSON instead of the human summary"
+    parser.add_argument("--json", dest="as_json", action="store_true", help=json_help)
+    json_flag = argparse.ArgumentParser(add_help=False)
+    json_flag.add_argument("--json", dest="as_json", action="store_true", default=argparse.SUPPRESS, help=json_help)
     subparsers = parser.add_subparsers(dest="command", required=True)
     serve = subparsers.add_parser("serve", help="Run the local web application")
     serve.add_argument("--host")
@@ -93,7 +150,7 @@ def main() -> None:
     jobs.add_argument("--start-ollama", action="store_true", help="Start an installed Ollama before refreshing")
     jobs.add_argument("--from-json", type=Path, help="Import a complete SetupPayloadV1 before running")
     jobs.add_argument("--output-dir", type=Path, default=Path.cwd(), help="Parent directory for the timestamped export")
-    subparsers.add_parser("status", help="Show source state and database statistics")
+    subparsers.add_parser("status", help="Show source state and database statistics", parents=[json_flag])
     subparsers.add_parser("doctor", help="Check setup, storage, database, and model readiness")
     setup = subparsers.add_parser("setup", help="Run the interactive wizard, or import SetupPayloadV1 JSON")
     setup.add_argument("--from-json", type=Path, help="Import a SetupPayloadV1 document instead of asking questions")
@@ -160,6 +217,8 @@ def main() -> None:
         )
         # Only RoleBeacon's own progress, not every httpx request line.
         logging.getLogger("rolebeacon").setLevel(logging.INFO)
+    # JSON stays the default off a terminal, so existing pipelines keep the output they parse.
+    as_json = bool(getattr(args, "as_json", False)) or not sys.stdout.isatty()
     settings.ensure_directories()
     if args.command == "migrate":
         print(json.dumps(import_legacy(settings, args.legacy_root), indent=2))
@@ -219,7 +278,8 @@ def main() -> None:
         if exit_code:
             raise SystemExit(exit_code)
     elif args.command == "status":
-        print(json.dumps({"stats": database.dashboard_stats(), "sources": database.list_sources()}, indent=2))
+        payload, lines = _status_report(settings, database)
+        _emit(as_json, payload, lines)
     elif args.command == "research-company":
         research_service = CompanyResearchService(settings, database, LlmClient(settings))
         company_id = asyncio.run(research_service.research(args.company))
