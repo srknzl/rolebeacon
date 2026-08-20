@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from time import sleep
 
 import pytest
@@ -1395,3 +1395,30 @@ def test_a_job_opened_from_a_filtered_list_links_back_to_that_list(tmp_path) -> 
     # A return value is only ever a path on this site, so the link cannot be pointed off it.
     assert '<a class="back-link" href="/jobs">← All jobs</a>' in offsite.text
     assert '<a class="back-link" href="/jobs">← All jobs</a>' in protocol_relative.text
+
+
+def test_a_job_card_states_its_facts_as_tags_not_sentences(tmp_path) -> None:
+    app = create_app(configured_settings(tmp_path))
+    database = Database(app.state.settings.database_path)
+    database.upsert_job(CollectedJob(
+        source="source-a", source_job_id="job-1", title="Backend Engineer", company="Example",
+        location="Berlin, Germany", description="Java backend role", url="https://example.com/jobs/1",
+        salary_min=95000, salary_max=130000, salary_currency="EUR",
+        published_at=datetime.now(UTC) - timedelta(days=3),
+    ))
+
+    with TestClient(app) as client:
+        page = client.get("/jobs")
+
+    row = re.search(r'<div class="meta-row">(.*?)</div>', page.text, re.S).group(1)
+    # The eligibility fact is a tag; its sentence stays reachable as the tag's own tooltip.
+    assert ">sponsorship needed</span>" in row
+    assert 'title="Would need sponsorship in Germany, but the posting does not confirm it."' in row
+    assert "Would need sponsorship in Germany, but the posting does not confirm it.</span>" not in row
+    # The strategy is named, not identified by its key.
+    assert "Relocation to Germany" in row
+    assert ">relocate-de<" not in row
+    # Pay the posting states, and an age rather than a calendar date.
+    assert "EUR 95,000-130,000" in row
+    assert "3 days ago" in row
+    assert ">2026-" not in row

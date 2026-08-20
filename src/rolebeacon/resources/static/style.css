@@ -458,6 +458,9 @@ label:has(> .help-tip):not(:has(> input[type=checkbox])) > :not(.help-tip) { gri
    Cards & job list
    ============================================================ */
 .job-list { display: grid; gap: 12px; }
+/* Pay is the one meta item a job seeker scans for, so it does not read as another grey tag. */
+.meta-salary { color: var(--ink); font-weight: 650; }
+
 .job-card {
   display: grid;
   grid-template-columns: 66px 1fr;

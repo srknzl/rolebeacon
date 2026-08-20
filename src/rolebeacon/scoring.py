@@ -695,6 +695,28 @@ def location_requirement(location_fit: str) -> str:
     return sentence or "Location requirement could not be determined from the posting."
 
 
+def location_requirement_label(location_fit: str) -> str:
+    """The same fact as location_requirement(), short enough to sit in a list of tags.
+
+    A job card carries one line of facts about a posting. The sentence form repeats the country
+    on every row and crowds out what actually differs between two jobs, so the list gets the tag
+    and the sentence stays available as the tooltip.
+    """
+    prefix, _, _ = location_fit.partition(":")
+    return {
+        "authorized": "authorized",
+        "sponsorship-unavailable": "sponsorship refused",
+        "sponsorship": "sponsorship offered",
+        "sponsorship-unknown": "sponsorship needed",
+        "relocation": "relocation offered",
+        "worldwide": "remote worldwide",
+        "remote": "remote",
+        "remote-scoped": "remote, regional",
+        "remote-scope-unknown": "remote, scope unknown",
+        "mobility-unknown": "mobility unstated",
+    }.get(prefix, "location unclear")
+
+
 def candidate_terms(candidate_profile: dict[str, Any]) -> set[str]:
     terms: set[str] = set()
     skills = candidate_profile.get("skills", {})

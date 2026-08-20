@@ -30,7 +30,13 @@ from .database import (
 from .domain import CollectedJob, JobStatus, SourceConfig
 from .llm import LlmClient, LlmResponseRejected, LlmUnavailable
 from .profile import country_catalog, relocation_region_options
-from .scoring import INELIGIBLE_SCORE_CAP, dimension_metadata, location_requirement, seniority_level_options
+from .scoring import (
+    INELIGIBLE_SCORE_CAP,
+    dimension_metadata,
+    location_requirement,
+    location_requirement_label,
+    seniority_level_options,
+)
 from .services import ArtifactService, ProfileValidationError, cover_letter_recommendation
 from .setup import LocalModelService, SetupService
 from .source_catalog import SourceCatalog, SourceCatalogError
@@ -58,6 +64,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     templates.env.filters["repair_text"] = repair_text
     templates.env.filters["description_blocks"] = description_blocks
     templates.env.filters["location_requirement"] = location_requirement
+    templates.env.filters["location_requirement_label"] = location_requirement_label
+    templates.env.filters["day_ago"] = day_ago
+    templates.env.filters["salary_range"] = salary_range
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -142,6 +151,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "csrf_token": csrf_token,
             # Where a job card should send you back to. The list a job was opened from is part of
             # the work - rebuilding six facets over 13,000 jobs by hand is not a back button.
+            # A card shows the strategy's own label; its id is a key, not a name for a person.
+            "route_labels": {str(item.get("id", "")): str(item.get("label", "")) for item in app_settings.load_strategies()},
             "return_to": quote(str(request.url.path) + (f"?{request.url.query}" if request.url.query else ""), safe=""),
             **values,
         }
@@ -858,6 +869,41 @@ _GROUPED_SOURCE_KINDS = {
 # Sources page switches a whole method on or off, because "public search or my own session" is the
 # real decision and "LinkedIn - Europe (signed in)" is just one row of whichever answer was given.
 LINKEDIN_METHOD_KINDS = ("linkedin", "linkedin_browser")
+
+
+def day_ago(value: str) -> str:
+    """How old a posting is, in the words someone deciding whether to apply actually uses.
+
+    An ISO date answers "which day"; a job seeker is asking "is this still open". The exact
+    timestamp stays in the element's title for anyone who wants the day back.
+    """
+    try:
+        moment = datetime.fromisoformat(str(value))
+    except ValueError:
+        return str(value)[:10]
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=UTC)
+    days = (datetime.now(UTC) - moment).days
+    if days <= 0:
+        return "today"
+    if days == 1:
+        return "yesterday"
+    if days < 30:
+        return f"{days} days ago"
+    if days < 365:
+        return f"{days // 30} month{'s' if days // 30 > 1 else ''} ago"
+    return moment.date().isoformat()
+
+
+def salary_range(job: dict[str, Any]) -> str:
+    """The posting's own stated pay, or "" when it states none. Never estimated or converted."""
+    low, high = job.get("salary_min"), job.get("salary_max")
+    if low is None and high is None:
+        return ""
+    currency = str(job.get("salary_currency") or "").strip()
+    figures = [f"{int(value):,}" for value in (low, high) if value is not None]
+    shown = figures[0] if len(figures) == 1 or figures[0] == figures[-1] else f"{figures[0]}-{figures[-1]}"
+    return f"{currency} {shown}".strip()
 
 
 def _same_site_path(value: str) -> str:
