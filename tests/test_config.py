@@ -116,3 +116,21 @@ def test_private_json_write_is_portable_when_fchmod_is_unavailable(tmp_path, mon
     settings.save_search_profile({"schema_version": "1.0", "target_roles": ["Backend Engineer"]})
 
     assert settings.load_search_profile()["target_roles"] == ["Backend Engineer"]
+
+
+def test_time_ago_says_one_minute_not_one_minutes() -> None:
+    """Every other branch pluralises; the minute branch printed "1 minutes ago" for 90-119s."""
+    from datetime import UTC, datetime, timedelta
+
+    from rolebeacon.domain import time_ago
+
+    def ago(**delta) -> str:
+        return time_ago((datetime.now(UTC) - timedelta(**delta)).isoformat())
+
+    assert ago(seconds=30) == "just now"
+    assert ago(seconds=100) == "1 minute ago"
+    assert ago(minutes=5) == "5 minutes ago"
+    assert ago(hours=1, minutes=1) == "1 hour ago"
+    assert ago(hours=5) == "5 hours ago"
+    assert ago(days=1) == "yesterday"
+    assert ago(days=3) == "3 days ago"

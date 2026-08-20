@@ -1942,3 +1942,26 @@ def test_the_dark_palette_covers_every_colour_the_stylesheet_uses(tmp_path) -> N
     assert coloured == {name for name, _ in declaration.findall(dark)}
     assert "color-scheme: light dark;" in light
     assert not literal.findall(elsewhere), "colours belong in the token blocks, not in a rule"
+
+
+def test_company_research_status_reads_as_a_time_not_an_iso_timestamp(tmp_path) -> None:
+    """The sidebar printed the raw stored value, e.g. "2026-08-20T09:52:14.383630+00:00"."""
+    settings = configured_settings(tmp_path)
+    database = Database(settings.database_path)
+    database.initialize()
+    company_id = database.save_company_research(
+        name="Northstar Systems", domain="northstar.example.test",
+        profile={"summary": "Official pages state the policy.", "remote_policy": "hybrid",
+                 "sponsorship": "available", "relocation": "available"},
+        evidence=[{"source_url": "https://northstar.example.test/careers", "source_type": "careers",
+                   "title": "Careers", "excerpt": "We support relocation."}],
+        score={"total": 86, "confidence": .8, "dimensions": {}, "reasons": [], "risks": []},
+        provider="rules", model=RULES_MODEL,
+    )
+
+    with TestClient(create_app(settings)) as client:
+        page = client.get(f"/companies/{company_id}")
+
+    # The reader gets "just now"; the exact instant stays in the title attribute.
+    assert ">just now</span>" in page.text
+    assert "Last refreshed 20" not in page.text

@@ -29,7 +29,8 @@ def time_ago(value: str) -> str:
     if seconds < 90:
         return "just now"
     if seconds < 3600:
-        return f"{seconds // 60} minutes ago"
+        minutes = seconds // 60
+        return f"{minutes} minute{'s' if minutes > 1 else ''} ago"
     if seconds < 86400:
         hours = seconds // 3600
         return f"{hours} hour{'s' if hours > 1 else ''} ago"
