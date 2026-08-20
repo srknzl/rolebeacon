@@ -14,9 +14,49 @@
 <div class="job-list">
   {% include "_job-card.html" %}
 </div>
+
+{# A queue exists to make decisions quickly, so the decisions live here rather than one page
+   click away. Each one takes the job out of the bookmark list, so the queue returns to this
+   same index - which is by then the next job. #}
+<section class="panel review-panel">
+  <div class="review-decision">
+    <form action="/api/jobs/{{ job.id }}/feedback" method="post" class="decision-grid">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="return" value="/review?i={{ index }}">
+      <button name="status" value="applied" class="button button-primary" title="You submitted this application yourself. It moves to Applied on the pipeline board.">I applied</button>
+      <button name="status" value="new" class="button" title="Take it out of the bookmark queue without judging it. It stays in the Jobs list.">Remove bookmark</button>
+      <button name="status" value="not_interested" class="button button-quiet" title="Hide this job from recommendations. The original posting is not changed.">Not interested</button>
+    </form>
+    <a class="button" href="/jobs/{{ job.id }}?return=%2Freview%3Fi%3D{{ index }}">Open full job →</a>
+  </div>
+  {% if job.gaps %}
+  <div class="review-gaps"><h3>Gaps</h3><ul>{% for gap in job.gaps[:3] %}<li>{{ gap }}</li>{% endfor %}</ul></div>
+  {% endif %}
+  {% set blocks = job.description|description_blocks %}
+  {% if blocks %}
+  <div class="review-excerpt">
+    <h3>From the posting</h3>
+    {% for block in blocks[:4] %}
+      {% if block.kind == 'heading' %}<h4>{{ block.text }}</h4>
+      {% elif block.kind == 'list' %}<ul>{% for item in block['items'] %}<li>{{ item }}</li>{% endfor %}</ul>
+      {% else %}<p>{{ block.text }}</p>{% endif %}
+    {% endfor %}
+  </div>
+  {% endif %}
+</section>
+
 <div class="review-actions">
-  {% if index > 0 %}<a class="button" href="/review?i={{ index - 1 }}">← Previous</a>{% endif %}
-  <a class="button button-primary" href="/review?i={{ index + 1 }}">Next →</a>
+  {% if index > 0 %}<a class="button" href="/review?i={{ index - 1 }}" data-review-previous>← Previous</a>{% endif %}
+  <a class="button" href="/review?i={{ index + 1 }}" data-review-next>Next →</a>
+  <span class="muted">k previous · j next</span>
 </div>
+<script>
+  // A one-at-a-time queue is only faster than the list if your hands stay on the keyboard.
+  document.addEventListener("keydown", event => {
+    if (event.metaKey || event.ctrlKey || event.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName)) return;
+    const target = { j: "[data-review-next]", k: "[data-review-previous]" }[event.key];
+    if (target) document.querySelector(target)?.click();
+  });
+</script>
 {% endif %}
 {% endblock %}

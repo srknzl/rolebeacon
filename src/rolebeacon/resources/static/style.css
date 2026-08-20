@@ -1139,3 +1139,13 @@ td small { display: block; color: var(--muted); }
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* The review queue's decision surface: the actions and just enough of the posting to judge it. */
+.review-panel { display: grid; gap: 18px; margin-top: 14px; }
+.review-decision { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }
+.review-decision .decision-grid { display: flex; flex-wrap: wrap; gap: 10px; margin: 0; }
+.review-gaps h3, .review-excerpt h3 { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; }
+.review-gaps ul { margin: 0; padding-left: 18px; }
+.review-excerpt h4 { font-size: 14px; margin: 12px 0 4px; }
+.review-excerpt p { margin: 0 0 10px; color: var(--muted); }
+.review-actions { display: flex; align-items: center; gap: 12px; margin-top: 18px; }

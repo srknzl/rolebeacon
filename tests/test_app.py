@@ -1422,3 +1422,40 @@ def test_a_job_card_states_its_facts_as_tags_not_sentences(tmp_path) -> None:
     assert "EUR 95,000-130,000" in row
     assert "3 days ago" in row
     assert ">2026-" not in row
+
+
+def test_a_review_decision_returns_to_the_queue_and_refuses_an_off_site_return(tmp_path) -> None:
+    # The review queue is only faster than the list if a decision can be made without leaving it.
+    app = create_app(configured_settings(tmp_path))
+    job_id, _ = app.state.database.upsert_job(
+        CollectedJob(
+            source="manual", source_job_id="review-decision", title="Backend Engineer", company="Example",
+            location="Remote", description="Build backend systems.", url="https://example.test/review-decision",
+        )
+    )
+
+    with TestClient(app) as client:
+        client.post(f"/api/jobs/{job_id}/feedback", json={"status": "bookmarked"})
+        queue = client.get("/review")
+        decision = client.post(
+            f"/api/jobs/{job_id}/feedback",
+            data={"status": "applied", "return": "/review?i=0"},
+            headers={"accept": "text/html"},
+            follow_redirects=False,
+        )
+        recorded = app.state.database.get_job(job_id)["status"]
+        elsewhere = client.post(
+            f"/api/jobs/{job_id}/feedback",
+            data={"status": "new", "return": "//evil.test/steal"},
+            headers={"accept": "text/html"},
+            follow_redirects=False,
+        )
+
+    # The decision is on the queue page itself, not one click away on the job detail.
+    assert f'action="/api/jobs/{job_id}/feedback"' in queue.text
+    assert ">I applied<" in queue.text
+    assert decision.status_code == 303
+    assert decision.headers["location"] == "/review?i=0"
+    assert recorded == "applied"
+    # A "return" that leaves this origin is dropped rather than followed.
+    assert elsewhere.headers["location"] == f"/jobs/{job_id}"

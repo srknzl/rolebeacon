@@ -536,7 +536,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Job not found")
         database.save_feedback(job_id, feedback_status, str(payload.get("reason", "")))
         if _wants_html(request):
-            return RedirectResponse(f"/jobs/{job_id}", status_code=303)
+            # A decision made from the review queue returns to the queue, which has already moved
+            # on: the job just judged is no longer bookmarked, so the same index is the next job.
+            return RedirectResponse(_same_site_path(str(payload.get("return", ""))) or f"/jobs/{job_id}", status_code=303)
         return JSONResponse({"job_id": job_id, "status": feedback_status.value})
 
     @app.post("/api/jobs/{job_id}/resume")
