@@ -67,6 +67,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     templates.env.filters["location_requirement_label"] = location_requirement_label
     templates.env.filters["time_ago"] = time_ago
     templates.env.filters["salary_range"] = salary_range
+    # Five-figure counts are read, not just glanced at: 13,743 is legible where 13743 is not.
+    templates.env.filters["thousands"] = lambda value: f"{int(value or 0):,}"
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -218,9 +220,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 page=page,
                 page_size=page_size,
                 page_count=max(1, -(-total // page_size)),
-                active_chips=_active_filter_chips(
-                    request.query_params, sources=sources, hidden_title_count=hidden_title_count
-                ),
+                active_chips=_active_filter_chips(request.query_params, sources=sources),
                 sort_options=JOB_SORT_LABELS,
                 # Every facet's choices as plain (value, label) pairs, so the template renders
                 # them all the same way whatever shape they were stored in.
@@ -1100,25 +1100,15 @@ def _chip_href(params: Any, key: str, value: str = "") -> str:
     return f"/jobs?{urlencode(kept)}" if kept else "/jobs"
 
 
-def _active_filter_chips(
-    params: Any,
-    sources: list[SourceConfig] | None = None,
-    hidden_title_count: int = 0,
-) -> list[dict[str, Any]]:
-    """One removable chip per active filter, so an empty result set is always explainable."""
+def _active_filter_chips(params: Any, sources: list[SourceConfig] | None = None) -> list[dict[str, Any]]:
+    """One removable chip per active filter, so an empty result set is always explainable.
+
+    The different-role default is not one of them: it is stated and undone in the match count
+    itself, where its size is visible, rather than in a chip that "Clear all" would also undo.
+    """
     values = dict(params)
     source_labels = {item["value"]: item["label"] for item in _source_filter_options(sources or [])}
     chips: list[dict[str, Any]] = []
-    if hidden_title_count > 0 and values.get("show_mismatched_titles", "") not in {"1", "true", "on"}:
-        chips.append(
-            {
-                "key": "show_mismatched_titles",
-                "label": "Hiding different-role titles",
-                "value": f"{hidden_title_count} job{'' if hidden_title_count == 1 else 's'}",
-                "href": f"{_chip_href(params, 'show_mismatched_titles')}&show_mismatched_titles=1",
-                "inverse": True,
-            }
-        )
     for key, label in FILTER_CHIP_LABELS.items():
         if key in MULTI_FILTER_KEYS:
             # One chip per chosen value, each removing only itself: a facet with three boxes

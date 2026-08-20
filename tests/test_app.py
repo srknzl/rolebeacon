@@ -774,7 +774,7 @@ def test_jobs_page_supports_page_size_and_location_filter_and_company_suggest(tm
 
     assert paged.status_code == 200
     assert "Page 1 of 2" in paged.text
-    assert "12 of 12 jobs match" in paged.text
+    assert "12 matching jobs" in paged.text
     assert paged.text.count('class="job-card"') == 10
     assert unpaged.status_code == 200
     assert "Page 1 of 2" not in unpaged.text
@@ -1076,14 +1076,17 @@ def test_jobs_page_hides_mismatched_titles_by_default(tmp_path) -> None:
 
     assert "Backend Engineer" in default_view.text
     assert "Talent Acquisition Specialist" not in default_view.text
-    assert "1 of 2 jobs match" in default_view.text
-    assert "1 different-role title hidden" in default_view.text
-    assert "Hiding different-role titles: 1 job" in default_view.text
+    assert "1 matching job" in default_view.text
+    # The default that hides them is stated once, next to the heading, and undoing it is that
+    # same number rather than a chip "Clear all" would silently take with it.
+    assert "1 hidden as different role — show" in default_view.text
+    assert "Hiding different-role titles" not in default_view.text
     assert "show_mismatched_titles=1" in default_view.text
+    assert 'href="/jobs"' in default_view.text
     assert "Backend Engineer" in shown.text
     assert "Talent Acquisition Specialist" in shown.text
-    assert "2 of 2 jobs match" in shown.text
-    assert "Hiding different-role titles" not in shown.text
+    assert "2 matching jobs" in shown.text
+    assert "different-role titles included — hide" in shown.text
 
 
 def test_sources_page_explains_a_quarantined_snapshot_drop(tmp_path) -> None:

@@ -440,6 +440,8 @@ a.stat:hover, a.stat:focus-visible { background: var(--brand-soft); }
 .section-heading h2, .section-heading h1, .page-heading h1 { margin: 0; }
 .section-heading h2, .section-heading h1 { font-size: 20px; }
 .section-heading p { margin: 4px 0 0; max-width: 620px; font-size: 13px; }
+.match-count { margin: 6px 0 0; color: var(--muted); }
+.match-count strong { color: var(--ink); }
 .section-heading a { font-weight: 700; color: var(--brand); text-decoration: none; }
 .page-heading h1 { font-size: clamp(24px, 3vw, 30px); }
 

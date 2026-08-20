@@ -2,11 +2,11 @@
 {% block title %}Dashboard · RoleBeacon{% endblock %}
 {% block content %}
 <section class="stats-grid">
-  <a class="stat" href="/jobs?sort=newest" title="Jobs first collected in the last 24 hours. Opens all jobs, newest first."><strong>{{ stats.new_today }}</strong><span>new today</span></a>
-  <a class="stat" href="/jobs" title="Collected jobs that are not rejected or closed."><strong>{{ stats.total }}</strong><span>active jobs</span></a>
-  <a class="stat" href="/jobs?job_status=bookmarked" title="Jobs you bookmarked."><strong>{{ stats.shortlisted }}</strong><span>bookmarked</span></a>
-  <div class="stat" title="Jobs collected successfully while LLM scoring is waiting or unavailable."><strong>{{ stats.pending_llm }}</strong><span>waiting for model</span></div>
-  <a class="stat{% if stats.source_errors %} stat-warning{% endif %}" href="/sources" title="Sources whose latest collection attempt failed. Other sources continue independently."><strong>{{ stats.source_errors }}</strong><span>source errors</span></a>
+  <a class="stat" href="/jobs?sort=newest" title="Jobs first collected in the last 24 hours. Opens all jobs, newest first."><strong>{{ stats.new_today|thousands }}</strong><span>new today</span></a>
+  <a class="stat" href="/jobs" title="Collected jobs that are not rejected or closed."><strong>{{ stats.total|thousands }}</strong><span>active jobs</span></a>
+  <a class="stat" href="/jobs?job_status=bookmarked" title="Jobs you bookmarked."><strong>{{ stats.shortlisted|thousands }}</strong><span>bookmarked</span></a>
+  <div class="stat" title="Jobs collected successfully while LLM scoring is waiting or unavailable."><strong>{{ stats.pending_llm|thousands }}</strong><span>waiting for model</span></div>
+  <a class="stat{% if stats.source_errors %} stat-warning{% endif %}" href="/sources" title="Sources whose latest collection attempt failed. Other sources continue independently."><strong>{{ stats.source_errors|thousands }}</strong><span>source errors</span></a>
 </section>
 
 <section class="section-heading">
