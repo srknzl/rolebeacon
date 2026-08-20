@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .collectors import description_blocks, plain_text, repair_text
-from .company import CompanyResearchCoordinator, CompanyResearchService
+from .company import CompanyResearchCoordinator, CompanyResearchService, outdated_assessment
 from .config import Settings
 from .database import (
     JOB_SORTS,
@@ -329,11 +329,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return templates.TemplateResponse(request, "imports.html", page_context(request, imported=imported))
 
     @app.get("/companies", response_class=HTMLResponse)
-    async def companies_page(request: Request) -> HTMLResponse:
+    async def companies_page(request: Request, q: str = "") -> HTMLResponse:
+        needle = q.strip().casefold()
         return templates.TemplateResponse(
             request,
             "companies.html",
-            page_context(request, companies=database.list_companies()),
+            page_context(
+                request,
+                companies=[
+                    dict(company, outdated=outdated_assessment(company))
+                    for company in database.list_companies()
+                    if needle in str(company["name"]).casefold()
+                ],
+                unresearched=database.unresearched_employers(q),
+                query=q,
+            ),
         )
 
     @app.get("/companies/{company_id}", response_class=HTMLResponse)
@@ -344,7 +354,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return templates.TemplateResponse(
             request,
             "company-detail.html",
-            page_context(request, company=company),
+            page_context(request, company=dict(company, outdated=outdated_assessment(company))),
         )
 
     @app.get("/settings", response_class=HTMLResponse)
@@ -589,17 +599,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return RedirectResponse(f"/jobs/{job_id}", status_code=303)
         return JSONResponse({"job_id": job_id, "packet_path": str(path), "browser_opened": app_settings.open_browser})
 
+    async def _research_company(name: str) -> int:
+        """Research one employer, turning its failures into the status codes clients expect."""
+        try:
+            return await company_research.research(name)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except (LlmUnavailable, RuntimeError) as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+
+    @app.post("/api/companies/research")
+    async def research_company_by_name(request: Request) -> Response:
+        payload = await _payload(request)
+        name = str(payload.get("company", "")).strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="A company name is required")
+        company_id = await _research_company(name)
+        if _wants_html(request):
+            return RedirectResponse(f"/companies/{company_id}", status_code=303)
+        return JSONResponse({"company_id": company_id})
+
+    @app.post("/api/companies/research/start", status_code=status.HTTP_202_ACCEPTED)
+    async def start_company_research_by_name(company: str = "") -> dict[str, Any]:
+        if not company.strip():
+            raise HTTPException(status_code=422, detail="A company name is required")
+        return company_research_coordinator.start(company.strip())
+
     @app.post("/api/jobs/{job_id}/research-company")
     async def research_company(job_id: int, request: Request) -> Response:
         job = database.get_job(job_id)
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
-        try:
-            company_id = await company_research.research(str(job["company"]))
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        except (LlmUnavailable, RuntimeError) as error:
-            raise HTTPException(status_code=503, detail=str(error)) from error
+        company_id = await _research_company(str(job["company"]))
         if _wants_html(request):
             return RedirectResponse(f"/companies/{company_id}", status_code=303)
         return JSONResponse({"job_id": job_id, "company_id": company_id})
@@ -616,12 +647,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         company = database.get_company(company_id)
         if not company:
             raise HTTPException(status_code=404, detail="Company not found")
-        try:
-            refreshed_company_id = await company_research.research(str(company["name"]))
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        except (LlmUnavailable, RuntimeError) as error:
-            raise HTTPException(status_code=503, detail=str(error)) from error
+        refreshed_company_id = await _research_company(str(company["name"]))
         if _wants_html(request):
             return RedirectResponse(f"/companies/{refreshed_company_id}", status_code=303)
         return JSONResponse({"company_id": refreshed_company_id, "refreshed": True})

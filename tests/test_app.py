@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from rolebeacon.app import _source_filter_options, create_app
+from rolebeacon.company import RULES_MODEL
 from rolebeacon.config import Settings
 from rolebeacon.database import Database
 from rolebeacon.domain import CollectedJob, EligibilityResult, EligibilityStatus, ScoreResult, SourceConfig
@@ -1605,3 +1606,61 @@ def test_the_jobs_page_offers_one_filter_control_that_counts_what_is_set(tmp_pat
     assert '<span class="facet-count">' not in re.search(
         r'id="filter-toggle".*?</button>', unfiltered.text, re.S
     ).group(0)
+
+
+def test_the_companies_page_drops_a_superseded_assessment_and_offers_the_unresearched(tmp_path) -> None:
+    # A rules-only profile is only rewritten when someone asks for it, so a summary written by
+    # the ruleset that quoted job postings verbatim - mojibake and all - stayed on screen as if
+    # it were a current assessment.
+    settings = replace(configured_settings(tmp_path), auto_sync=False)
+    app = create_app(settings)
+    database = app.state.database
+    score = {
+        "total": 60,
+        "dimensions": {
+            "domain_alignment": 10, "engineering_environment": 10, "location_mobility": 10,
+            "compensation": 10, "company_quality": 10, "evidence_confidence": 10,
+        },
+        "reasons": [], "risks": [],
+    }
+    evidence = [{"source_url": "https://example.test/careers", "source_type": "careers", "title": "Careers", "excerpt": "Engineering careers"}]
+    database.save_company_research(
+        name="Stale Ltd.", domain="example.test",
+        profile={"summary": "Senior Software Engineer - Data Platform Who we are â€ the pioneer of", "remote_policy": "unknown", "sponsorship": "unknown", "relocation": "unknown"},
+        evidence=evidence, score=score, provider="rules", model="company-rules-v1",
+    )
+    current_id = database.save_company_research(
+        name="Current Ltd.", domain="current.test",
+        profile={"summary": "Remote work is described as regional. Visa sponsorship is not stated in the fetched sources.", "remote_policy": "regional", "sponsorship": "unknown", "relocation": "unknown"},
+        evidence=evidence, score=score, provider="rules", model=RULES_MODEL,
+    )
+    database.upsert_job(
+        CollectedJob(
+            source="manual", source_job_id="unresearched", title="Backend Engineer", company="Unknown Ltd.",
+            location="Remote", description="Build backend systems.", url="https://example.test/unresearched",
+        )
+    )
+
+    with TestClient(app) as client:
+        page = client.get("/companies")
+        searched = client.get("/companies?q=current")
+        detail = client.get(f"/companies/{current_id}")
+
+    # Neither the posting text nor its mojibake reaches the page.
+    assert "Senior Software Engineer - Data Platform" not in page.text
+    assert "â€" not in page.text
+    assert "earlier version of the rules" in page.text
+    # The current rules summary says the same three sentences for every company; the facts it
+    # extracted are rendered as facts instead.
+    assert "not stated in the fetched sources" not in page.text
+    assert "sponsorship unknown" in page.text
+    # Employers with collected jobs and no assessment are counted and can be researched here.
+    assert "1 not researched" in page.text
+    assert "Unknown Ltd." in page.text
+    assert 'action="/api/companies/research"' in page.text
+    # Search narrows both lists.
+    assert "Current Ltd." in searched.text and "Stale Ltd." not in searched.text
+    assert "Unknown Ltd." not in searched.text
+    # A model-written assessment is still shown in full on the profile itself.
+    assert detail.status_code == 200
+    assert "Remote work is described as regional." in detail.text

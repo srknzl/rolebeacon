@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import re
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -145,6 +146,20 @@ REMOTE_POLICY_WORDING = {
 
 _TLD_EXTRACT = tldextract.TLDExtract(suffix_list_urls=(), include_psl_private_domains=True)
 
+# Bumped whenever the deterministic analysis changes what it would write for the same sources.
+# v1 quoted the employer's own posting text as the summary; v2 states extracted facts instead.
+RULES_MODEL = "company-rules-v2"
+
+
+def outdated_assessment(company: Mapping[str, Any]) -> bool:
+    """True when a stored assessment came from a superseded ruleset.
+
+    A profile is only re-researched when someone asks, so an assessment written by an earlier
+    ruleset stays on screen indefinitely, presented as if it were current. A model-written
+    assessment is never called outdated: its wording is the model's, not a rule we changed.
+    """
+    return str(company.get("provider") or "rules") == "rules" and str(company.get("model") or "") != RULES_MODEL
+
 
 @dataclass(slots=True)
 class CompanyResearchStatus:
@@ -199,7 +214,7 @@ class CompanyResearchService:
 
         search_profile = self.settings.load_search_profile()
         provider = "rules"
-        model = "company-rules-v2"
+        model = RULES_MODEL
         if self.settings.llm_enabled:
             if not await self.llm.available():
                 health = await self.llm.health()

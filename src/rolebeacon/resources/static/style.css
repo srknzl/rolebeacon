@@ -748,6 +748,7 @@ label:has(> .help-tip):not(:has(> input[type=checkbox])) > :not(.help-tip) { gri
 .artifact-link { display: block; color: var(--brand); font-weight: 700; margin: 10px 0; text-decoration: none; }
 .artifact-link:hover { color: var(--brand-strong); }
 .safety-note { font-size: 11px; color: var(--muted); margin-top: 14px; }
+.warning-note { padding: 10px 12px; border-left: 4px solid var(--warning); border-radius: var(--radius-sm); background: var(--warning-bg); color: var(--warning-text); }
 .mode-note { font-size: 12px; color: var(--muted); border-left: 2px solid var(--line); padding-left: 9px; margin: 0 0 14px; }
 
 /* The one invariant worth stating plainly: RoleBeacon never submits for you. */
@@ -983,6 +984,14 @@ td small { display: block; color: var(--muted); }
 .company-card { display: grid; grid-template-columns: 66px 1fr; gap: 16px; padding: 18px; background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius-lg); text-decoration: none; }
 .company-card h2 { font-size: 17px; }
 .company-card p { color: var(--muted); margin: 7px 0; }
+.company-card > div:last-child { align-self: start; }
+.company-card-plain { color: inherit; }
+.company-card-plain form { margin-top: 10px; }
+/* Three lines keeps a row of cards the same height; the card links to the full assessment. */
+.company-summary { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.company-note { font-size: 12px; }
+.company-search { display: flex; gap: 8px; margin-bottom: 14px; }
+.company-search input { flex: 1; min-width: 0; }
 
 .policy-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 20px; }
 .policy-grid div { padding: 12px; background: var(--line-soft); border-radius: var(--radius-sm); display: grid; }

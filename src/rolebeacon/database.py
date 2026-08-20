@@ -1665,13 +1665,40 @@ class Database:
                 dict(row)
                 for row in connection.execute(
                     """
-                    SELECT c.*, (SELECT total FROM company_scores WHERE company_id = c.id ORDER BY created_at DESC, id DESC LIMIT 1) AS score,
+                    SELECT c.*, s.total AS score, s.provider, s.model,
                            (SELECT COUNT(*) FROM company_evidence WHERE company_id = c.id) AS evidence_count,
                            (SELECT COUNT(*) FROM jobs WHERE company_key = c.normalized_name AND active = 1) AS job_count
-                    FROM companies c ORDER BY score DESC, name
+                    FROM companies c
+                    LEFT JOIN company_scores s
+                      ON s.id = (SELECT id FROM company_scores WHERE company_id = c.id ORDER BY created_at DESC, id DESC LIMIT 1)
+                    ORDER BY score DESC, name
                     """
                 ).fetchall()
             ]
+
+    def unresearched_employers(self, query: str = "", limit: int = 12) -> dict[str, Any]:
+        """Employers that post jobs but carry no company profile, busiest first.
+
+        A source pack adds dozens of employers at once and research runs one company at a time,
+        so the researched table is always the small end of the list. The page can only say what
+        is missing if it can count it.
+        """
+        query = query.strip()
+        where = """
+            FROM jobs
+            WHERE active = 1 AND company != ''
+              AND company_key NOT IN (SELECT normalized_name FROM companies)
+              AND (? = '' OR company LIKE ?)
+        """
+        parameters = (query, f"%{query}%")
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"SELECT MIN(company) AS name, COUNT(*) AS job_count {where} "
+                "GROUP BY company_key ORDER BY job_count DESC, name LIMIT ?",
+                (*parameters, limit),
+            ).fetchall()
+            total = int(connection.execute(f"SELECT COUNT(DISTINCT company_key) AS total {where}", parameters).fetchone()["total"])
+        return {"employers": [dict(row) for row in rows], "total": total}
 
     def suggest_companies(self, prefix: str, limit: int = 20) -> list[str]:
         """Distinct employer names for autocomplete, drawn from the jobs table itself so every

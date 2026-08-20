@@ -1,13 +1,59 @@
 {% extends "base.html" %}
 {% block title %}Companies · RoleBeacon{% endblock %}
 {% block content %}
-<section class="page-heading"><div><p class="eyebrow">EMPLOYER INTELLIGENCE</p><h1>Companies</h1></div><span>{{ companies|length }} researched</span></section>
+<section class="page-heading">
+  <div><p class="eyebrow">EMPLOYER INTELLIGENCE</p><h1>Companies</h1></div>
+  <span>{{ companies|length }} researched · {{ unresearched.total }} not researched</span>
+</section>
+<form class="company-search" method="get" action="/companies" role="search">
+  <input type="search" name="q" value="{{ query }}" placeholder="Search employers by name" aria-label="Search employers by name">
+  <button class="button">Search</button>
+  {% if query %}<a class="button button-quiet" href="/companies">Clear</a>{% endif %}
+</form>
 <div class="company-grid">
   {% for company in companies %}
   <a class="company-card" href="/companies/{{ company.id }}">
     <div class="score score-{{ 'high' if (company.score or 0) >= 80 else 'mid' if (company.score or 0) >= 65 else 'low' }}">{{ company.score or '—' }}</div>
-    <div><h2>{{ company.name }}</h2><p>{{ company.summary }}</p><div class="meta-row"><span>{{ company.remote_policy }}</span><span>{{ company.job_count }} jobs</span><span>{{ company.evidence_count }} evidence sources</span></div></div>
+    <div>
+      <h2>{{ company.name }}</h2>
+      {# The facts below already say what rules-only research established, and it says it in the
+         same three sentences for every company. Prose is only shown when a model wrote it. #}
+      {% if company.outdated %}
+      <p class="company-note">Assessed by an earlier version of the rules. Open it to refresh.</p>
+      {% elif company.provider and company.provider != 'rules' %}
+      <p class="company-summary">{{ company.summary }}</p>
+      {% endif %}
+      <div class="meta-row">
+        <span>remote {{ company.remote_policy }}</span>
+        <span>sponsorship {{ company.sponsorship }}</span>
+        <span>relocation {{ company.relocation }}</span>
+        <span>{{ company.job_count }} jobs</span>
+        <span>{{ company.evidence_count }} evidence sources</span>
+      </div>
+    </div>
   </a>
-  {% else %}<div class="empty-state"><h3>No company profiles yet</h3><p>Open a job and choose Research company. Only configured official pages and collected postings are used.</p></div>{% endfor %}
+  {% else %}<div class="empty-state"><h3>{% if query %}No researched company matches “{{ query }}”{% else %}No company profiles yet{% endif %}</h3><p>Research an employer below, or open a job and choose Research company. Only configured official pages and collected postings are used.</p></div>{% endfor %}
 </div>
+{% if unresearched.employers %}
+<section class="section-heading">
+  <div><h2>Not researched yet</h2><p class="muted">Employers whose jobs you have collected but whose hiring terms have never been read. Busiest first.</p></div>
+  <span>{{ unresearched.employers|length }} of {{ unresearched.total }}</span>
+</section>
+<div class="company-grid">
+  {% for employer in unresearched.employers %}
+  <div class="company-card company-card-plain">
+    <div class="score score-low">—</div>
+    <div>
+      <h2>{{ employer.name }}</h2>
+      <div class="meta-row"><span>{{ employer.job_count }} collected jobs</span><span>no assessment</span></div>
+      <form action="/api/companies/research" method="post" data-company-research data-research-start-url="/api/companies/research/start?company={{ employer.name|urlencode }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="company" value="{{ employer.name }}">
+        <button class="button button-quiet">Research</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
 {% endblock %}
