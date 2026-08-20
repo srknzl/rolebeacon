@@ -1760,3 +1760,30 @@ def test_the_score_breakdown_shows_the_shortfall_before_the_numbers(tmp_path) ->
     # Nothing was recorded against this job, so there is no card saying so.
     assert "Gaps and risks" not in page.text
     assert "No material gaps were recorded" in page.text
+
+
+def test_a_fully_enabled_source_pack_says_so_instead_of_offering_to_enable_it(tmp_path) -> None:
+    # "Enable pack" was the primary button on every card, including the eight where every board
+    # was already added and switched on, so the most prominent control changed nothing.
+    settings = replace(configured_settings(tmp_path), auto_sync=False)
+    app = create_app(settings)
+
+    with TestClient(app) as client:
+        before = client.get("/sources")
+        pack_id = re.search(r'data-source-pack="([^"]+)"', before.text).group(1)
+        client.post(f"/api/source-packs/{pack_id}/install", json={"enabled": True})
+        after = client.get("/sources")
+
+    def card(page: str) -> str:
+        return page.split(f'data-source-pack="{pack_id}"')[1].split("</article>")[0]
+
+    assert 'data-enable="true"' in card(before.text)
+    assert "Enabled ✓" not in card(before.text)
+    # Nothing left to add or enable: the card reports the state and keeps only the update action.
+    assert 'data-enable="true"' not in card(after.text)
+    assert "Enabled ✓" in card(after.text)
+    assert "Update pack" in card(after.text)
+    # The bar duplicated the count line and read as a loading state once it was full.
+    assert "source-pack-progress" not in card(after.text)
+    # The bare number in the corner now says what it counts.
+    assert "</strong> boards" in card(after.text)

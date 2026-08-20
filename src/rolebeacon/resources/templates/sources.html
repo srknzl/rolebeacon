@@ -21,20 +21,25 @@
   <div class="source-pack-grid">
     {% for pack in source_catalog.packs %}
     <article class="source-pack-card" data-source-pack="{{ pack.id }}">
+      {% set complete = pack.installed_count == pack.source_count and pack.enabled_count == pack.source_count %}
       <div class="source-pack-heading">
         <div><h3>{{ pack.name }}</h3>{% if pack.recommended %}<span class="status status-interested">recommended</span>{% endif %}</div>
-        <strong>{{ pack.source_count }}</strong>
+        <span class="source-pack-count"><strong>{{ pack.source_count }}</strong> boards</span>
       </div>
       <p>{{ pack.description }}</p>
-      <div class="source-pack-progress"><span style="width:{{ (100 * pack.installed_count / pack.source_count)|round|int }}%"></span></div>
-      <small>{{ pack.installed_count }}/{{ pack.source_count }} added · {{ pack.enabled_count }}/{{ pack.source_count }} enabled</small>
+      {# A full bar on every card read as a loading state and said what the line below says. #}
+      {% if not complete %}<div class="source-pack-progress"><span style="width:{{ (100 * pack.installed_count / pack.source_count)|round|int }}%"></span></div>{% endif %}
+      <small>{% if complete %}All {{ pack.source_count }} boards added and enabled{% else %}{{ pack.installed_count }}/{{ pack.source_count }} added · {{ pack.enabled_count }}/{{ pack.source_count }} enabled{% endif %}</small>
       <details>
         <summary>View companies</summary>
         <div class="source-pack-companies">{% for source in pack.sources %}<span class="source-company-chip {% if source.enabled %}is-enabled{% elif source.installed %}is-installed{% endif %}">{{ source.company }}</span>{% endfor %}</div>
       </details>
       <div class="source-pack-actions">
-          <button class="button source-pack-install" type="button" data-pack-id="{{ pack.id }}" data-enable="false">{{ 'Update pack' if pack.installed_count == pack.source_count else 'Add pack' }}</button>
-          <button class="button button-primary source-pack-install" type="button" data-pack-id="{{ pack.id }}" data-enable="true">{{ 'Enable pack' if pack.installed_count == pack.source_count else 'Add & enable' }}</button>
+          <button class="button source-pack-install" type="button" data-pack-id="{{ pack.id }}" data-enable="false" title="Fetch the pack's board list again and store any boards it has gained. It never disables a board you turned off.">{{ 'Update pack' if pack.installed_count == pack.source_count else 'Add pack' }}</button>
+          {# Nothing left to enable, so the card says so instead of offering a button that would
+             change nothing - it was the primary control on every fully enabled pack. #}
+          {% if complete %}<span class="source-pack-done">Enabled ✓</span>
+          {% else %}<button class="button button-primary source-pack-install" type="button" data-pack-id="{{ pack.id }}" data-enable="true" title="Store this pack's boards and switch them on, so the next refresh collects from them.">{{ 'Enable pack' if pack.installed_count == pack.source_count else 'Add & enable' }}</button>{% endif %}
       </div>
     </article>
     {% endfor %}

@@ -1128,7 +1128,7 @@ td small { display: block; color: var(--muted); }
 .source-pack-heading { display: flex; justify-content: space-between; gap: 14px; }
 .source-pack-heading > div { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .source-pack-heading h3 { font-size: 15px; }
-.source-pack-heading > strong { font: 700 22px var(--font-mono); color: var(--brand); }
+.source-pack-count strong { font: 700 22px var(--font-mono); color: var(--brand); }
 .source-pack-card > p { color: var(--muted); font-size: 13px; margin: 0; min-height: 58px; }
 .source-pack-card > small { color: var(--muted); }
 .source-pack-progress { height: 5px; border-radius: var(--radius-full); background: var(--line-soft); overflow: hidden; }
@@ -1138,7 +1138,10 @@ td small { display: block; color: var(--muted); }
 .source-company-chip { padding: 3px 7px; border-radius: var(--radius-full); background: var(--line-soft); color: var(--muted); font-size: 11px; }
 .source-company-chip.is-installed { background: var(--warning-bg); color: var(--warning-text); }
 .source-company-chip.is-enabled { background: var(--success-bg); color: var(--success-text); }
-.source-pack-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: auto; }
+.source-pack-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: auto; align-items: center; }
+.source-pack-done { text-align: center; font-size: 13px; font-weight: 700; color: var(--success-text); }
+.source-pack-count { font-size: 11px; color: var(--muted); text-align: right; }
+.source-pack-count strong { display: block; }
 .linkedin-panel { margin-top: 22px; }
 .linkedin-methods { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 16px; }
 .linkedin-method-card { display: grid; align-content: start; gap: 10px; padding: 18px; background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius-lg); }
