@@ -664,10 +664,17 @@ label:has(> .help-tip):not(:has(> input[type=checkbox])) > :not(.help-tip) { gri
 .help-tip::before { display: none; }
 .help-tip:hover::after, .help-tip:focus-visible::after { opacity: 1; }
 .help-tip:focus-visible { box-shadow: 0 0 0 3px var(--brand-soft); }
-.score-factor { border-bottom: 1px solid var(--line-soft); }
-.score-factor summary { display: flex; justify-content: space-between; gap: 16px; padding: 9px 0; cursor: pointer; }
+/* A factor is a row in a list, not a card: the generic details box turned six rows into six
+   boxes and 290px of chrome for six ratios. */
+.score-factor { border: 0; border-bottom: 1px solid var(--line-soft); border-radius: 0; padding: 0; }
+.dimension-list:has(.score-factor) { gap: 0; }
+.score-factor summary { display: grid; grid-template-columns: minmax(0, 1fr) 90px auto; align-items: center; gap: 16px; padding: 7px 0; cursor: pointer; }
+/* Six pairs of numbers had to be read and compared. The fill says where the points went. */
+.score-factor-bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.score-factor-bar::after { content: ""; display: block; height: 100%; width: var(--fill, 0%); background: var(--brand); }
 .score-factor summary:focus-visible { outline: 3px solid var(--brand-soft); outline-offset: 2px; }
-.score-factor-explanation { padding: 0 0 10px; color: var(--muted); font-size: 13px; }
+/* Block, not the flex row .dimension-list gives its divs, which spread the sentences apart. */
+.score-factor-explanation { display: block; padding: 0 0 10px; color: var(--muted); font-size: 13px; }
 .score-factor-explanation p { margin: 5px 0; }
 
 /* ============================================================
@@ -726,6 +733,11 @@ label:has(> .help-tip):not(:has(> input[type=checkbox])) > :not(.help-tip) { gri
 .dimension-list div { display: flex; justify-content: space-between; align-items: baseline; padding: 9px 0; border-bottom: 1px solid var(--line); }
 .dimension-list span { font-size: 11px; color: var(--muted); text-transform: uppercase; }
 .dimension-list strong { font-family: var(--font-mono); }
+
+@media (max-width: 540px) {
+  .score-factor summary { grid-template-columns: minmax(0, 1fr) auto; }
+  .score-factor-bar { grid-column: 1 / -1; }
+}
 
 .job-description p { white-space: pre-line; }
 .cover-letter-text { white-space: pre-line; line-height: 1.72; margin: 0; }

@@ -1717,3 +1717,46 @@ def test_duplicate_review_shows_what_differs_and_decides_a_whole_set_at_once(tmp
     assert merged.json() == {"job_id": job_ids[1], "merged": 2}
     assert "No duplicates to review" in after.text
     assert [database.get_job(job_id)["merged_into_job_id"] for job_id in job_ids] == [job_ids[1], None, job_ids[1]]
+
+
+def test_the_score_breakdown_shows_the_shortfall_before_the_numbers(tmp_path) -> None:
+    # Six rows of "n / n" made the reader compare six pairs of numbers to find where the points
+    # went, and a job with no gaps still spent a whole card saying it had none.
+    # Without this the startup sync rescores the job and replaces the evaluation under test.
+    app = create_app(replace(configured_settings(tmp_path), auto_sync=False))
+    database = app.state.database
+    job_id, _ = database.upsert_job(
+        CollectedJob(
+            source="manual", source_job_id="breakdown", title="Backend Engineer", company="Example",
+            location="Remote", description="Build backend systems.", url="https://example.test/breakdown",
+        )
+    )
+    database.save_evaluation(
+        job_id,
+        EligibilityResult(
+            status=EligibilityStatus.ELIGIBLE, route="remote_worldwide", sponsorship="not_required",
+            relocation="not_required", location_fit="remote_worldwide", reasons=[], risks=[],
+        ),
+        ScoreResult(
+            total=62,
+            dimensions={
+                "role_domain": 30, "stack": 20, "domain_experience": 2, "seniority": 5,
+                "location_authorization": 20, "salary_employment": 10,
+            },
+            confidence=0.9, verdict="review", evidence=[], gaps=[], provider="rules", model="test",
+        ),
+        "scored",
+    )
+
+    with TestClient(app) as client:
+        page = client.get(f"/jobs/{job_id}")
+
+    factors = re.findall(r'data-score-factor="([^"]+)"', page.text)
+    # Seniority lost 10 of 15 and domain experience 8 of 10, so they lead; full factors follow.
+    assert factors[:2] == ["seniority", "domain_experience"]
+    assert set(factors[2:]) == {"role_domain", "stack", "salary_employment", "location_authorization"}
+    # Each factor draws its own fraction rather than only stating it.
+    assert 'class="score-factor-bar" style="--fill: 20%"' in page.text
+    # Nothing was recorded against this job, so there is no card saying so.
+    assert "Gaps and risks" not in page.text
+    assert "No material gaps were recorded" in page.text

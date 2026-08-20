@@ -269,7 +269,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 cover_letter_recommended=recommended,
                 cover_letter_reason=recommendation_reason,
                 cover_letter_text=cover_letter_text,
-                dimension_meta=dimension_metadata(app_settings.load_search_profile()),
+                # Worst shortfall first: the reason a job scored badly is the row you read first,
+                # not one you hunt for. A stable sort keeps equal factors in their defined order.
+                dimension_meta=sorted(
+                    dimension_metadata(app_settings.load_search_profile()),
+                    key=lambda item: (job.get("dimensions") or {}).get(item[0], 0) - item[2],
+                ),
                 open_browser=app_settings.open_browser,
                 status_labels=JOB_STATUS_LABELS,
             ),
