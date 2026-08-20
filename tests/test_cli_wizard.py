@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 
@@ -382,3 +383,48 @@ def test_terminal_end_of_input_cancels_rather_than_crashing() -> None:
     terminal = Terminal(stream=io.StringIO(), reader=refuse)
     with pytest.raises(Cancelled):
         terminal.ask_text("Anything")
+
+
+def test_a_first_run_never_offers_to_keep_values_that_do_not_exist_yet(tmp_path) -> None:
+    console = Console(HAPPY_PATH)
+    _, summary = run_wizard(tmp_path, console)
+
+    assert summary is not None
+    # Nothing on a first run has current values, so no prompt may describe Enter as keeping them.
+    assert "Blank line keeps the current values" not in console.text
+    assert "One per line. Required — enter at least one, then a blank line." in console.text
+    # A single-page multi-select says nothing about paging.
+    assert "numbers toggle · a all · Enter when done" in console.text
+    assert "n next page" not in console.text
+
+
+def test_a_step_says_which_question_you_are_on_out_of_its_own_total(tmp_path) -> None:
+    console = Console(HAPPY_PATH)
+    _, summary = run_wizard(tmp_path, console)
+
+    assert summary is not None
+    eligibility = console.text.split("Step 3 of 6")[1].split("Step 4 of 6")[0]
+    positions = re.findall(r"\[(\d+)/(\d+)\] ", eligibility)
+    assert positions, eligibility
+    # The declared total is a literal in _step_eligibility; a prompt added or removed without
+    # updating it would either overshoot the total or never reach it.
+    assert {total for _, total in positions} == {"22"}
+    assert max(int(asked) for asked, _ in positions) == 22
+
+
+def test_a_hint_introduces_the_prompt_below_it_rather_than_the_answer_above_it() -> None:
+    answers = iter(["Ada Lovelace", ""])
+    terminal = Terminal(stream=(output := io.StringIO()), reader=lambda: next(answers))
+
+    terminal.ask_text("Full name")
+    terminal.ask_text("Headline", help_text="A concise professional title.")
+
+    assert output.getvalue() == "\n[1] Full name: \n  A concise professional title.\n[2] Headline: "
+
+
+def test_a_required_list_refuses_to_end_empty() -> None:
+    answers = iter(["", "Backend Engineer", ""])
+    terminal = Terminal(stream=(output := io.StringIO()), reader=lambda: next(answers))
+
+    assert terminal.ask_lines("Target role", required=True) == ["Backend Engineer"]
+    assert "At least one value is required." in output.getvalue()

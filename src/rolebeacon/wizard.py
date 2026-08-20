@@ -28,7 +28,7 @@ CLEARANCE_CHOICES = (
     ("unknown", "Unknown / not configured"),
     ("cannot_meet", "I explicitly cannot meet clearance requirements"),
     ("eligible_to_attempt", "I may be eligible to undergo vetting"),
-    ("has_active_clearance", "I have an active clearance (add exact credentials through setup JSON)"),
+    ("has_active_clearance", "I hold an active clearance"),
 )
 SCORE_WEIGHT_LABELS = (
     ("role_domain", "Role match"),
@@ -266,8 +266,7 @@ class SetupWizard:
         self.draft["mobility"]["current_country_code"] = code
 
         contact = candidate["contact"]
-        terminal.note(CONTACT_NOTE)
-        contact["email"] = terminal.ask_text("Email", default=contact.get("email", ""))
+        contact["email"] = terminal.ask_text("Email", default=contact.get("email", ""), help_text=CONTACT_NOTE)
         contact["phone"] = terminal.ask_text("Phone", default=contact.get("phone", ""))
         contact["website"] = terminal.ask_text("Website URL", default=contact.get("website") or "") or None
 
@@ -280,10 +279,13 @@ class SetupWizard:
         mobility = self.draft["mobility"]
         preferences = self.draft["preferences"]
         terminal.write("These answers decide eligibility. RoleBeacon never infers a work right you did not state.")
+        # Straight-line, so it can say how far along you are. test_wizard keeps this number honest.
+        terminal.expect_questions(22)
         preferences["target_roles"] = terminal.ask_lines(
             "Target role",
             default=preferences.get("target_roles", ()),
-            help_text="Required. Job titles you actively want; they drive discovery and ranking.",
+            required=True,
+            help_text="Job titles you actively want; they drive discovery and ranking.",
         )
         mobility["work_authorizations"] = self._ask_country_codes(
             "Country where you can work today",
@@ -312,9 +314,11 @@ class SetupWizard:
         mobility["timezone"] = terminal.ask_text("Timezone", default=mobility.get("timezone", ""))
 
         clearance = mobility["clearance_policy"]
-        terminal.note("Optional and local only. RoleBeacon never infers clearance from nationality or résumé text.")
         clearance["status"] = terminal.ask_choice(
-            "Security-clearance policy", CLEARANCE_CHOICES, default=str(clearance.get("status", "unknown"))
+            "Security-clearance policy",
+            CLEARANCE_CHOICES,
+            default=str(clearance.get("status", "unknown")),
+            help_text="Optional and local only. RoleBeacon never infers clearance from nationality or résumé text.",
         )
         vetting = terminal.ask_bool(
             "Willing to undergo clearance vetting", default=bool(clearance.get("willing_to_undergo_vetting"))
@@ -514,11 +518,11 @@ class SetupWizard:
         terminal = self.terminal
         options = self._country_options()
         chosen: dict[str, str] = {}
-        terminal.note(help_text)
+        terminal.start_question(prompt, help_text)
         if current:
             names = dict(options)
             terminal.note("current: " + ", ".join(f"{names.get(code, code)} ({code})" for code in current))
-        terminal.note(f"One per line. Blank line keeps the current values; {CLEAR_WORD} clears them.")
+        terminal.list_hint(list(current))
         while True:
             entry = terminal.ask_from_catalog(f"{prompt} ({len(chosen) + 1})", options)
             if entry is None:
@@ -531,10 +535,13 @@ class SetupWizard:
         terminal = self.terminal
         options = self._country_options(include_regions=True)
         existing = [dict(target) for target in current]
-        terminal.note("Countries or whole continents you would move to. This never claims a work right.")
+        terminal.start_question(
+            "Relocation target",
+            "Countries or whole continents you would move to. This never claims a work right.",
+        )
         if existing:
             terminal.note("current: " + ", ".join(str(target.get("country_name", "")) for target in existing))
-        terminal.note(f"One per line. Blank line keeps the current values; {CLEAR_WORD} clears them.")
+        terminal.list_hint([str(target.get("country_name", "")) for target in existing])
         chosen: dict[str, dict[str, Any]] = {}
         while True:
             entry = terminal.ask_from_catalog(f"Relocation target ({len(chosen) + 1})", options)
@@ -547,14 +554,18 @@ class SetupWizard:
     def _ask_skills(self, current: dict[str, list[str]]) -> dict[str, list[str]]:
         terminal = self.terminal
         buckets = {str(name): list(values) for name, values in current.items()}
-        terminal.note("Group skills the way they should read on a résumé, for example Languages or Cloud & Infra.")
+        prompt = f"Skill category name (blank when finished, {CLEAR_WORD} clears all)"
+        terminal.start_question(
+            "Edit skill categories" if buckets else prompt,
+            "Group skills the way they should read on a résumé, for example Languages or Cloud & Infra.",
+        )
         if buckets:
             for name, values in buckets.items():
                 terminal.note(f"current: {name}: {', '.join(values)}")
             if not terminal.ask_bool("Edit skill categories", default=False):
                 return buckets
         while True:
-            name = terminal.ask_text(f"Skill category name (blank when finished, {CLEAR_WORD} clears all)")
+            name = terminal.ask_text(prompt)
             if not name:
                 return buckets
             if name == CLEAR_WORD:
@@ -572,9 +583,10 @@ class SetupWizard:
             f"{len(candidate.get(section) or ())} {section}"
             for section in ("experience", "projects", "education", "languages")
         )
-        terminal.note(f"Detailed record: {counts}.")
+        prompt = "Replace experience, projects, education, and languages from a candidate JSON document"
+        terminal.start_question(prompt, f"Detailed record: {counts}.")
         if not terminal.ask_bool(
-            "Replace experience, projects, education, and languages from a candidate JSON document",
+            prompt,
             default=False,
             help_text="These sections are entered as JSON in both wizards; leave this off to keep them as they are.",
         ):
@@ -604,7 +616,10 @@ class SetupWizard:
 
     def _ask_score_weights(self, current: dict[str, int]) -> dict[str, int]:
         terminal = self.terminal
-        terminal.note("Distribute all 100 opportunity-fit points. Eligibility stays a separate hard gate.")
+        terminal.start_question(
+            SCORE_WEIGHT_LABELS[0][1],
+            "Distribute all 100 opportunity-fit points. Eligibility stays a separate hard gate.",
+        )
         while True:
             weights = {
                 key: terminal.ask_int(label, default=int(current.get(key, 0)), minimum=0, maximum=100)

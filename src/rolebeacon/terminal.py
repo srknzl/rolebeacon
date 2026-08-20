@@ -8,9 +8,13 @@ previous step and `q` to abandon the wizard, so navigation and cancellation are 
 from __future__ import annotations
 
 import getpass
+import re
 import sys
 from collections.abc import Callable, Sequence
 from typing import TextIO
+
+# A repeated prompt numbers its entries ("Target role (2)"); the field is still one question.
+QUESTION_INDEX = re.compile(r"\s*\(\d+\)$")
 
 CANCEL_WORDS = frozenset({"q", "quit", "cancel"})
 BACK_WORDS = frozenset({"b", "back"})
@@ -40,31 +44,83 @@ class Terminal:
         # reader, and so tests can supply a value without it appearing in captured output.
         self._secret_reader = secret_reader if secret_reader is not None else getpass.getpass
         self._page_size = page_size
+        # Plain text off a terminal, so captured output and pipes stay byte-for-byte assertable.
+        self._colour = bool(getattr(self._stream, "isatty", lambda: False)())
+        self._question = 0
+        self._questions_total = 0
+        self._question_key = ""
 
     # Output ---------------------------------------------------------------
 
     def write(self, text: str = "") -> None:
         print(text, file=self._stream)
 
+    def _style(self, text: str, code: str) -> str:
+        return f"\033[{code}m{text}\033[0m" if self._colour else text
+
     def note(self, text: str) -> None:
         if text:
-            self.write(f"  {text}")
+            self.write(f"  {self._style(text, '2')}")
 
     def error(self, text: str) -> None:
-        self.write(f"  ! {text}")
+        self.write(f"  {self._style(f'! {text}', '31')}")
 
     def heading(self, text: str) -> None:
         self.write()
-        self.write(text)
+        self.write(self._style(text, "1"))
         self.write("-" * len(text))
 
     def step_header(self, index: int, total: int, title: str) -> None:
+        self._question = 0
+        self._questions_total = 0
+        self._question_key = ""
         self.heading(f"Step {index} of {total} — {title}")
+
+    def expect_questions(self, total: int) -> None:
+        """Declare how many questions this step asks, so each prompt can say where it is.
+
+        A step whose length depends on the answers declares nothing and its prompts are numbered
+        without a total, which is the only honest thing to print when the end is not yet known.
+        """
+        self._questions_total = total
+
+    def list_hint(self, default: Sequence[str] = (), *, required: bool = False) -> None:
+        """How to answer a repeated prompt. On a first run there is nothing to keep, so offering
+        a blank line as the way to "keep the current values" contradicted the same field's
+        "Required" and described Enter as preserving something that does not exist yet.
+        """
+        if default:
+            self.note(f"One per line. Blank line keeps the current values; {CLEAR_WORD} clears them.")
+        elif required:
+            self.note("One per line. Required — enter at least one, then a blank line.")
+        else:
+            self.note("One per line. Blank line when you are done.")
+
+    def start_question(self, prompt: str, help_text: str = "") -> None:
+        """Open a question: a blank line separates it from the previous answer, then its own hint.
+
+        The hint used to print straight after the previous answer, which read as feedback on what
+        had just been typed rather than as guidance for what to type next. Callers that print their
+        own preamble open the question themselves; every `ask_*` does it for you.
+        """
+        key = QUESTION_INDEX.sub("", prompt)
+        if key != self._question_key:
+            self._question_key = key
+            self._question += 1
+            self.write()
+        self.note(help_text)
+
+    def _position(self) -> str:
+        if not self._question:
+            return ""
+        if self._questions_total and self._question <= self._questions_total:
+            return f"[{self._question}/{self._questions_total}] "
+        return f"[{self._question}] "
 
     # Input ----------------------------------------------------------------
 
     def _read(self, prompt: str) -> str:
-        print(f"{prompt}: ", end="", file=self._stream, flush=True)
+        print(f"{self._position()}{prompt}: ", end="", file=self._stream, flush=True)
         try:
             answer = self._reader()
         except (EOFError, KeyboardInterrupt) as error:
@@ -81,7 +137,7 @@ class Terminal:
         return answer
 
     def ask_text(self, prompt: str, *, default: str = "", required: bool = False, help_text: str = "") -> str:
-        self.note(help_text)
+        self.start_question(prompt, help_text)
         while True:
             answer = self._read(f"{prompt} [{default}]" if default else prompt)
             if answer == CLEAR_WORD:
@@ -92,22 +148,36 @@ class Terminal:
                 return answer
             self.error("This value is required.")
 
-    def ask_lines(self, prompt: str, *, default: Sequence[str] = (), help_text: str = "") -> list[str]:
-        self.note(help_text)
+    def ask_lines(
+        self,
+        prompt: str,
+        *,
+        default: Sequence[str] = (),
+        required: bool = False,
+        help_text: str = "",
+    ) -> list[str]:
+        self.start_question(prompt, help_text)
         if default:
             self.note(f"current: {', '.join(default)}")
-        self.note(f"One per line. Blank line keeps the current values; {CLEAR_WORD} clears them.")
+        self.list_hint(default, required=required)
         values: list[str] = []
         while True:
             answer = self._read(f"{prompt} ({len(values) + 1})")
             if answer == CLEAR_WORD:
+                if required:
+                    self.error("At least one value is required.")
+                    continue
                 return []
             if not answer:
-                return values or list(default)
+                result = values or list(default)
+                if result or not required:
+                    return result
+                self.error("At least one value is required.")
+                continue
             values.append(answer)
 
     def ask_bool(self, prompt: str, *, default: bool, help_text: str = "") -> bool:
-        self.note(help_text)
+        self.start_question(prompt, help_text)
         while True:
             answer = self._read(f"{prompt} [{'Y/n' if default else 'y/N'}]").casefold()
             if not answer:
@@ -122,7 +192,7 @@ class Terminal:
         return self.ask_bool(prompt, default=default)
 
     def ask_int(self, prompt: str, *, default: int, minimum: int, maximum: int, help_text: str = "") -> int:
-        self.note(help_text)
+        self.start_question(prompt, help_text)
         while True:
             answer = self._read(f"{prompt} [{default}]")
             if not answer:
@@ -137,7 +207,7 @@ class Terminal:
             self.error(f"Enter a whole number between {minimum} and {maximum}.")
 
     def ask_optional_number(self, prompt: str, *, default: float | None, help_text: str = "") -> float | None:
-        self.note(help_text)
+        self.start_question(prompt, help_text)
         while True:
             shown = "none" if default is None else str(default)
             answer = self._read(f"{prompt} [{shown}]")
@@ -156,14 +226,14 @@ class Terminal:
 
     def ask_private(self, prompt: str, *, help_text: str = "") -> str:
         """Read a secret without echoing it and without routing it through the visible reader."""
-        self.note(help_text)
+        self.start_question(prompt, help_text)
         try:
             return self._secret_reader(f"{prompt}: ").strip()
         except (EOFError, KeyboardInterrupt) as error:
             raise Cancelled("Setup cancelled. Nothing was saved.") from error
 
     def ask_multiline(self, prompt: str, *, terminator: str = "END", help_text: str = "") -> str:
-        self.note(help_text)
+        self.start_question(prompt, help_text)
         self.note(f"Paste the document, then enter {terminator} on its own line.")
         self.write(f"{prompt}:")
         lines: list[str] = []
@@ -186,7 +256,7 @@ class Terminal:
         default: str = "",
         help_text: str = "",
     ) -> str:
-        self.note(help_text)
+        self.start_question(prompt, help_text)
         codes = [code for code, _ in options]
         for position, (code, label) in enumerate(options, start=1):
             self.write(f"  {position:>2}) {label}{' (current)' if code == default else ''}")
@@ -209,7 +279,7 @@ class Terminal:
         help_text: str = "",
     ) -> list[str]:
         """Toggle entries in a paginated numbered list; long catalogs must stay readable."""
-        self.note(help_text)
+        self.start_question(prompt, help_text)
         known = {code for code, _ in options}
         chosen = {code for code in selected if code in known}
         pages = max(1, -(-len(options) // self._page_size))
@@ -219,10 +289,12 @@ class Terminal:
             visible = options[start : start + self._page_size]
             for position, (code, label) in enumerate(visible, start=start + 1):
                 self.write(f"  {position:>3}) [{'x' if code in chosen else ' '}] {label}")
-            self.write(f"  Page {page + 1} of {pages}. {len(chosen)} selected.")
-            answer = self._read(
-                f"{prompt} (numbers toggle, a all on page, n next page, p previous page, Enter when done)"
-            )
+            if pages > 1:
+                self.write(f"  Page {page + 1} of {pages}. {len(chosen)} selected.")
+            else:
+                self.write(f"  {len(chosen)} selected.")
+            paging = " · n next page · p previous page" if pages > 1 else ""
+            answer = self._read(f"{prompt} (numbers toggle · a all{paging} · Enter when done)")
             if not answer:
                 return [code for code, _ in options if code in chosen]
             command = answer.casefold()
@@ -261,7 +333,7 @@ class Terminal:
         help_text: str = "",
     ) -> tuple[str, str] | None:
         """Resolve one catalog entry by exact code or by filtering on a typed fragment."""
-        self.note(help_text)
+        self.start_question(prompt, help_text)
         while True:
             answer = self._read(prompt)
             if not answer:
@@ -281,8 +353,10 @@ class Terminal:
             if len(matches) > self._page_size:
                 self.error(f"{len(matches)} entries match {answer!r}. Type more of the name.")
                 continue
+            position = (self._question, self._question_key)
             code = self.ask_choice(
                 "Which one",
                 [(entry[0], f"{entry[1]} — {entry[0]}") for entry in matches],
             )
+            self._question, self._question_key = position
             return next(entry for entry in matches if entry[0] == code)
