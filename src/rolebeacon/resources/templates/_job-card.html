@@ -9,10 +9,13 @@
         <a href="/jobs/{{ job.id }}{% if return_to %}?return={{ return_to }}{% endif %}" class="job-title">{{ job.title }}</a>
         <div class="company">{{ job.company }}</div>
       </div>
+      {# Only badges that could have said something else. "Eligible" is what the default filter
+         already guarantees and "new" is 99% of every list, so a badge for either is three
+         pixels of colour saying nothing - and it drowns the verdict, which does vary. #}
       <div class="job-card-badges">
-        <span class="status status-{{ job.eligibility_status or 'unknown' }}" title="Eligibility is checked before fit and cannot be overridden by a high score.">{{ job.eligibility_status or 'eligibility unknown' }}</span>
+        {% if job.eligibility_status != 'eligible' %}<span class="status status-{{ job.eligibility_status or 'unknown' }}" title="Eligibility is checked before fit and cannot be overridden by a high score.">{{ job.eligibility_status or 'eligibility unknown' }}</span>{% endif %}
         {% if job.verdict %}<span class="status status-{{ job.verdict }}" title="Verdict uses the threshold configured for this job's governing search strategy.">{{ job.verdict|replace('_', ' ') }}</span>{% endif %}
-        <span class="status status-{{ job.status }}" title="Your own pipeline decision for this job.">{{ job.status }}</span>
+        {% if job.status and job.status != 'new' %}<span class="status status-{{ job.status }}" title="Your own pipeline decision for this job.">{{ job.status }}</span>{% endif %}
       </div>
     </div>
     {# One line of facts about the posting. Each item is a short tag: the full sentence behind

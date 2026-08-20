@@ -1525,3 +1525,42 @@ def test_the_source_table_opens_on_what_needs_attention_and_can_be_searched(tmp_
     assert 'let healthState = "attention"' in page.text
     # Timestamps are relative, with the exact instant kept in the title.
     assert ">2026-" not in page.text.split("SOURCE HEALTH")[1]
+
+
+def test_a_job_card_badges_only_what_could_have_been_otherwise(tmp_path) -> None:
+    # "Eligible" is what the default filter already guarantees and "new" is 99% of every list,
+    # so badging either says nothing while drowning the verdict, which does vary.
+    settings = replace(configured_settings(tmp_path), auto_sync=False)
+    app = create_app(settings)
+    job_id, _ = app.state.database.upsert_job(
+        CollectedJob(
+            source="manual", source_job_id="badges", title="Backend Engineer", company="Example",
+            location="Remote", description="Build backend systems.", url="https://example.test/badges",
+        )
+    )
+    app.state.database.save_evaluation(
+        job_id,
+        EligibilityResult(
+            status=EligibilityStatus.ELIGIBLE, route="authorized-tr", sponsorship="unknown",
+            relocation="unknown", location_fit="authorized:TR", reasons=[], risks=[],
+        ),
+        ScoreResult(
+            total=80, dimensions={}, confidence=90, verdict="review", evidence=[], gaps=[],
+            provider="rules", model="rules",
+        ),
+        "scored",
+    )
+
+    with TestClient(app) as client:
+        default_list = client.get("/jobs")
+        bookmarked = client.post(f"/api/jobs/{job_id}/feedback", json={"status": "bookmarked"})
+        after = client.get("/jobs")
+
+    badges = re.search(r'<div class="job-card-badges">(.*?)</div>', default_list.text, re.S)
+    assert badges is not None
+    assert ">eligible<" not in badges.group(1)
+    assert ">new<" not in badges.group(1)
+    assert ">review<" in badges.group(1)
+    # A decision the reader actually made is still worth a badge.
+    assert bookmarked.status_code == 200
+    assert ">bookmarked<" in re.search(r'<div class="job-card-badges">(.*?)</div>', after.text, re.S).group(1)
