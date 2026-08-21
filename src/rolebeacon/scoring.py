@@ -9,7 +9,7 @@ from typing import Any
 from .domain import EligibilityResult, EligibilityStatus, ScoreResult
 from .profile import CONTINENT_COUNTRY_CODES, DEFAULT_SCORE_WEIGHTS, country_names_by_code
 
-SCORING_PROMPT_VERSION = "job-fit-v23"
+SCORING_PROMPT_VERSION = "job-fit-v24"
 
 # Ineligibility is a hard gate: no combination of fit signals may push a total above this cap.
 # LLM scoring is only ever invoked for eligible jobs (see sync.py), so every ineligible job's
@@ -316,6 +316,31 @@ WORLDWIDE_PATTERNS = (
 # anywhere in the world for 30 days per year" alongside a 3-day-a-week office requirement), not the
 # job's actual remote eligibility - it must not satisfy WORLDWIDE_PATTERNS.
 _TIME_BOXED_WORLDWIDE_QUALIFIER = re.compile(r"\d+\s*(?:days?|weeks?|months?)\s*(?:per|a|each)\s*year", re.IGNORECASE)
+# A posting's structured location field is only ever populated from an API's own controlled
+# vocabulary (a city, a region code, or a source's own "fully remote" category), never free
+# narrative prose - unlike WORLDWIDE_PATTERNS above, which has to defend against marketing copy
+# in the description. "Anywhere" is Jobicy's and Remotive's own category value for a job with no
+# location restriction at all (see JobicyCollector/RemotiveCollector in collectors.py), the same
+# role "Worldwide" already plays for other sources - it just never happens to contain that word.
+_STRUCTURED_WORLDWIDE_LOCATION_VALUES = ("worldwide", "anywhere")
+# Explicit, low-ambiguity remote claims a posting's own description makes about itself. Kept to
+# specific phrases rather than a bare "remote" substring for the same reason WORLDWIDE_PATTERNS
+# is a phrase list rather than a bare "worldwide" substring: a bare match would also fire on
+# "occasional remote work" or "remote work stipend" clauses inside an otherwise onsite/hybrid
+# posting, which is exactly the false positive _PARTIAL_REMOTE_QUALIFIER below guards against.
+REMOTE_PATTERNS = (
+    r"fully remote", r"100% remote", r"remote[- ]first", r"remote[- ]only", r"entirely remote",
+    r"remote position", r"remote role", r"remote job", r"work from home", r"remote work environment",
+    r"this is a remote",
+)
+# A claim from REMOTE_PATTERNS right next to a hybrid/schedule qualifier ("hybrid", "2 days a
+# week", "3 days in office") is describing partial-remote cadence, not a fully remote job - the
+# same "bounded, not unlimited" distinction _TIME_BOXED_WORLDWIDE_QUALIFIER draws for a worldwide
+# claim capped at N days a year.
+_PARTIAL_REMOTE_QUALIFIER = re.compile(
+    r"\bhybrid\b|\d+\s*(?:days?|x)\s*(?:a|per|each)\s*week|\bdays?\s*(?:in|at)\s*(?:the\s*)?office\b",
+    re.IGNORECASE,
+)
 SCOPED_REMOTE_PATTERNS = (
     r"(?:your|the) country of employment",
     r"anywhere in(?:side)?[- ]country",
@@ -354,6 +379,18 @@ def _contains_unbounded_worldwide_claim(text: str) -> bool:
         for match in re.finditer(pattern, text, re.IGNORECASE):
             trailing = text[match.end():match.end() + 40]
             if not _TIME_BOXED_WORLDWIDE_QUALIFIER.search(trailing):
+                return True
+    return False
+
+
+def _contains_unqualified_remote_claim(text: str) -> bool:
+    """Like _contains(text, REMOTE_PATTERNS), but a match sitting next to a hybrid/schedule
+    qualifier is describing partial-remote cadence, not a fully remote job (see
+    _PARTIAL_REMOTE_QUALIFIER)."""
+    for pattern in REMOTE_PATTERNS:
+        for match in re.finditer(pattern, text, re.IGNORECASE):
+            window = text[max(0, match.start() - 60) : match.end() + 60]
+            if not _PARTIAL_REMOTE_QUALIFIER.search(window):
                 return True
     return False
 
@@ -532,10 +569,23 @@ def evaluate_eligibility(
     no_relocation = _contains(text, NO_RELOCATION_PATTERNS)
     relocation = not no_relocation and (_contains(text, RELOCATION_PATTERNS) or signals.get("relocation") is True)
     scoped_remote = _contains(text, SCOPED_REMOTE_PATTERNS)
+    # A source-provided signal is collector-verified structured data, not a text heuristic: an
+    # explicit "remote" flag (Arbeitnow) or a "remote_region" value (Jobicy, Remotive - both
+    # remote-only job boards, so every job they carry is remote by construction of the source)
+    # is at least as trustworthy as the location field itself. See collectors.py's _signals().
+    signalled_worldwide = str(signals.get("remote_region", "")).casefold() in _STRUCTURED_WORLDWIDE_LOCATION_VALUES
     worldwide = (
-        _contains_unbounded_worldwide_claim(text) or "worldwide" in location.casefold()
+        _contains_unbounded_worldwide_claim(text)
+        or any(value in location.casefold() for value in _STRUCTURED_WORLDWIDE_LOCATION_VALUES)
+        or signalled_worldwide
     ) and not scoped_remote
-    remote = "remote" in location.casefold() or worldwide
+    remote = (
+        "remote" in location.casefold()
+        or worldwide
+        or bool(signals.get("remote"))
+        or bool(signals.get("remote_region"))
+        or _contains_unqualified_remote_claim(text)
+    )
     clearance = clearance_requirements(text)
     raw_clearance_policy = mobility.get("clearance_policy")
     clearance_policy: dict[str, Any] = raw_clearance_policy if isinstance(raw_clearance_policy, dict) else {}
@@ -652,10 +702,10 @@ def evaluate_eligibility(
         status = EligibilityStatus.ELIGIBLE
         location_fit = "worldwide"
         reasons.append("Role explicitly supports worldwide remote work")
-    elif remote_strategy and _country_match(location, remote_strategy):
+    elif remote_route_strategy:
         status = EligibilityStatus.ELIGIBLE
-        location_fit = f"remote:{remote_strategy.get('country_code', '')}"
-        reasons.append(f"Role explicitly includes remote work from {remote_strategy.get('country_name')}")
+        location_fit = f"remote:{remote_route_strategy.get('country_code', '')}"
+        reasons.append(f"Role explicitly includes remote work from {remote_route_strategy.get('country_name')}")
     elif remote and country_strategy:
         # Remote, but explicitly scoped to a country other than the candidate's own (matched a
         # relocation/authorized_local strategy above, just not one of the sponsor/relocation/

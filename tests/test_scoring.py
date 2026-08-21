@@ -471,6 +471,85 @@ def test_a_time_boxed_work_from_anywhere_perk_does_not_grant_worldwide_remote_el
     assert result.location_fit != "worldwide"
 
 
+def test_worldwide_location_value_from_a_remote_only_board_grants_eligibility() -> None:
+    # Jobicy and Remotive are remote-only job boards whose own "no restriction" category value is
+    # the bare word "Anywhere", never literally "worldwide" - it must be recognized the same way.
+    mobility = MobilityProfileV1.model_validate({**MOBILITY.model_dump(mode="json"), "remote_from_current_country": True})
+    strategies = [item.model_dump(mode="json") for item in generate_strategies(CANDIDATE, mobility, PREFERENCES)]
+    result = evaluate_eligibility(
+        job(location="Anywhere", remote_scope="Anywhere", description="Build backend services in Go."),
+        PREFERENCES.model_dump(mode="json"), mobility.model_dump(mode="json"), strategies,
+    )
+
+    assert result.status == EligibilityStatus.ELIGIBLE
+    assert result.location_fit == "worldwide"
+
+
+def test_source_signalled_remote_region_is_recognized_as_worldwide() -> None:
+    # Jobicy/Remotive tag every job with a remote_region signal (see collectors.py's _signals());
+    # that collector-verified value is at least as trustworthy as the location field itself, and
+    # must be read even when the location/remote_scope text alone would say nothing about it.
+    mobility = MobilityProfileV1.model_validate({**MOBILITY.model_dump(mode="json"), "remote_from_current_country": True})
+    strategies = [item.model_dump(mode="json") for item in generate_strategies(CANDIDATE, mobility, PREFERENCES)]
+    result = evaluate_eligibility(
+        job(
+            location="Distributed team", remote_scope="",
+            description="Build backend services in Go.",
+            metadata={"signals": {"remote_region": "Worldwide"}},
+        ),
+        PREFERENCES.model_dump(mode="json"), mobility.model_dump(mode="json"), strategies,
+    )
+
+    assert result.status == EligibilityStatus.ELIGIBLE
+    assert result.location_fit == "worldwide"
+
+
+def test_source_signalled_remote_flag_reaches_remote_scope_unknown_not_a_silent_miss() -> None:
+    # Arbeitnow tags each job with an explicit remote: true/false signal. A job that is remote by
+    # that signal, scoped to a country that is neither home nor a configured strategy, must reach
+    # the specific "remote, but scope not confirmed" outcome - not the uninformative catch-all a
+    # job the code never even recognized as remote would fall into.
+    result = evaluate(
+        job(
+            location="Portugal", remote_scope="",
+            description="Build backend services in Go.",
+            metadata={"signals": {"remote": True}},
+        )
+    )
+
+    assert result.location_fit == "remote-scope-unknown"
+
+
+def test_description_only_remote_claim_is_recognized_when_location_fields_are_silent() -> None:
+    # Sponsorship and relocation are already read from the full posting text; a job whose own
+    # description plainly says it is fully remote must be recognized the same way even when the
+    # collector never populated remote_scope and the location field is just a city name.
+    result = evaluate(
+        job(
+            location="Portugal", remote_scope="",
+            description="This is a fully remote position. Build backend services in Go.",
+        )
+    )
+
+    assert result.location_fit == "remote-scope-unknown"
+
+
+def test_hybrid_remote_mention_in_description_is_not_treated_as_fully_remote() -> None:
+    # "Remote work environment 2 days a week, 3 days in the office" names "remote" but describes
+    # a hybrid schedule, not a fully remote job - it must not be read as a remote-eligibility claim.
+    result = evaluate(
+        job(
+            location="Portugal", remote_scope="",
+            description=(
+                "This is a hybrid role. Our remote work environment covers 2 days a week, "
+                "with 3 days in the office."
+            ),
+        )
+    )
+
+    assert result.location_fit == "unknown"
+
+
 def test_priority_company_strategy_has_score_floor() -> None:
     target = job(company="Google", location="Unknown", remote_scope="", description="General software engineering role")
     eligibility = evaluate(target)
