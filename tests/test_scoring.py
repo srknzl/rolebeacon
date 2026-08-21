@@ -247,6 +247,55 @@ def test_non_security_clearance_wording_does_not_override_local_authorization(ph
     assert any("work authorization" in reason for reason in result.reasons)
 
 
+def test_a_bare_country_code_matches_a_source_that_writes_it_lowercase() -> None:
+    # The largest real sources write "Ankara, tr" / "Berlin, de", and the exact-case code check
+    # never saw them. A whole comma-separated segment is safe to compare case-insensitively.
+    authorized = MobilityProfileV1.model_validate({
+        **MOBILITY.model_dump(mode="json"), "relocation_targets": [],
+    })
+    strategies = [item.model_dump(mode="json") for item in generate_strategies(CANDIDATE, authorized, PREFERENCES)]
+
+    turkey = evaluate_eligibility(
+        job(location="Ankara, tr", remote_scope=""),
+        PREFERENCES.model_dump(mode="json"), authorized.model_dump(mode="json"), strategies,
+    )
+    elsewhere = evaluate_eligibility(
+        job(location="Lahore, pk", remote_scope=""),
+        PREFERENCES.model_dump(mode="json"), authorized.model_dump(mode="json"), strategies,
+    )
+
+    assert turkey.status == EligibilityStatus.ELIGIBLE
+    assert turkey.location_fit == "authorized:TR"
+    assert elsewhere.route == "other"
+    assert elsewhere.location_fit == "unknown"
+
+
+def test_a_bare_us_state_resolves_to_north_america_without_naming_the_country() -> None:
+    # Most US postings write only "City, ST" or a bare state name, with no US/USA token anywhere
+    # for REGION_LOCATION_ALIASES to find.
+    mobility = MobilityProfileV1.model_validate(
+        {
+            **MOBILITY.model_dump(mode="json"),
+            "relocation_targets": [{"country_code": "NORTH_AMERICA", "country_name": "North America", "cities": []}],
+        }
+    )
+    strategies = [item.model_dump(mode="json") for item in generate_strategies(CANDIDATE, mobility, PREFERENCES)]
+
+    def check(location: str):
+        return evaluate_eligibility(
+            job(location=location, remote_scope="", description="Build backend systems."),
+            PREFERENCES.model_dump(mode="json"), mobility.model_dump(mode="json"), strategies,
+        )
+
+    for location in ("Seattle, WA", "Virginia", "San Francisco, California"):
+        assert check(location).route == "relocate-north-america", location
+        assert "NORTH_AMERICA" in check(location).location_fit, location
+
+    # A lowercase trailing country code is the shape above's opposite: never a US state.
+    for location in ("Stuttgart, BW, de", "bangalore, in", "Casablanca, ma"):
+        assert check(location).route != "relocate-north-america", location
+
+
 def test_country_aliases_match_turkey_and_uk_without_short_code_substrings() -> None:
     authorized = MobilityProfileV1.model_validate({
         **MOBILITY.model_dump(mode="json"), "work_authorizations": ["TR", "GB"],

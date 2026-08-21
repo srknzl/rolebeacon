@@ -9,7 +9,7 @@ from typing import Any
 from .domain import EligibilityResult, EligibilityStatus, ScoreResult
 from .profile import CONTINENT_COUNTRY_CODES, DEFAULT_SCORE_WEIGHTS, country_names_by_code
 
-SCORING_PROMPT_VERSION = "job-fit-v24"
+SCORING_PROMPT_VERSION = "job-fit-v25"
 
 # Ineligibility is a hard gate: no combination of fit signals may push a total above this cap.
 # LLM scoring is only ever invoked for eligible jobs (see sync.py), so every ineligible job's
@@ -366,6 +366,30 @@ REGION_LOCATION_ALIASES: dict[str, tuple[str, ...]] = {
     # above, curate the dominant real-world abbreviations as an explicit region alias instead.
     "NORTH_AMERICA": ("north america", "us", "usa"),
 }
+# The other half of NORTH_AMERICA's problem: a US posting overwhelmingly writes "City, ST" or a
+# bare state name with no country word anywhere, so the aliases above never see it. A 2-letter
+# state code is only trusted uppercase and only as the trailing segment - lowercased, most of these
+# letter pairs are also a real country code an ATS writes exactly that way ("bangalore, in",
+# "Casablanca, ma", "Stuttgart, BW, de"). "Georgia" is deliberately absent from the name table: it
+# is the one state name that is also a country name, and a location string alone cannot separate
+# "Georgia" (an Atlanta employer) from "Georgia, Kazakhstan, Montenegro, ..." (the country).
+US_STATE_ABBREVIATIONS: frozenset[str] = frozenset(
+    "AL AK AZ AR CA CO CT DE FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ "
+    "NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY DC".split()
+)
+US_STATE_NAMES: frozenset[str] = frozenset(
+    name.casefold()
+    for name in (
+        "Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", "Connecticut",
+        "Delaware", "Florida", "Hawaii", "Idaho", "Illinois", "Indiana", "Iowa", "Kansas",
+        "Kentucky", "Louisiana", "Maine", "Maryland", "Massachusetts", "Michigan", "Minnesota",
+        "Mississippi", "Missouri", "Montana", "Nebraska", "Nevada", "New Hampshire", "New Jersey",
+        "New Mexico", "New York", "North Carolina", "North Dakota", "Ohio", "Oklahoma", "Oregon",
+        "Pennsylvania", "Rhode Island", "South Carolina", "South Dakota", "Tennessee", "Texas",
+        "Utah", "Vermont", "Virginia", "Washington", "West Virginia", "Wisconsin", "Wyoming",
+        "District of Columbia",
+    )
+)
 
 
 def _contains(text: str, patterns: tuple[str, ...]) -> bool:
@@ -505,6 +529,29 @@ def _names_united_states(location: str) -> bool:
     return any(re.search(rf"\b{re.escape(marker)}\b", location, re.IGNORECASE) for marker in _US_LOCATION_MARKERS)
 
 
+def _location_segments(location: str) -> list[str]:
+    """Comma-separated pieces of a location, trimmed - the shape nearly every ATS writes
+    ("City, ST", "City, cc", "City, Region, Country")."""
+    # ponytail: callers pass location and remote_scope already joined by a space, so a trailing
+    # segment can absorb a trailing remote_scope word ("Ankara, tr Remote"). No active posting is
+    # shaped that way today; match the two strings separately if one ever is.
+    return [segment.strip() for segment in location.split(",") if segment.strip()]
+
+
+def _looks_like_us_state(location: str) -> bool:
+    """A segment that is exactly a US state's postal code (trailing segment, uppercase) or full
+    name (any segment, casefolded). Deliberately not folded into _names_united_states: that guard
+    is consulted for every single country's own collision check (DE/Germany, CA/Canada, ...), so
+    reading a bare state abbreviation as proof of "US" there would suppress those unrelated,
+    currently correct matches - "Berlin, DE" would stop matching Germany."""
+    segments = _location_segments(location)
+    if not segments:
+        return False
+    if segments[-1] in US_STATE_ABBREVIATIONS:
+        return True
+    return any(segment.casefold() in US_STATE_NAMES for segment in segments)
+
+
 def _place_match(
     location: str, code: str, name: str, cities: list[str] | tuple[str, ...] = (), *, bare_code_match: bool = True
 ) -> bool:
@@ -513,10 +560,16 @@ def _place_match(
     # like the name/city terms below produces false positives, e.g. "de" inside "Île-de-France" matching
     # country_code "DE" (Germany) for an unrelated French location. See _names_united_states for the
     # other collision this guards against: a US state postal abbreviation matching an unrelated code.
+    # A whole comma-separated segment is the one place case can be ignored safely - large sources
+    # write "Ankara, tr" and "Berlin, de" lowercase, and an equality test against a segment cannot
+    # reach inside "Île-de-France", which has no comma to split on in the first place.
     if (
         bare_code_match
         and code
-        and re.search(rf"\b{re.escape(code)}\b", location)
+        and (
+            re.search(rf"\b{re.escape(code)}\b", location)
+            or code.casefold() in {segment.casefold() for segment in _location_segments(location)}
+        )
         and (code.upper() == "US" or not _names_united_states(location))
     ):
         return True
@@ -530,6 +583,8 @@ def _country_match(location: str, strategy: dict[str, Any]) -> bool:
     if code in CONTINENT_COUNTRY_CODES:
         text = location.casefold()
         if any(re.search(rf"\b{re.escape(alias)}\b", text) for alias in REGION_LOCATION_ALIASES.get(code, ())):
+            return True
+        if code == "NORTH_AMERICA" and _looks_like_us_state(location):
             return True
         # A region match checks each member's full name and its curated aliases (e.g. GB's "uk",
         # CZ's "czech republic") but never a bare 2-letter code - "IT"/"NO" inside an all-caps
