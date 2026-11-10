@@ -23,7 +23,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "build>=1.2,<2",
-  "cyclonedx-bom>=7,<8",
+  "cyclonedx-bom>=7,<9",
   "mypy>=1.17,<3",
   "pip-audit>=2.9,<3",
   "pytest>=9.0.3,<10",
